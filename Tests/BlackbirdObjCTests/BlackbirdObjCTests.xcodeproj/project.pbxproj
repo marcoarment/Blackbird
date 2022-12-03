@@ -1,0 +1,539 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A933220A2936699C00F52DD8 /* BlackbirdObjCTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A93322012936699C00F52DD8 /* BlackbirdObjCTests.framework */; };
+		A933220F2936699C00F52DD8 /* BlackbirdObjCTestsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A933220E2936699C00F52DD8 /* BlackbirdObjCTestsTests.m */; };
+		A93322102936699C00F52DD8 /* BlackbirdObjCTests.h in Headers */ = {isa = PBXBuildFile; fileRef = A93322042936699C00F52DD8 /* BlackbirdObjCTests.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		A9C72812293678AA00EBA7F2 /* BlackbirdModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280B293678AA00EBA7F2 /* BlackbirdModel.swift */; };
+		A9C72813293678AA00EBA7F2 /* BlackbirdSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280C293678AA00EBA7F2 /* BlackbirdSchema.swift */; };
+		A9C72814293678AA00EBA7F2 /* Blackbird.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280D293678AA00EBA7F2 /* Blackbird.swift */; };
+		A9C72815293678AA00EBA7F2 /* BlackbirdCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280E293678AA00EBA7F2 /* BlackbirdCodable.swift */; };
+		A9C72816293678AA00EBA7F2 /* BlackbirdChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280F293678AA00EBA7F2 /* BlackbirdChanges.swift */; };
+		A9C72817293678AA00EBA7F2 /* BlackbirdDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C72810293678AA00EBA7F2 /* BlackbirdDatabase.swift */; };
+		A9C72818293678AF00EBA7F2 /* BlackbirdCodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280E293678AA00EBA7F2 /* BlackbirdCodable.swift */; };
+		A9C72819293678AF00EBA7F2 /* BlackbirdModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280B293678AA00EBA7F2 /* BlackbirdModel.swift */; };
+		A9C7281B293678AF00EBA7F2 /* Blackbird.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280D293678AA00EBA7F2 /* Blackbird.swift */; };
+		A9C7281C293678AF00EBA7F2 /* BlackbirdChanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280F293678AA00EBA7F2 /* BlackbirdChanges.swift */; };
+		A9C7281D293678AF00EBA7F2 /* BlackbirdDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C72810293678AA00EBA7F2 /* BlackbirdDatabase.swift */; };
+		A9C7281E293678AF00EBA7F2 /* BlackbirdSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7280C293678AA00EBA7F2 /* BlackbirdSchema.swift */; };
+		A9C7282529367C7D00EBA7F2 /* BlackbirdObjC.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7282429367C7D00EBA7F2 /* BlackbirdObjC.swift */; };
+		A9C7282929367EF100EBA7F2 /* BlackbirdObjC.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9C7282429367C7D00EBA7F2 /* BlackbirdObjC.swift */; };
+		A9C7282A29367F1900EBA7F2 /* BlackbirdModelObjC.m in Sources */ = {isa = PBXBuildFile; fileRef = A9C7282129367C6400EBA7F2 /* BlackbirdModelObjC.m */; };
+		A9C7282D2937AB9200EBA7F2 /* TestModels.m in Sources */ = {isa = PBXBuildFile; fileRef = A9C7282C2937AB9200EBA7F2 /* TestModels.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A933220B2936699C00F52DD8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A93321F82936699C00F52DD8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A93322002936699C00F52DD8;
+			remoteInfo = BlackbirdObjCTests;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A93322012936699C00F52DD8 /* BlackbirdObjCTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = BlackbirdObjCTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		A93322042936699C00F52DD8 /* BlackbirdObjCTests.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BlackbirdObjCTests.h; sourceTree = "<group>"; };
+		A93322092936699C00F52DD8 /* BlackbirdObjCTestsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BlackbirdObjCTestsTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A933220E2936699C00F52DD8 /* BlackbirdObjCTestsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = BlackbirdObjCTestsTests.m; sourceTree = "<group>"; };
+		A9C7280B293678AA00EBA7F2 /* BlackbirdModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdModel.swift; path = ../../Sources/Blackbird/BlackbirdModel.swift; sourceTree = "<group>"; };
+		A9C7280C293678AA00EBA7F2 /* BlackbirdSchema.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdSchema.swift; path = ../../Sources/Blackbird/BlackbirdSchema.swift; sourceTree = "<group>"; };
+		A9C7280D293678AA00EBA7F2 /* Blackbird.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = Blackbird.swift; path = ../../Sources/Blackbird/Blackbird.swift; sourceTree = "<group>"; };
+		A9C7280E293678AA00EBA7F2 /* BlackbirdCodable.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdCodable.swift; path = ../../Sources/Blackbird/BlackbirdCodable.swift; sourceTree = "<group>"; };
+		A9C7280F293678AA00EBA7F2 /* BlackbirdChanges.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdChanges.swift; path = ../../Sources/Blackbird/BlackbirdChanges.swift; sourceTree = "<group>"; };
+		A9C72810293678AA00EBA7F2 /* BlackbirdDatabase.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdDatabase.swift; path = ../../Sources/Blackbird/BlackbirdDatabase.swift; sourceTree = "<group>"; };
+		A9C7282029367C6400EBA7F2 /* BlackbirdModelObjC.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = BlackbirdModelObjC.h; path = ../../Sources/BlackbirdObjC/BlackbirdModelObjC.h; sourceTree = "<group>"; };
+		A9C7282129367C6400EBA7F2 /* BlackbirdModelObjC.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = BlackbirdModelObjC.m; path = ../../Sources/BlackbirdObjC/BlackbirdModelObjC.m; sourceTree = "<group>"; };
+		A9C7282429367C7D00EBA7F2 /* BlackbirdObjC.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdObjC.swift; path = ../../Sources/Blackbird/BlackbirdObjC.swift; sourceTree = "<group>"; };
+		A9C7282829367DBE00EBA7F2 /* PrefixHeader.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PrefixHeader.pch; sourceTree = "<group>"; };
+		A9C7282B2937AB9200EBA7F2 /* TestModels.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TestModels.h; sourceTree = "<group>"; };
+		A9C7282C2937AB9200EBA7F2 /* TestModels.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TestModels.m; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A93321FE2936699C00F52DD8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A93322062936699C00F52DD8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A933220A2936699C00F52DD8 /* BlackbirdObjCTests.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A93321F72936699C00F52DD8 = {
+			isa = PBXGroup;
+			children = (
+				A9C7281F29367C5700EBA7F2 /* BlackbirdObjC */,
+				A9C728092936789E00EBA7F2 /* Blackbird */,
+				A93322032936699C00F52DD8 /* BlackbirdObjCTests */,
+				A933220D2936699C00F52DD8 /* BlackbirdObjCTestsTests */,
+				A93322022936699C00F52DD8 /* Products */,
+				A933221D29366F1900F52DD8 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		A93322022936699C00F52DD8 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A93322012936699C00F52DD8 /* BlackbirdObjCTests.framework */,
+				A93322092936699C00F52DD8 /* BlackbirdObjCTestsTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A93322032936699C00F52DD8 /* BlackbirdObjCTests */ = {
+			isa = PBXGroup;
+			children = (
+				A93322042936699C00F52DD8 /* BlackbirdObjCTests.h */,
+			);
+			path = BlackbirdObjCTests;
+			sourceTree = "<group>";
+		};
+		A933220D2936699C00F52DD8 /* BlackbirdObjCTestsTests */ = {
+			isa = PBXGroup;
+			children = (
+				A9C7282829367DBE00EBA7F2 /* PrefixHeader.pch */,
+				A933220E2936699C00F52DD8 /* BlackbirdObjCTestsTests.m */,
+				A9C7282B2937AB9200EBA7F2 /* TestModels.h */,
+				A9C7282C2937AB9200EBA7F2 /* TestModels.m */,
+			);
+			path = BlackbirdObjCTestsTests;
+			sourceTree = "<group>";
+		};
+		A933221D29366F1900F52DD8 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A9C728092936789E00EBA7F2 /* Blackbird */ = {
+			isa = PBXGroup;
+			children = (
+				A9C7282429367C7D00EBA7F2 /* BlackbirdObjC.swift */,
+				A9C7280D293678AA00EBA7F2 /* Blackbird.swift */,
+				A9C7280F293678AA00EBA7F2 /* BlackbirdChanges.swift */,
+				A9C7280E293678AA00EBA7F2 /* BlackbirdCodable.swift */,
+				A9C72810293678AA00EBA7F2 /* BlackbirdDatabase.swift */,
+				A9C7280B293678AA00EBA7F2 /* BlackbirdModel.swift */,
+				A9C7280C293678AA00EBA7F2 /* BlackbirdSchema.swift */,
+			);
+			name = Blackbird;
+			sourceTree = "<group>";
+		};
+		A9C7281F29367C5700EBA7F2 /* BlackbirdObjC */ = {
+			isa = PBXGroup;
+			children = (
+				A9C7282029367C6400EBA7F2 /* BlackbirdModelObjC.h */,
+				A9C7282129367C6400EBA7F2 /* BlackbirdModelObjC.m */,
+			);
+			name = BlackbirdObjC;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXHeadersBuildPhase section */
+		A93321FC2936699C00F52DD8 /* Headers */ = {
+			isa = PBXHeadersBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A93322102936699C00F52DD8 /* BlackbirdObjCTests.h in Headers */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXHeadersBuildPhase section */
+
+/* Begin PBXNativeTarget section */
+		A93322002936699C00F52DD8 /* BlackbirdObjCTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A93322132936699C00F52DD8 /* Build configuration list for PBXNativeTarget "BlackbirdObjCTests" */;
+			buildPhases = (
+				A93321FC2936699C00F52DD8 /* Headers */,
+				A93321FD2936699C00F52DD8 /* Sources */,
+				A93321FE2936699C00F52DD8 /* Frameworks */,
+				A93321FF2936699C00F52DD8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BlackbirdObjCTests;
+			productName = BlackbirdObjCTests;
+			productReference = A93322012936699C00F52DD8 /* BlackbirdObjCTests.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		A93322082936699C00F52DD8 /* BlackbirdObjCTestsTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A93322162936699C00F52DD8 /* Build configuration list for PBXNativeTarget "BlackbirdObjCTestsTests" */;
+			buildPhases = (
+				A93322052936699C00F52DD8 /* Sources */,
+				A93322062936699C00F52DD8 /* Frameworks */,
+				A93322072936699C00F52DD8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A933220C2936699C00F52DD8 /* PBXTargetDependency */,
+			);
+			name = BlackbirdObjCTestsTests;
+			productName = BlackbirdObjCTestsTests;
+			productReference = A93322092936699C00F52DD8 /* BlackbirdObjCTestsTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A93321F82936699C00F52DD8 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1410;
+				TargetAttributes = {
+					A93322002936699C00F52DD8 = {
+						CreatedOnToolsVersion = 14.1;
+						LastSwiftMigration = 1410;
+					};
+					A93322082936699C00F52DD8 = {
+						CreatedOnToolsVersion = 14.1;
+					};
+				};
+			};
+			buildConfigurationList = A93321FB2936699C00F52DD8 /* Build configuration list for PBXProject "BlackbirdObjCTests" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A93321F72936699C00F52DD8;
+			productRefGroup = A93322022936699C00F52DD8 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A93322002936699C00F52DD8 /* BlackbirdObjCTests */,
+				A93322082936699C00F52DD8 /* BlackbirdObjCTestsTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A93321FF2936699C00F52DD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A93322072936699C00F52DD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A93321FD2936699C00F52DD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A9C72816293678AA00EBA7F2 /* BlackbirdChanges.swift in Sources */,
+				A9C7282529367C7D00EBA7F2 /* BlackbirdObjC.swift in Sources */,
+				A9C72814293678AA00EBA7F2 /* Blackbird.swift in Sources */,
+				A9C72812293678AA00EBA7F2 /* BlackbirdModel.swift in Sources */,
+				A9C72815293678AA00EBA7F2 /* BlackbirdCodable.swift in Sources */,
+				A9C72813293678AA00EBA7F2 /* BlackbirdSchema.swift in Sources */,
+				A9C72817293678AA00EBA7F2 /* BlackbirdDatabase.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A93322052936699C00F52DD8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A9C7281C293678AF00EBA7F2 /* BlackbirdChanges.swift in Sources */,
+				A9C7282A29367F1900EBA7F2 /* BlackbirdModelObjC.m in Sources */,
+				A933220F2936699C00F52DD8 /* BlackbirdObjCTestsTests.m in Sources */,
+				A9C7282D2937AB9200EBA7F2 /* TestModels.m in Sources */,
+				A9C7282929367EF100EBA7F2 /* BlackbirdObjC.swift in Sources */,
+				A9C72819293678AF00EBA7F2 /* BlackbirdModel.swift in Sources */,
+				A9C7281B293678AF00EBA7F2 /* Blackbird.swift in Sources */,
+				A9C72818293678AF00EBA7F2 /* BlackbirdCodable.swift in Sources */,
+				A9C7281D293678AF00EBA7F2 /* BlackbirdDatabase.swift in Sources */,
+				A9C7281E293678AF00EBA7F2 /* BlackbirdSchema.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A933220C2936699C00F52DD8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A93322002936699C00F52DD8 /* BlackbirdObjCTests */;
+			targetProxy = A933220B2936699C00F52DD8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A93322112936699C00F52DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.6;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Debug;
+		};
+		A93322122936699C00F52DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.6;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Release;
+		};
+		A93322142936699C00F52DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcoarment.BlackbirdObjCTests;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A93322152936699C00F52DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcoarment.BlackbirdObjCTests;
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A93322172936699C00F52DD8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GCC_PREFIX_HEADER = BlackbirdObjCTestsTests/PrefixHeader.pch;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcoarment.BlackbirdObjCTestsTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A93322182936699C00F52DD8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GCC_PREFIX_HEADER = BlackbirdObjCTestsTests/PrefixHeader.pch;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcoarment.BlackbirdObjCTestsTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A93321FB2936699C00F52DD8 /* Build configuration list for PBXProject "BlackbirdObjCTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A93322112936699C00F52DD8 /* Debug */,
+				A93322122936699C00F52DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A93322132936699C00F52DD8 /* Build configuration list for PBXNativeTarget "BlackbirdObjCTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A93322142936699C00F52DD8 /* Debug */,
+				A93322152936699C00F52DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A93322162936699C00F52DD8 /* Build configuration list for PBXNativeTarget "BlackbirdObjCTestsTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A93322172936699C00F52DD8 /* Debug */,
+				A93322182936699C00F52DD8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A93321F82936699C00F52DD8 /* Project object */;
+}
