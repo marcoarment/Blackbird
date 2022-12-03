@@ -26,6 +26,7 @@
 
 import Foundation
 import SQLite3
+import OSLog
 
 internal protocol BlackbirdQueryable {
     /// Executes arbitrary SQL queries without returning a value.
@@ -235,7 +236,7 @@ extension Blackbird {
         private static var instanceLock = Lock()
         private static var nextInstanceID: InstanceID = 0
         private static var pathsOfCurrentInstances = Set<String>()
-        
+
         /// Instantiates a new SQLite database in memory, without persisting to a file.
         public static func inMemoryDatabase(options: Options = []) throws -> Database {
             return try Database(path: "", options: options.union([.inMemoryDatabase]))
@@ -345,7 +346,27 @@ extension Blackbird {
             private var cachedStatements: [String: OpaquePointer] = [:]
             private var isClosed = false
             private var nextTransactionID: Int64 = 0
-        
+
+            private struct PerfLogger {
+                let log: Logger
+                let post: OSSignposter
+                struct SignpostIds {
+                    let execute: OSSignpostID
+                    let rowsByPreparedFunc: OSSignpostID
+                    init(for poster: OSSignposter) {
+                        execute = poster.makeSignpostID()
+                        rowsByPreparedFunc = poster.makeSignpostID()
+                    }
+                }
+                let signpost: SignpostIds
+                init() {
+                    log = Logger(subsystem: "org.marco.blackbird", category: "Database.Core")
+                    post = OSSignposter(subsystem: "org.marco.blackbird", category: "Database.Core")
+                    signpost = SignpostIds(for: post)
+                }
+            }
+            private var perfLog = PerfLogger()
+
             internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter, options: Database.Options) {
                 self.dbHandle = dbHandle
                 self.changeReporter = changeReporter
@@ -396,6 +417,12 @@ extension Blackbird {
             public func execute(_ query: String) throws {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
                 if isClosed { throw Error.databaseIsClosed }
+
+                // Records each query if _debug_ is on for org.marco.blackbird:Database.Core...
+                perfLog.log.debug("\(#function) \(query)")
+                // ... and record the intervals when signposts are enabled.
+                let spState = perfLog.post.beginInterval(#function, id: perfLog.signpost.execute, "\(query)")
+                defer { perfLog.post.endInterval(#function, spState) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -459,6 +486,12 @@ extension Blackbird {
             
             private func rowsByExecutingPreparedStatement(_ statement: OpaquePointer, from query: String) throws -> [Blackbird.Row] {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
+
+                // Records each query if _debug_ is on for org.marco.blackbird:Database.Core...
+                perfLog.log.debug("\(#function) \(query)")
+                // ... and record the intervals when signposts are enabled.
+                let spState = perfLog.post.beginInterval(#function, id: perfLog.signpost.rowsByPreparedFunc, "\(query)")
+                defer { perfLog.post.endInterval(#function, spState) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
