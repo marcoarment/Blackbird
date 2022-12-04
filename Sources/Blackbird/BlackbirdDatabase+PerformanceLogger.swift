@@ -1,5 +1,5 @@
 //
-//  BlackbirdChanges.swift
+//  BlackbirdDatabse+PerformanceLogger.swift
 //  Created by Marco Arment on 11/17/22.
 //  Copyright (c) 2022 Marco Arment
 //
@@ -84,8 +84,8 @@ extension Blackbird.Database.Core {
         ///
         /// ## Examples
         /// ```swift
-        /// let signpostState = perfLogger.begin(signpost: .execute, "Some Message", name: "MySignpost")
-        /// let signpostState = perfLogger.begin(signpost: .execute, "Some Message") // name == #function
+        /// let signpostState = perfLogger.begin(signpost: .execute, message: "Some Message", name: "MySignpost")
+        /// let signpostState = perfLogger.begin(signpost: .execute, message: "Some Message") // name == #function
         /// let signpostState = perfLogger.begin(signpost: .execute)
         /// // ... do work here ...
         /// perfLogger.end(state: signpostState)
