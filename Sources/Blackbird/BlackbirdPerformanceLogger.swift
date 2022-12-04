@@ -43,7 +43,7 @@ import OSLog
 /// ## Example
 /// ```swift
 ///
-/// let perfLogger = PerformanceLogger(subsytem: "org.marco.blackbird", category: "Database.Core")
+/// let perfLogger = PerformanceLogger(subsytem: Blackbird.loggingSubsystem, category: "Database.Core")
 /// // ...
 /// let signpostState = perLogger.begin(signpost: .execute, message: "Some explanatory text")
 /// // ...
@@ -52,20 +52,28 @@ import OSLog
 /// }
 /// ```
 ///
-extension Blackbird.Database.Core {
+extension Blackbird {
+    static let loggingSubsystem = "org.marco.blackbird"
+
     internal struct PerformanceLogger {
         let log: Logger // The logger object. Exposed so it can be used directly.
         let post: OSSignposter // The signposter object. Exposed so it can be used directly.
-        
+
+        // Enum of all signposts. Signpost IDs will be generate automatically.
         enum Signpost: CaseIterable {
+            case openDatabase
+            case closeDatabase
             case execute
             case rowsByPreparedFunc
+            case cancellableTransaction
         }
+
         private var spidMap: [Signpost: OSSignpostID]
         
         init(subsystem: String, category: String) {
             log = Logger(subsystem: subsystem, category: category)
             post = OSSignposter(subsystem: subsystem, category: category)
+            // Populate our signpost enum to signpost id table.
             spidMap = [:]
             for sp in Signpost.allCases {
                 spidMap[sp] = post.makeSignpostID()
