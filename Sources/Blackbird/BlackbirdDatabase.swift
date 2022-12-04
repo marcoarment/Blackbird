@@ -228,14 +228,15 @@ extension Blackbird {
         
         /// The ``Options-swift.struct`` used to create the database.
         public let options: Options
-        
+
         internal let core: Core
         internal var changeReporter: ChangeReporter
+        internal let perfLog: PerformanceLogger
 
         private static var instanceLock = Lock()
         private static var nextInstanceID: InstanceID = 0
         private static var pathsOfCurrentInstances = Set<String>()
-        
+
         /// Instantiates a new SQLite database in memory, without persisting to a file.
         public static func inMemoryDatabase(options: Options = []) throws -> Database {
             return try Database(path: "", options: options.union([.inMemoryDatabase]))
@@ -257,7 +258,12 @@ extension Blackbird {
                 Self.nextInstanceID += 1
                 return id
             }
-            
+
+            // Use a local because we can't use self until everything has been initalized
+            let performanceLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database")
+            let spState = performanceLog.begin(signpost: .openDatabase)
+            defer { performanceLog.end(state: spState) }
+
             var normalizedOptions = options
             if path.isEmpty || path == ":memory:" { normalizedOptions.insert(.inMemoryDatabase) }
 
@@ -286,6 +292,7 @@ extension Blackbird {
             }
 
             core = Core(handle, changeReporter: changeReporter, options: options)
+            perfLog = performanceLog
             
             sqlite3_update_hook(handle, { ctx, operation, dbName, tableName, rowid in
                 guard let ctx else { return }
@@ -310,6 +317,8 @@ extension Blackbird {
         ///
         /// Sending any queries to a closed database throws an error.
         public func close() async {
+            let spState = perfLog.begin(signpost: .closeDatabase)
+            defer { perfLog.end(state: spState) }
             await core.close()
             if let path {
                 Self.instanceLock.withLock { Self.pathsOfCurrentInstances.remove(path) }
@@ -345,7 +354,9 @@ extension Blackbird {
             private var cachedStatements: [String: OpaquePointer] = [:]
             private var isClosed = false
             private var nextTransactionID: Int64 = 0
-        
+
+            private var perfLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database.Core")
+
             internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter, options: Database.Options) {
                 self.dbHandle = dbHandle
                 self.changeReporter = changeReporter
@@ -362,6 +373,8 @@ extension Blackbird {
             
             fileprivate func close() {
                 if isClosed { return }
+                let spState = perfLog.begin(signpost: .closeDatabase)
+                defer { perfLog.end(state: spState) }
                 for (_, statement) in cachedStatements { sqlite3_finalize(statement) }
                 sqlite3_close(dbHandle)
                 isClosed = true
@@ -381,6 +394,9 @@ extension Blackbird {
                 changeReporter?.beginTransaction(transactionID)
                 defer { changeReporter?.endTransaction(transactionID) }
 
+                let spState = perfLog.begin(signpost: .cancellableTransaction, message: "Transaction ID: \(transactionID)")
+                defer { perfLog.end(state: spState) }
+
                 try execute("SAVEPOINT \"\(transactionID)\"")
                 var commit = false
                 do { commit = try action(self) }
@@ -396,6 +412,9 @@ extension Blackbird {
             public func execute(_ query: String) throws {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
                 if isClosed { throw Error.databaseIsClosed }
+
+                let spState = perfLog.begin(signpost: .execute, message: query)
+                defer { perfLog.end(state: spState) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -459,6 +478,9 @@ extension Blackbird {
             
             private func rowsByExecutingPreparedStatement(_ statement: OpaquePointer, from query: String) throws -> [Blackbird.Row] {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
+
+                let spState = perfLog.begin(signpost: .rowsByPreparedFunc, message: query)
+                defer { perfLog.end(state: spState) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
