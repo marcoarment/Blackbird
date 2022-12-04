@@ -26,7 +26,6 @@
 
 import Foundation
 import SQLite3
-import OSLog
 
 internal protocol BlackbirdQueryable {
     /// Executes arbitrary SQL queries without returning a value.
