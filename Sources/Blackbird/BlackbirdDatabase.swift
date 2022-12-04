@@ -347,25 +347,7 @@ extension Blackbird {
             private var isClosed = false
             private var nextTransactionID: Int64 = 0
 
-            private struct PerfLogger {
-                let log: Logger
-                let post: OSSignposter
-                struct SignpostIds {
-                    let execute: OSSignpostID
-                    let rowsByPreparedFunc: OSSignpostID
-                    init(for poster: OSSignposter) {
-                        execute = poster.makeSignpostID()
-                        rowsByPreparedFunc = poster.makeSignpostID()
-                    }
-                }
-                let signpost: SignpostIds
-                init() {
-                    log = Logger(subsystem: "org.marco.blackbird", category: "Database.Core")
-                    post = OSSignposter(subsystem: "org.marco.blackbird", category: "Database.Core")
-                    signpost = SignpostIds(for: post)
-                }
-            }
-            private var perfLog = PerfLogger()
+            private var perfLog = PerformanceLogger(subsystem: "org.marco.blackbird", category: "Database.Core")
 
             internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter, options: Database.Options) {
                 self.dbHandle = dbHandle
@@ -418,11 +400,8 @@ extension Blackbird {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
                 if isClosed { throw Error.databaseIsClosed }
 
-                // Records each query if _debug_ is on for org.marco.blackbird:Database.Core...
-                perfLog.log.debug("\(#function) \(query)")
-                // ... and record the intervals when signposts are enabled.
-                let spState = perfLog.post.beginInterval(#function, id: perfLog.signpost.execute, "\(query)")
-                defer { perfLog.post.endInterval(#function, spState) }
+                let spState = perfLog.begin(signpost: .execute, message: query)
+                defer { perfLog.end(state: spState) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -487,11 +466,8 @@ extension Blackbird {
             private func rowsByExecutingPreparedStatement(_ statement: OpaquePointer, from query: String) throws -> [Blackbird.Row] {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
 
-                // Records each query if _debug_ is on for org.marco.blackbird:Database.Core...
-                perfLog.log.debug("\(#function) \(query)")
-                // ... and record the intervals when signposts are enabled.
-                let spState = perfLog.post.beginInterval(#function, id: perfLog.signpost.rowsByPreparedFunc, "\(query)")
-                defer { perfLog.post.endInterval(#function, spState) }
+                let spState = perfLog.begin(signpost: .rowsByPreparedFunc, message: query)
+                defer { perfLog.end(state: spState) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
