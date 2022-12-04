@@ -1,5 +1,5 @@
 //
-//  BlackbirdDatabse+PerformanceLogger.swift
+//  BlackbirdPerformanceLogger.swift
 //  Created for Marco Arment on 12/03/22.
 //  Copyright (c) 2022 Marco Arment
 //
