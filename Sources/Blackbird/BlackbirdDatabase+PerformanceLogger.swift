@@ -1,6 +1,6 @@
 //
 //  BlackbirdDatabse+PerformanceLogger.swift
-//  Created by Marco Arment on 11/17/22.
+//  Created for Marco Arment on 12/03/22.
 //  Copyright (c) 2022 Marco Arment
 //
 //  Released under the MIT License
@@ -55,7 +55,7 @@ import OSLog
 extension Blackbird.Database.Core {
     internal struct PerformanceLogger {
         let log: Logger // The logger object. Exposed so it can be used directly.
-        let post: OSSignposter // The logger object. Exposed so it can be used directly.
+        let post: OSSignposter // The signposter object. Exposed so it can be used directly.
         
         enum Signpost: CaseIterable {
             case execute
@@ -120,9 +120,7 @@ extension Blackbird.Database.Core {
         ///
         /// ## Examples
         /// ```swift
-        /// // ... do work here ...
-        /// perfLogger.end(state: signpostState, name: "MySignpost")
-        /// perfLogger.end(state: signpostState)
+        /// let spid = perLogger.signpostId(for: .execute)
         /// ```
         func signpostId(for sp:Signpost) -> OSSignpostID {
             // Force unwrap because if we don't have a match we're in big trouble and should crash.
