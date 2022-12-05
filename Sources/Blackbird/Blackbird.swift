@@ -31,7 +31,7 @@ import SQLite3
 public class Blackbird {
     public typealias Row = Dictionary<String, Blackbird.Value>
     public typealias Arguments = Dictionary<String, Blackbird.Value>
-    public typealias PrimaryKeyValues = Set<Blackbird.Value>
+    public typealias PrimaryKeyValues = Set<[Blackbird.Value]>
 
     /// A wrapper for SQLite's column data types.
     public enum Value: ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {

@@ -403,7 +403,7 @@ final class BlackbirdTestTests: XCTestCase {
         try await db.transaction { core in
             var expectedBatchedKeys = Blackbird.PrimaryKeyValues()
             for i in 0..<count {
-                expectedBatchedKeys.insert(.integer(Int64(i)))
+                expectedBatchedKeys.insert([.integer(Int64(i))])
                 let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
                 try m.writeIsolated(to: db, core: core)
             }
@@ -415,7 +415,7 @@ final class BlackbirdTestTests: XCTestCase {
         // Individual change notifications
         var m = try await TestModelWithDescription.read(from: db, id: 64)!
         m.title = "Edited title!"
-        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([ .integer(64) ])
+        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(64) ]])
         try await m.write(to: db)
         await MainActor.run { }
         XCTAssert(_testChangeNotificationsCallCount == 2)

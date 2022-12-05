@@ -106,10 +106,10 @@ extension Blackbird.Database {
             lock.unlock()
         }
 
-        public func reportChange(tableName: String, primaryKey: Blackbird.Value? = nil) {
+        public func reportChange(tableName: String, primaryKey: [Blackbird.Value]? = nil) {
             lock.lock()
             if tableName != ignoreWritesToTableName {
-                if let primaryKey {
+                if let primaryKey, !primaryKey.isEmpty {
                     if accumulatedChangesPerKey[tableName] == nil { accumulatedChangesPerKey[tableName] = Blackbird.PrimaryKeyValues() }
                     accumulatedChangesPerKey[tableName]!.insert(primaryKey)
                 } else {
@@ -150,7 +150,11 @@ extension Blackbird.Database {
         
         private func sendLegacyNotification(tableName: String, changedKeys: Blackbird.PrimaryKeyValues?) {
             var userInfo: [AnyHashable: Any] = [Blackbird.legacyChangeNotificationTableKey: tableName]
-            if let changedKeys { userInfo[Blackbird.legacyChangeNotificationPrimaryKeyValuesKey] = changedKeys.map { $0.objcValue() } }
+            if let changedKeys {
+                userInfo[Blackbird.legacyChangeNotificationPrimaryKeyValuesKey] = changedKeys.map { primaryKey in
+                    primaryKey.map { $0.objcValue() }
+                }
+            }
             NotificationCenter.default.post(name: Blackbird.legacyChangeNotification, object: tableName, userInfo: userInfo)
         }
     }

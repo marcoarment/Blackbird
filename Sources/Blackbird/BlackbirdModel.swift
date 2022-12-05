@@ -362,24 +362,25 @@ extension BlackbirdModel {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
     }
     
-    private func insertQueryValues() throws -> (sql: String, values: [Any], primaryKeyValue: Blackbird.Value?) {
+    private func insertQueryValues() throws -> (sql: String, values: [Any], primaryKeyValues: [Blackbird.Value]?) {
+        let table = Self.table
+
         let encoder = BlackbirdSQLiteEncoder()
         try self.encode(to: encoder)
-
+        let encodedValues = encoder.sqliteArguments()
+        let primaryKeyValues = table.primaryKeys.map { encodedValues[$0.name]! }
+        
         var columnNames: [String] = []
         var placeholders: [String] = []
         var values: [Blackbird.Value] = []
-        var primaryKeyValue: Blackbird.Value? = nil
-        let primaryKeyColumnName = Self.table.primaryKeys.first?.name ?? ""
-        for (key, value) in encoder.sqliteArguments().filter({ Self.table.columnNames.contains($0.key) }) {
+        for (key, value) in encodedValues.filter({ table.columnNames.contains($0.key) }) {
             columnNames.append(key)
             placeholders.append("?")
             values.append(value)
-            if key == primaryKeyColumnName { primaryKeyValue = try Blackbird.Value.fromAny(value) }
         }
         
-        let sql = "REPLACE INTO `\(Self.table.name(type: Self.self))` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
-        return (sql: sql, values: values, primaryKeyValue: primaryKeyValue)
+        let sql = "REPLACE INTO `\(table.name(type: Self.self))` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
+        return (sql: sql, values: values, primaryKeyValues: primaryKeyValues)
     }
     
     public func write(to database: Blackbird.Database) async throws {
@@ -390,11 +391,11 @@ extension BlackbirdModel {
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
         try Self.table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
 
-        let (sql, values, primaryKeyValue) = try insertQueryValues()
+        let (sql, values, primaryKeyValues) = try insertQueryValues()
         database.changeReporter.ignoreWritesToTable(Self.table.name(type: Self.self))
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.table.name(type: Self.self), primaryKey: primaryKeyValue)
+            database.changeReporter.reportChange(tableName: Self.table.name(type: Self.self), primaryKey: primaryKeyValues)
         }
         try core.query(sql, arguments: values)
     }
@@ -423,7 +424,7 @@ extension BlackbirdModel {
         database.changeReporter.ignoreWritesToTable(Self.table.name(type: Self.self))
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.table.name(type: Self.self), primaryKey: values.count == 1 ? values.first! : nil)
+            database.changeReporter.reportChange(tableName: Self.table.name(type: Self.self), primaryKey: values)
         }
         let sql = "DELETE FROM `\(table.name(type: Self.self))` WHERE \(andClauses.joined(separator: " AND "))"
         try core.query(sql, arguments: values)
