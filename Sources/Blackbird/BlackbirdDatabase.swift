@@ -236,6 +236,16 @@ extension Blackbird {
         private static var instanceLock = Lock()
         private static var nextInstanceID: InstanceID = 0
         private static var pathsOfCurrentInstances = Set<String>()
+        
+        private var isClosedLock = Lock()
+        private var _isClosed = false
+        
+        /// Whether ``close()`` has been called on this database yet. Does **not** indicate whether the close operation has completed.
+        ///
+        /// > Note: Once an instance is closed, it is never reopened.
+        public var isClosed: Bool {
+            get { isClosedLock.withLock { _isClosed } }
+        }
 
         /// Instantiates a new SQLite database in memory, without persisting to a file.
         public static func inMemoryDatabase(options: Options = []) throws -> Database {
@@ -319,7 +329,10 @@ extension Blackbird {
         public func close() async {
             let spState = perfLog.begin(signpost: .closeDatabase)
             defer { perfLog.end(state: spState) }
+
+            isClosedLock.withLock { _isClosed = true }
             await core.close()
+
             if let path {
                 Self.instanceLock.withLock { Self.pathsOfCurrentInstances.remove(path) }
             }
@@ -333,7 +346,6 @@ extension Blackbird {
         
         public func cancellableTransaction(_ action: ((_ core: isolated Core) throws -> Bool) ) async throws { try await core.cancellableTransaction(action) }
 
-        
         @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, []) }
 
         @discardableResult public func query(_ query: String, _ arguments: Any...) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
@@ -342,8 +354,10 @@ extension Blackbird {
 
         @discardableResult public func query(_ query: String, arguments: [String: Any]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
 
-        // MARK: - Core
+        public func setArtificialQueryDelay(_ delay: TimeInterval?) async { await core.setArtificialQueryDelay(delay) }
 
+
+        // MARK: - Core
         
         /// An actor for protected concurrent access to a database.
         public actor Core: BlackbirdQueryable {
@@ -378,6 +392,11 @@ extension Blackbird {
                 for (_, statement) in cachedStatements { sqlite3_finalize(statement) }
                 sqlite3_close(dbHandle)
                 isClosed = true
+            }
+            
+            private var artificialQueryDelay: TimeInterval? = nil
+            public func setArtificialQueryDelay(_ delay: TimeInterval?) {
+                artificialQueryDelay = delay
             }
 
             public func transaction(_ action: ((_ core: isolated Blackbird.Database.Core) throws -> Void) ) throws {
@@ -415,6 +434,8 @@ extension Blackbird {
 
                 let spState = perfLog.begin(signpost: .execute, message: query)
                 defer { perfLog.end(state: spState) }
+
+                if let artificialQueryDelay { Thread.sleep(forTimeInterval: artificialQueryDelay) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -481,6 +502,8 @@ extension Blackbird {
 
                 let spState = perfLog.begin(signpost: .rowsByPreparedFunc, message: query)
                 defer { perfLog.end(state: spState) }
+
+                if let artificialQueryDelay { Thread.sleep(forTimeInterval: artificialQueryDelay) }
 
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
