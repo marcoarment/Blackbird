@@ -275,12 +275,16 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
     @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Any]) async throws -> [Blackbird.Row]
     
-    // -- Listening for changes --
-    
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
     /// - Returns: The ``Blackbird/ChangePublisher`` for this model's table.
     static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher
+
+    /// Shorthand for this type's `ModelArrayUpdater` interface for SwiftUI.
+    typealias ArrayUpdater = Blackbird.ModelArrayUpdater<Self>
+    
+    /// Shorthand for this type's `ModelInstanceUpdater` interface for SwiftUI.
+    typealias InstanceUpdater = Blackbird.ModelInstanceUpdater<Self>
 }
 
 extension BlackbirdModel {

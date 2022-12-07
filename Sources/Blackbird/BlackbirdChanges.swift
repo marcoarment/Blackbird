@@ -46,10 +46,33 @@ public extension Blackbird {
     ///
     typealias ChangePublisher = PassthroughSubject<PrimaryKeyValues?, Never>
 
+    internal static func isRelevantPrimaryKeyChange(watchedPrimaryKeys: Blackbird.PrimaryKeyValues?, changedPrimaryKeys: Blackbird.PrimaryKeyValues?) -> Bool {
+        guard let watchedPrimaryKeys else {
+            // Not watching any particular keys -- always update for any table change
+            return true
+        }
+        
+        guard let changedPrimaryKeys else {
+            // Change sent for unknown/all keys -- always update
+            return true
+        }
+        
+        if !watchedPrimaryKeys.intersection(changedPrimaryKeys).isEmpty {
+            // Overlapping keys -- update
+            return true
+        }
+        
+        return false
+    }
+
+    // MARK: - Legacy notifications
+
     static let legacyChangeNotification = NSNotification.Name("BlackbirdTableChangeNotification")
     static let legacyChangeNotificationTableKey = "BlackbirdChangedTable"
     static let legacyChangeNotificationPrimaryKeyValuesKey = "BlackbirdChangedPrimaryKeyValues"
 }
+
+// MARK: - Change publisher
 
 extension Blackbird.Database {
     internal class ChangeReporter {
@@ -156,6 +179,65 @@ extension Blackbird.Database {
                 }
             }
             NotificationCenter.default.post(name: Blackbird.legacyChangeNotification, object: tableName, userInfo: userInfo)
+        }
+    }
+}
+
+// MARK: - General query cache with Combine publisher
+
+extension Blackbird {
+    public typealias CachedResultGenerator<T> = ((_ db: Blackbird.Database) async throws -> T)
+
+    public class CachedResultPublisher<T> {
+        public var valuePublisher = CurrentValueSubject<T?, Never>(nil)
+
+        private var cacheLock = Lock()
+        private var cachedResults: T? = nil
+        
+        private var tableName: String? = nil
+        private var database: Blackbird.Database? = nil
+        private var generator: CachedResultGenerator<T>? = nil
+        private var tableChangePublisher: AnyCancellable? = nil
+
+        public func subscribe(to tableName: String, in database: Blackbird.Database?, generator: CachedResultGenerator<T>?) {
+            self.tableName = tableName
+            self.generator = generator
+            self.changeDatabase(database)
+            enqueueUpdate()
+        }
+        
+        private func update(_ cachedResults: T?) async throws {
+            let results: T?
+            if let cachedResults {
+                results = cachedResults
+            } else {
+                results = (generator != nil && database != nil ? try await generator!(database!) : nil)
+                cacheLock.withLock { self.cachedResults = results }
+                await MainActor.run {
+                    valuePublisher.send(results)
+                }
+            }
+        }
+        
+        private func changeDatabase(_ newDatabase: Database?) {
+            if newDatabase == database { return }
+            database = newDatabase
+            self.cacheLock.withLock { self.cachedResults = nil }
+            
+            if let database, let tableName {
+                self.tableChangePublisher = database.changeReporter.changePublisher(for: tableName).sink { [weak self] _ in
+                    guard let self else { return }
+                    self.cacheLock.withLock { self.cachedResults = nil }
+                    self.enqueueUpdate()
+                }
+            } else {
+                self.tableChangePublisher = nil
+            }
+        }
+        
+        private func enqueueUpdate() {
+            let cachedResults = cacheLock.withLock { self.cachedResults }
+            Task { do { try await self.update(cachedResults) } catch { print("[Blackbird.ModelArrayUpdater<\(String(describing: T.self))>] ⚠️ Error updating: \(error.localizedDescription)") } }
         }
     }
 }

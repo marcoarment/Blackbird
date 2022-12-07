@@ -234,7 +234,7 @@ extension Blackbird {
         internal let perfLog: PerformanceLogger
 
         private static var instanceLock = Lock()
-        private static var nextInstanceID: InstanceID = 0
+        private static var nextInstanceID: InstanceID = 1
         private static var pathsOfCurrentInstances = Set<String>()
         
         private var isClosedLock = Lock()
