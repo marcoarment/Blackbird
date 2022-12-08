@@ -20,10 +20,7 @@ let package = Package(
     targets: [
         .target(
             name: "Blackbird",
-            dependencies: [],
-            swiftSettings: [
-              .unsafeFlags(["-Xfrontend", "-warn-concurrency"])
-            ]),
+            dependencies: []),
         .testTarget(
             name: "BlackbirdTests",
             dependencies: ["Blackbird"]),
