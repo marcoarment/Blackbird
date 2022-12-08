@@ -43,7 +43,7 @@ internal class BlackbirdSQLiteEncoder: Encoder {
 
     public var codingPath: [CodingKey] = []
     private let storage = Storage()
-    public var userInfo: [CodingUserInfoKey : Any] = [:]
+    public var userInfo: [CodingUserInfoKey: Any] = [:]
     
     func sqliteArguments() -> Blackbird.Arguments { return storage.arguments }
     
@@ -173,7 +173,7 @@ internal class BlackbirdSQLiteDecoder: Decoder {
     }
 
     public var codingPath: [CodingKey] = []
-    public var userInfo: [CodingUserInfoKey : Any] = [:]
+    public var userInfo: [CodingUserInfoKey: Any] = [:]
 
     let row: Blackbird.Row
     init(_ row: Blackbird.Row) {

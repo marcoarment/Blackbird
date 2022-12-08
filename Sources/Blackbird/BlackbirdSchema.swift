@@ -44,7 +44,7 @@ extension Blackbird {
     /// `.data` |  Empty data
     ///
     /// Custom default values for columns are not supported by Blackbird.
-    public enum ColumnType {
+    public enum ColumnType: Sendable {
 
         /// Stored as a **signed** integer up to 64-bit.
         ///
@@ -94,7 +94,7 @@ extension Blackbird {
     }
 
     /// A column in a ``Table``.
-    public struct Column: Equatable, Hashable {
+    public struct Column: Equatable, Hashable, Sendable {
         enum Error: Swift.Error {
             case cannotParseColumnDefinition(table: String, description: String)
         }
@@ -147,7 +147,7 @@ extension Blackbird {
     }
     
     /// An index in a ``Table``.
-    public struct Index: Equatable, Hashable {
+    public struct Index: Equatable, Hashable, Sendable {
         public enum Error: Swift.Error {
             case cannotParseIndexDefinition(definition: String, description: String)
         }
@@ -208,7 +208,7 @@ extension Blackbird {
     }
 
     /// The schema for a SQLite table in a ``Database``.
-    public struct Table: Hashable {
+    public struct Table: Hashable, Sendable {
         enum Error: Swift.Error {
             case invalidTableDefinition(table: String, description: String)
         }
@@ -231,9 +231,8 @@ extension Blackbird {
         internal let primaryKeys: [Column]
         internal let indexes: [Index]
         
-        private static var resolvedTablesWithDatabases: [Table: Set<Database.InstanceID>] = [:]
-        private static var resolvedTableNamesInDatabases: [Database.InstanceID : Set<String>] = [:]
-        private static var resolvedTablesLock = Lock()
+        private static let resolvedTablesWithDatabases = Locked([Table: Set<Database.InstanceID>]())
+        private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID : Set<String>]())
         
         /// Defines the schema of an SQLite table in a ``Blackbird/Database`` for a type conforming to ``BlackbirdModel``.
         /// - Parameters:
@@ -290,31 +289,32 @@ extension Blackbird {
         
         internal func createIndexStatements<T>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name(type: type)) } }
         
-        internal func resolveWithDatabase<T>(type: T.Type, database: Database, core: Database.Core, validator: (() throws -> Void)?) async throws {
+        internal func resolveWithDatabase<T>(type: T.Type, database: Database, core: Database.Core, validator: (@Sendable () throws -> Void)?) async throws {
             if _isAlreadyResolved(type: type, in: database) { return }
             try await core.transaction {
                 try _resolveWithDatabaseIsolated(type: type, database: database, core: $0, validator: validator)
             }
         }
 
-        internal func resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (() throws -> Void)?) throws {
+        internal func resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
             if _isAlreadyResolved(type: type, in: database) { return }
             try _resolveWithDatabaseIsolated(type: type, database: database, core: core, validator: validator)
         }
 
         internal func _isAlreadyResolved<T>(type: T.Type, in database: Database) -> Bool {
-            return Self.resolvedTablesLock.withLock {
-                let alreadyResolved = Self.resolvedTablesWithDatabases[self]?.contains(database.id) ?? false
-                if !alreadyResolved, case let name = name(type: type), Self.resolvedTableNamesInDatabases[database.id]?.contains(name) ?? false {
-                    fatalError("Multiple BlackbirdModel types cannot use the same table name (\"\(name)\") in one Database")
-                }
-                return alreadyResolved
+            let alreadyResolved = Self.resolvedTablesWithDatabases.withLock { $0[self]?.contains(database.id) ?? false }
+            if !alreadyResolved,
+                case let name = name(type: type),
+                Self.resolvedTableNamesInDatabases.withLock({ $0[database.id]?.contains(name) ?? false })
+            {
+                fatalError("Multiple BlackbirdModel types cannot use the same table name (\"\(name)\") in one Database")
             }
+            return alreadyResolved
         }
 
-        private func _resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (() throws -> Void)?) throws {
+        private func _resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
             // Table not created yet
-            var schemaInDB: Table
+            let schemaInDB: Table
             let tableName = name(type: type)
             do {
                 let existingSchemaInDB = try Table(isolatedCore: core, tableName: tableName)
@@ -337,6 +337,7 @@ extension Blackbird {
             if primaryKeysChanged || currentColumns != targetColumns || currentIndexes != targetIndexes {
                 try core.transaction { core in
                     // drop indexes and columns
+                    var schemaInDB = schemaInDB
                     for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(indexToDrop.name)`") }
                     for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(tableName)` DROP COLUMN `\(columnNameToDrop)`") }
                     schemaInDB = try Table(isolatedCore: core, tableName: tableName)!
@@ -365,13 +366,16 @@ extension Blackbird {
                     if let validator { try validator() }
                 }
             }
+
+            Self.resolvedTablesWithDatabases.withLock {
+                if $0[self] == nil { $0[self] = Set<Database.InstanceID>() }
+                $0[self]!.insert(database.id)
+            }
             
-            Self.resolvedTablesLock.lock()
-            if Self.resolvedTablesWithDatabases[self] == nil { Self.resolvedTablesWithDatabases[self] = Set<Database.InstanceID>() }
-            Self.resolvedTablesWithDatabases[self]!.insert(database.id)
-            if Self.resolvedTableNamesInDatabases[database.id] == nil { Self.resolvedTableNamesInDatabases[database.id] = Set<String>() }
-            Self.resolvedTableNamesInDatabases[database.id]!.insert(tableName)
-            Self.resolvedTablesLock.unlock()
+            Self.resolvedTableNamesInDatabases.withLock {
+                if $0[database.id] == nil { $0[database.id] = Set<String>() }
+                $0[database.id]!.insert(tableName)
+            }
         }
     }
 }

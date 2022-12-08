@@ -55,7 +55,7 @@ import OSLog
 extension Blackbird {
     static let loggingSubsystem = "org.marco.blackbird"
 
-    internal struct PerformanceLogger {
+    internal struct PerformanceLogger: @unchecked Sendable /* waiting for Sendable compliance in OSLog components */ {
         let log: Logger // The logger object. Exposed so it can be used directly.
         let post: OSSignposter // The signposter object. Exposed so it can be used directly.
 

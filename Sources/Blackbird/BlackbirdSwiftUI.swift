@@ -178,7 +178,7 @@ extension BlackbirdModel {
 // MARK: - Multi-row query updaters
 
 extension Blackbird {
-    public class QueryUpdater {
+    public final class QueryUpdater {
         @Binding public var results: [Blackbird.Row]
         @Binding public var didLoad: Bool
 
@@ -210,7 +210,7 @@ extension Blackbird {
         }
     }
 
-    public class ModelArrayUpdater<T: BlackbirdModel> {
+    public final class ModelArrayUpdater<T: BlackbirdModel> {
         @Binding public var results: [T]
         @Binding public var didLoad: Bool
 
@@ -280,7 +280,7 @@ extension Blackbird {
 // MARK: - Single-instance updater
 
 extension Blackbird {
-    public class ModelInstanceUpdater<T: BlackbirdModel> {
+    public final class ModelInstanceUpdater<T: BlackbirdModel> {
         @Binding public var instance: T?
         @Binding public var didLoad: Bool
         
@@ -302,7 +302,7 @@ extension Blackbird {
         ///   - primaryKey: The single-column primary-key value to match.
         ///
         /// See also: ``bind(from:to:didLoad:multicolumnPrimaryKey:)`` and ``bind(from:to:didLoad:id:)``.
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, primaryKey: Any) {
+        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, primaryKey: Sendable) {
             watchedPrimaryKeys = Blackbird.PrimaryKeyValues([ [try! Blackbird.Value.fromAny(primaryKey)] ])
             bind(from: database, to: instance, didLoad: didLoad)  { try await T.read(from: $0, multicolumnPrimaryKey: [primaryKey]) }
         }
@@ -315,7 +315,7 @@ extension Blackbird {
         ///   - multicolumnPrimaryKey: The multi-column primary-key values to match.
         ///
         /// See also: ``bind(from:to:didLoad:primaryKey:)`` and ``bind(from:to:didLoad:id:)``.
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, multicolumnPrimaryKey: [Any]) {
+        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, multicolumnPrimaryKey: [Sendable]) {
             watchedPrimaryKeys = Blackbird.PrimaryKeyValues([ multicolumnPrimaryKey.map { try! Blackbird.Value.fromAny($0) } ])
             bind(from: database, to: instance, didLoad: didLoad)  { try await T.read(from: $0, multicolumnPrimaryKey: multicolumnPrimaryKey) }
         }
@@ -328,7 +328,7 @@ extension Blackbird {
         ///   - id: The ID value to match, assuming the table has a single-column primary key named `"id"`.
         ///
         /// See also: ``bind(from:to:didLoad:primaryKey:)`` and ``bind(from:to:didLoad:multicolumnPrimaryKey:)`` .
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, id: Any) {
+        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, id: Sendable) {
             watchedPrimaryKeys = Blackbird.PrimaryKeyValues([ [try! Blackbird.Value.fromAny(id)] ])
             bind(from: database, to: instance, didLoad: didLoad) { try await T.read(from: $0, id: id) }
         }
@@ -364,7 +364,10 @@ extension Blackbird {
         }
         
         private func enqueueUpdate() {
-            Task { do { try await self.update() } catch { print("[Blackbird.ModelInstanceUpdater<\(String(describing: T.self))>] ⚠️ Error updating: \(error.localizedDescription)") } }
+            Task {
+                do { try await self.update() }
+                catch { print("[Blackbird.ModelInstanceUpdater<\(String(describing: T.self))>] ⚠️ Error updating: \(error.localizedDescription)") }
+            }
         }
     }
 }

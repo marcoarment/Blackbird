@@ -110,7 +110,7 @@ import Combine
 /// `BlackbirdModel` should not be used with tables or queries involving them,
 /// and their use may cause some features not to behave as expected.
 ///
-public protocol BlackbirdModel: Codable, Equatable, Identifiable {
+public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     /// Defines the database schema for models of this type.
     static var table: Blackbird.Table { get }
     
@@ -135,7 +135,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     /// For tables with multi-column primary keys, use ``read(from:multicolumnPrimaryKey:)-4jvke``.
     ///
     /// For tables with a single-column primary key named `id`, ``read(from:id:)-ii0w`` is more concise.
-    static func read(from database: Blackbird.Database, primaryKey: Any) async throws -> Self?
+    static func read(from database: Blackbird.Database, primaryKey: Sendable) async throws -> Self?
 
     /// Reads a single instance with the given primary key values from a database.
     /// - Parameters:
@@ -144,7 +144,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     /// - Returns: The decoded instance in the table with the given primary key, or `nil` if a corresponding instance doesn't exist in the table.
     ///
     /// For tables with single-column primary keys, ``read(from:primaryKey:)-3p0bv`` is more concise.
-    static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [Any]) async throws -> Self?
+    static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [Sendable]) async throws -> Self?
 
     /// Reads a single instance with the given primary key values from a database.
     /// - Parameters:
@@ -153,7 +153,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     /// - Returns: The decoded instance in the table with the given primary key, or `nil` if a corresponding instance doesn't exist in the table.
     ///
     /// For tables with single-column primary keys, ``read(from:primaryKey:)-3p0bv`` is more concise.
-    static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [String: Any]) async throws -> Self?
+    static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [String: Sendable]) async throws -> Self?
     
     /// Reads a single instance with the given primary-key value from a database if the primary key is a single column named `id`.
     /// - Parameters:
@@ -162,7 +162,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     /// - Returns: The decoded instance in the table with the given `id`, or `nil` if a corresponding instance doesn't exist in the table.
     ///
     /// For tables with other primary-key names, see ``read(from:primaryKey:)-3p0bv`` and ``read(from:multicolumnPrimaryKey:)-4jvke``.
-    static func read(from database: Blackbird.Database, id: Any) async throws -> Self?
+    static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self?
 
     /// Reads instances from a database using an optional list of arguments.
     ///
@@ -180,7 +180,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     ///     arguments: [1 /* state */, "Test Title" /* title *]
     /// )
     /// ```
-    static func read(from database: Blackbird.Database, where queryAfterWhere: String, _ arguments: Any...) async throws -> [Self]
+    static func read(from database: Blackbird.Database, where queryAfterWhere: String, _ arguments: Sendable...) async throws -> [Self]
 
     /// Reads instances from a database using an array of arguments.
     ///
@@ -198,7 +198,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     ///     arguments: [1 /* state */, "Test Title" /* title *]
     /// )
     /// ```
-    static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Any]) async throws -> [Self]
+    static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Sendable]) async throws -> [Self]
 
     /// Reads instances from a database using a dictionary of named arguments.
     ///
@@ -216,7 +216,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     ///     arguments: [":state": 1, ":title": "Test Title"]
     /// )
     /// ```
-    static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Any]) async throws -> [Self]
+    static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Sendable]) async throws -> [Self]
 
     /// Write this instance to a database.
     /// - Parameter database: The ``Blackbird/Database`` instance to write to.
@@ -253,7 +253,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     ///       - Question-mark placeholders (`?`) for any argument values to be passed to the query.
     ///   - arguments: Values corresponding to any placeholders in the query.
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
-    @discardableResult static func query(in database: Blackbird.Database, _ query: String, _ arguments: Any...) async throws -> [Blackbird.Row]
+    @discardableResult static func query(in database: Blackbird.Database, _ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row]
     
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
     /// - Parameters:
@@ -263,7 +263,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     ///       - Question-mark placeholders (`?`) for any argument values to be passed to the query.
     ///   - arguments: An array of values corresponding to any placeholders in the query.
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
-    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [Any]) async throws -> [Blackbird.Row]
+    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row]
 
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
     /// - Parameters:
@@ -273,7 +273,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
     ///       - Named placeholders prefixed by a colon (`:`), at-sign (`@`), or dollar sign (`$`) as described in the [SQLite documentation](https://www.sqlite.org/c3ref/bind_blob.html).
     ///   - arguments: A dictionary of placeholder names used in the query and their corresponding values. Names must include the prefix character used.
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
-    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Any]) async throws -> [Blackbird.Row]
+    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row]
     
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
@@ -290,24 +290,24 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable {
 extension BlackbirdModel {
     public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.table.name(type: self)) }
     
-    public static func read(from database: Blackbird.Database, id: Any) async throws -> Self? { return try await self.read(from: database, where: "id = ?", id).first }
+    public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? { return try await self.read(from: database, where: "id = ?", id).first }
 
-    public static func read(from database: Blackbird.Database, primaryKey: Any) async throws -> Self? { return try await self.read(from: database, multicolumnPrimaryKey: [primaryKey]) }
+    public static func read(from database: Blackbird.Database, primaryKey: Sendable) async throws -> Self? { return try await self.read(from: database, multicolumnPrimaryKey: [primaryKey]) }
 
-    public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [Any]) async throws -> Self? {
+    public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [Sendable]) async throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(table.name(type: self))")
         }
         return try await self.read(from: database, where: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
-    public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [String: Any]) async throws -> Self? {
+    public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [String: Sendable]) async throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(table.name(type: self))")
         }
         
         var andClauses: [String] = []
-        var values: [Any] = []
+        var values: [Sendable] = []
         for (name, value) in multicolumnPrimaryKey {
             andClauses.append("`\(name)` = ?")
             values.append(value)
@@ -316,18 +316,18 @@ extension BlackbirdModel {
         return try await self.read(from: database, where: andClauses.joined(separator: " AND "), arguments: values).first
     }
 
-    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, _ arguments: Any...) async throws -> [Self] {
+    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, _ arguments: Sendable...) async throws -> [Self] {
         return try await self.read(from: database, where: queryAfterWhere, arguments: arguments)
     }
 
-    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Any]) async throws -> [Self] {
+    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder($0)
             return try Self(from: decoder)
         }
     }
 
-    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Any]) async throws -> [Self] {
+    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder($0)
             return try Self(from: decoder)
@@ -335,18 +335,18 @@ extension BlackbirdModel {
     }
 
     @discardableResult
-    public static func query(in database: Blackbird.Database, _ query: String, _ arguments: Any...) async throws -> [Blackbird.Row] {
+    public static func query(in database: Blackbird.Database, _ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row] {
         return try await self.query(in: database, query, arguments: arguments)
     }
 
     @discardableResult
-    public static func query(in database: Blackbird.Database, _ query: String, arguments: [Any]) async throws -> [Blackbird.Row] {
+    public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name(type: Self.self)), arguments: arguments)
     }
 
     @discardableResult
-    public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Any]) async throws -> [Blackbird.Row] {
+    public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name(type: Self.self)), arguments: arguments)
     }
@@ -366,7 +366,7 @@ extension BlackbirdModel {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
     }
     
-    private func insertQueryValues() throws -> (sql: String, values: [Any], primaryKeyValues: [Blackbird.Value]?) {
+    private func insertQueryValues() throws -> (sql: String, values: [Sendable], primaryKeyValues: [Blackbird.Value]?) {
         let table = Self.table
 
         let encoder = BlackbirdSQLiteEncoder()

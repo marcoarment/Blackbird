@@ -31,10 +31,15 @@
 //  ***************************************************************************************************
 //
 
-import Foundation
+@preconcurrency import Foundation
 
 fileprivate func raiseObjCException(_ error: Error) -> Never {
     NSException(name: NSExceptionName(rawValue: "BlackbirdException"), reason: error.localizedDescription).raise()
+    fatalError() // will never execute, but tricks Swift into accepting the Never return type
+}
+
+fileprivate func raiseObjCException(_ message: String) -> Never {
+    NSException(name: NSExceptionName(rawValue: "BlackbirdException"), reason: message).raise()
     fatalError() // will never execute, but tricks Swift into accepting the Never return type
 }
 
@@ -55,7 +60,7 @@ extension Blackbird.Row {
 }
 
 /// Objective-C version of ``Blackbird/ColumnType``.
-@objc public enum BlackbirdColumnTypeObjC: Int {
+@objc public enum BlackbirdColumnTypeObjC: Int, Sendable {
     case integer
     case double
     case text
@@ -72,7 +77,7 @@ extension Blackbird.Row {
 }
 
 /// Objective-C wrapper for ``Blackbird/Column``.
-@objc public class BlackbirdColumnObjC: NSObject {
+@objc public final class BlackbirdColumnObjC: NSObject, Sendable {
     @objc public let name: String
     internal let column: Blackbird.Column
     
@@ -88,7 +93,7 @@ extension Blackbird.Row {
 }
 
 /// Objective-C wrapper for ``Blackbird/Index``.
-@objc public class BlackbirdIndexObjC: NSObject {
+@objc public final class BlackbirdIndexObjC: NSObject, Sendable {
     internal let index: Blackbird.Index
     
     /// Objective-C version of ``Blackbird/Index/init(columnNames:unique:)``.
@@ -102,7 +107,7 @@ extension Blackbird.Row {
 }
 
 /// Objective-C wrapper for ``Blackbird/Table``.
-@objc public class BlackbirdTableObjC: NSObject {
+@objc public final class BlackbirdTableObjC: NSObject, Sendable {
     @objc public let name: String
     @objc public let columnNames: [String]
     @objc public let primaryKeyColumnNames: [String]
@@ -122,12 +127,12 @@ extension Blackbird.Row {
 }
 
 /// Objective-C wrapper for ``Blackbird/Database``.
-@objc public class BlackbirdDatabaseObjC: NSObject {
+@objc public final class BlackbirdDatabaseObjC: NSObject, Sendable {
 
     /// The wrapped database, accessible for use from Swift.
     public let db: Blackbird.Database
 
-    fileprivate var cachedTableNames = Set<String>()
+    fileprivate let cachedTableNames = Blackbird.Locked(Set<String>())
     
     /// Instantiates a new SQLite database as a file on disk.
     /// - Parameters:
@@ -186,8 +191,19 @@ extension Blackbird.Row {
     ///   - arguments: An array of values corresponding to any placeholders in the query.
     /// - Returns: An array of dictionaries matching the query if applicable, or an empty array otherwise. Each dictionary is keyed by each row's column names, and `NULL` values are represented as `NSNull.null`.
     @objc public func query(_ query: String, arguments: [Any]) async -> [[String: NSObject]] {
+        let checkedArguments: [Sendable] = arguments.map {
+            switch $0 {
+                case let v as NSNumber: return v
+                case let v as NSString: return String(v)
+                case let v as NSNull: return v
+                case let v as NSURL: return v
+                case let v as NSDate: return v
+                default: raiseObjCException("Cannot convert argument to supported type (query: \(query), argument: \($0)")
+            }
+        }
+        
         do {
-            return try await db.query(query, arguments).map { $0.objcRow() }
+            return try await db.query(query, checkedArguments).map { $0.objcRow() }
         } catch {
             raiseObjCException(error)
         }
@@ -197,9 +213,10 @@ extension Blackbird.Row {
     @objc public func resolve(table: BlackbirdTableObjC) async {
         do {
             try await db.transaction { core in
-                if cachedTableNames.contains(table.name) { return }
+                let tableName = table.name
+                if cachedTableNames.withLock({ $0.contains(tableName) }) { return }
                 try table.table.resolveWithDatabaseIsolated(type: Self.self, database: db, core: core, validator: nil)
-                cachedTableNames.insert(table.name)
+                cachedTableNames.withLock { $0.insert(tableName) }
             }
         } catch {
             raiseObjCException(error)

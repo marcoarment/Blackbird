@@ -231,10 +231,11 @@ final class BlackbirdTestTests: XCTestCase {
         
         let id = TestData.randomInt64()
         let originalTitle = TestData.randomTitle
-        var t = TestModel(id: id, title: originalTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 32))
+        let t = TestModel(id: id, title: originalTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 32))
         try await t.write(to: db)
 
         try await db.cancellableTransaction { core in
+            var t = t
             t.title = "new title"
             try t.writeIsolated(to: db, core: core)
             

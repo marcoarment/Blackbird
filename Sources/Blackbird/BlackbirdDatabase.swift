@@ -68,7 +68,7 @@ internal protocol BlackbirdQueryable {
     ///
     /// ## See also
     /// ``cancellableTransaction(_:)``
-    func transaction(_ action: ((_ core: isolated Blackbird.Database.Core) throws -> Void) ) async throws
+    func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Void) ) async throws
 
     /// Equivalent to ``transaction(_:)``, but with the ability to cancel without throwing an error.
     /// - Parameter action: The actions to perform in the transaction. Return `true` to commit the transaction or `false` to roll it back. If an error is thrown, the transaction is rolled back and the error is rethrown to the caller.
@@ -87,7 +87,7 @@ internal protocol BlackbirdQueryable {
     ///     return areWeReadyForCommitment
     /// }
     /// ```
-    func cancellableTransaction(_ action: ((_ core: isolated Blackbird.Database.Core) throws -> Bool) ) async throws
+    func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Bool) ) async throws
 
     
     /// Queries the database.
@@ -114,7 +114,7 @@ internal protocol BlackbirdQueryable {
     ///     "Test Title" // value for title
     /// )
     /// ```
-    @discardableResult func query(_ query: String, _ arguments: Any...) async throws -> [Blackbird.Row]
+    @discardableResult func query(_ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row]
     
     /// Queries the database with an array of arguments.
     /// - Parameters:
@@ -129,7 +129,7 @@ internal protocol BlackbirdQueryable {
     ///     arguments: [1 /* value for state */, "Test Title" /* value for title */]
     /// )
     /// ```
-    @discardableResult func query(_ query: String, arguments: [Any]) async throws -> [Blackbird.Row]
+    @discardableResult func query(_ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row]
     
     /// Queries the database using a dictionary of named arguments.
     ///
@@ -145,7 +145,7 @@ internal protocol BlackbirdQueryable {
     ///     arguments: [":state": 1, ":title": "Test Title"]
     /// )
     /// ```
-    @discardableResult func query(_ query: String, arguments: [String: Any]) async throws -> [Blackbird.Row]
+    @discardableResult func query(_ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row]
 }
 
 extension Blackbird {
@@ -180,7 +180,7 @@ extension Blackbird {
     /// }
     /// ```
     ///
-    public class Database: Identifiable, Hashable, Equatable, BlackbirdQueryable {
+    public final class Database: Identifiable, Hashable, Equatable, BlackbirdQueryable, Sendable {
         /// Process-unique identifiers for Database instances. Used internally.
         public typealias InstanceID = Int64
 
@@ -204,7 +204,7 @@ extension Blackbird {
         }
         
         /// Options for customizing database behavior.
-        public struct Options: OptionSet {
+        public struct Options: OptionSet, Sendable {
             public let rawValue: Int
             public init(rawValue: Int) { self.rawValue = rawValue }
 
@@ -223,6 +223,24 @@ extension Blackbird {
             public static let sendLegacyChangeNotifications = Options(rawValue: 1 << 4)
         }
         
+        internal final class InstancePool: Sendable {
+            private static let lock = Lock()
+            private static let _nextInstanceID = Locked<InstanceID>(0)
+            private static let pathsOfCurrentInstances = Locked(Set<String>())
+
+            internal static func nextInstanceID() -> InstanceID {
+                _nextInstanceID.withLock { $0 += 1; return $0 }
+            }
+
+            internal static func addInstance(path: String) -> Bool {
+                pathsOfCurrentInstances.withLock { let (inserted, _) = $0.insert(path) ; return inserted }
+            }
+
+            internal static func removeInstance(path: String) {
+                pathsOfCurrentInstances.withLock { $0.remove(path) }
+            }
+        }
+
         /// The path to the database file, or `nil` for in-memory databases.
         public let path: String?
         
@@ -230,21 +248,16 @@ extension Blackbird {
         public let options: Options
 
         internal let core: Core
-        internal var changeReporter: ChangeReporter
+        internal let changeReporter: ChangeReporter
         internal let perfLog: PerformanceLogger
-
-        private static var instanceLock = Lock()
-        private static var nextInstanceID: InstanceID = 1
-        private static var pathsOfCurrentInstances = Set<String>()
         
-        private var isClosedLock = Lock()
-        private var _isClosed = false
+        private let isClosedLocked = Locked(false)
         
         /// Whether ``close()`` has been called on this database yet. Does **not** indicate whether the close operation has completed.
         ///
         /// > Note: Once an instance is closed, it is never reopened.
         public var isClosed: Bool {
-            get { isClosedLock.withLock { _isClosed } }
+            get { isClosedLocked.value }
         }
 
         /// Instantiates a new SQLite database in memory, without persisting to a file.
@@ -262,12 +275,9 @@ extension Blackbird {
         ///
         /// An error will be thrown if another instance exists with the same filename, the database cannot be created, or the linked version of SQLite lacks the required capabilities.
         public init(path: String, options: Options = []) throws {
-            id = try Self.instanceLock.withLock {
-                if !options.contains(.inMemoryDatabase), Self.pathsOfCurrentInstances.contains(path) { throw Error.anotherInstanceExistsWithPath(path: path) }
-                let id = Self.nextInstanceID
-                Self.nextInstanceID += 1
-                return id
-            }
+            let isUniqueInstanceForPath = options.contains(.inMemoryDatabase) || InstancePool.addInstance(path: path)
+            if !isUniqueInstanceForPath { throw Error.anotherInstanceExistsWithPath(path: path) }
+            id = InstancePool.nextInstanceID()
 
             // Use a local because we can't use self until everything has been initalized
             let performanceLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database")
@@ -284,21 +294,22 @@ extension Blackbird {
             var handle: OpaquePointer? = nil
             let flags: Int32 = (options.contains(.readOnly) ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) | SQLITE_OPEN_NOMUTEX
             let result = sqlite3_open_v2(self.path ?? ":memory:", &handle, flags, nil)
-            guard let handle else { throw Error.cannotOpenDatabaseAtPath(path: path, description: "SQLite cannot allocate memory") }
+            guard let handle else {
+                if let path = self.path { InstancePool.removeInstance(path: path) }
+                throw Error.cannotOpenDatabaseAtPath(path: path, description: "SQLite cannot allocate memory")
+            }
             guard result == SQLITE_OK else {
                 let code = sqlite3_errcode(handle)
                 let msg = String(cString: sqlite3_errmsg(handle), encoding: .utf8) ?? "(unknown)"
                 sqlite3_close(handle)
+                if let path = self.path { InstancePool.removeInstance(path: path) }
                 throw Error.cannotOpenDatabaseAtPath(path: path, description: "SQLite error code \(code): \(msg)")
             }
             
             if SQLITE_OK != sqlite3_exec(handle, "PRAGMA journal_mode = WAL", nil, nil, nil) || SQLITE_OK != sqlite3_exec(handle, "PRAGMA synchronous = NORMAL", nil, nil, nil) {
                 sqlite3_close(handle)
+                if let path = self.path { InstancePool.removeInstance(path: path) }
                 throw Error.unsupportedConfigurationAtPath(path: path)
-            }
-
-            if let filePath = self.path {
-                Self.instanceLock.withLock { Self.pathsOfCurrentInstances.insert(filePath) }
             }
 
             core = Core(handle, changeReporter: changeReporter, options: options)
@@ -314,9 +325,7 @@ extension Blackbird {
         }
         
         deinit {
-            if let path {
-                Self.instanceLock.withLock { Self.pathsOfCurrentInstances.remove(path) }
-            }
+            if let path { InstancePool.removeInstance(path: path) }
         }
         
         /// Close the current database manually.
@@ -330,29 +339,27 @@ extension Blackbird {
             let spState = perfLog.begin(signpost: .closeDatabase)
             defer { perfLog.end(state: spState) }
 
-            isClosedLock.withLock { _isClosed = true }
+            isClosedLocked.value = true
             await core.close()
 
-            if let path {
-                Self.instanceLock.withLock { Self.pathsOfCurrentInstances.remove(path) }
-            }
+            if let path { InstancePool.removeInstance(path: path) }
         }
         
         // MARK: - Forwarded Core functions
         
         public func execute(_ query: String) async throws { try await core.execute(query) }
 
-        public func transaction(_ action: ((_ core: isolated Core) throws -> Void) ) async throws { try await core.transaction(action) }
+        public func transaction(_ action: (@Sendable (_ core: isolated Core) throws -> Void) ) async throws { try await core.transaction(action) }
         
-        public func cancellableTransaction(_ action: ((_ core: isolated Core) throws -> Bool) ) async throws { try await core.cancellableTransaction(action) }
+        public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Core) throws -> Bool) ) async throws { try await core.cancellableTransaction(action) }
 
-        @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, []) }
+        @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, [Sendable]()) }
 
-        @discardableResult public func query(_ query: String, _ arguments: Any...) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
+        @discardableResult public func query(_ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
 
-        @discardableResult public func query(_ query: String, arguments: [Any]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
+        @discardableResult public func query(_ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
 
-        @discardableResult public func query(_ query: String, arguments: [String: Any]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
+        @discardableResult public func query(_ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
 
         public func setArtificialQueryDelay(_ delay: TimeInterval?) async { await core.setArtificialQueryDelay(delay) }
 
@@ -399,14 +406,14 @@ extension Blackbird {
                 artificialQueryDelay = delay
             }
 
-            public func transaction(_ action: ((_ core: isolated Blackbird.Database.Core) throws -> Void) ) throws {
+            public func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Void) ) throws {
                 try cancellableTransaction { core in
                     try action(core)
                     return true
                 }
             }
 
-            public func cancellableTransaction(_ action: ((_ core: isolated Blackbird.Database.Core) throws -> Bool) ) throws {
+            public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Bool) ) throws {
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -459,13 +466,13 @@ extension Blackbird {
             }
 
             @discardableResult
-            public func query(_ query: String) throws -> [Blackbird.Row] { return try self.query(query, []) }
+            public func query(_ query: String) throws -> [Blackbird.Row] { return try self.query(query, [Sendable]()) }
 
             @discardableResult
-            public func query(_ query: String, _ arguments: Any...) throws -> [Blackbird.Row] { return try self.query(query, arguments: arguments) }
+            public func query(_ query: String, _ arguments: Sendable...) throws -> [Blackbird.Row] { return try self.query(query, arguments: arguments) }
 
             @discardableResult
-            public func query(_ query: String, arguments: [Any]) throws -> [Blackbird.Row] {
+            public func query(_ query: String, arguments: [Sendable]) throws -> [Blackbird.Row] {
                 if isClosed { throw Error.databaseIsClosed }
                 let statement = try preparedStatement(query)
                 var idx = 1 // SQLite bind-parameter indexes start at 1, not 0!
@@ -478,7 +485,7 @@ extension Blackbird {
             }
 
             @discardableResult
-            public func query(_ query: String, arguments: [String: Any]) throws -> [Blackbird.Row] {
+            public func query(_ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row] {
                 if isClosed { throw Error.databaseIsClosed }
                 let statement = try preparedStatement(query)
                 for (name, any) in arguments {

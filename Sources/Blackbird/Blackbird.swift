@@ -29,12 +29,17 @@ import SQLite3
 
 /// A small, fast, lightweight SQLite database wrapper and model layer.
 public class Blackbird {
+    /// A dictionary of a single table row's values, keyed by their column names.
     public typealias Row = Dictionary<String, Blackbird.Value>
+    
+    /// A dictionary of argument values for a database query, keyed by column names.
     public typealias Arguments = Dictionary<String, Blackbird.Value>
+    
+    /// A set of primary-key values, where each is an array of values (to support multi-column primary keys).
     public typealias PrimaryKeyValues = Set<[Blackbird.Value]>
 
     /// A wrapper for SQLite's column data types.
-    public enum Value: ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
+    public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
         case null
         case integer(Int64)
         case double(Double)
@@ -42,14 +47,14 @@ public class Blackbird {
         case data(Data)
 
         public enum Error: Swift.Error {
-            case cannotConvertToValue(Any)
+            case cannotConvertToValue(Sendable)
         }
 
         public func hash(into hasher: inout Hasher) {
             hasher.combine(sqliteLiteral())
         }
         
-        public static func fromAny(_ value: Any?) throws -> Value {
+        public static func fromAny(_ value: Sendable?) throws -> Value {
             guard let value else { return .null }
             switch value {
                 case let v as Value:  return v
@@ -200,7 +205,7 @@ public class Blackbird {
 
 // MARK: - Utilities
 
-internal protocol BlackbirdLock {
+internal protocol BlackbirdLock: Sendable {
     func lock()
     func unlock()
     @discardableResult func withLock<R>(_ body: () throws -> R) rethrows -> R where R : Sendable
@@ -224,13 +229,13 @@ extension Blackbird {
     }
 
     @available(macOS 13.0, iOS 16.0, tvOS 16.0, watchOS 9.0, *)
-    fileprivate class UnfairLock: BlackbirdLock {
+    fileprivate final class UnfairLock: BlackbirdLock {
         private let _lock = OSAllocatedUnfairLock()
         internal func lock() { _lock.lock() }
         internal func unlock() { _lock.unlock() }
     }
 
-    fileprivate class LegacyUnfairLock: BlackbirdLock {
+    fileprivate final class LegacyUnfairLock: BlackbirdLock, @unchecked Sendable /* unchecked due to known-safe use of UnsafeMutablePointer */ {
         private var _lock: UnsafeMutablePointer<os_unfair_lock>
         internal func lock()   { os_unfair_lock_lock(_lock) }
         internal func unlock() { os_unfair_lock_unlock(_lock) }
@@ -240,6 +245,29 @@ extension Blackbird {
             _lock.initialize(to: os_unfair_lock())
         }
         deinit { _lock.deallocate() }
+    }
+
+    final class Locked<T: Sendable>: @unchecked Sendable /* unchecked due to use of internal locking */ {
+        public var value: T {
+            get {
+                return lock.withLock { _value }
+            }
+            set {
+                lock.withLock { _value = newValue }
+            }
+        }
+        
+        private let lock = Lock()
+        private var _value: T
+        
+        init(_ initialValue: T) {
+            _value = initialValue
+        }
+        
+        @discardableResult
+        public func withLock<R>(_ body: (inout T) -> R) -> R where R: Sendable {
+            return lock.withLock { return body(&_value) }
+        }
     }
 }
 
