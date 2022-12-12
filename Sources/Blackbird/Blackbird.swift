@@ -24,7 +24,7 @@
 //  SOFTWARE.
 //
 
-import Foundation
+@preconcurrency import Foundation
 import SQLite3
 
 /// A small, fast, lightweight SQLite database wrapper and model layer.
