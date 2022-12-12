@@ -9,9 +9,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: fwal/setup-swift@v1
+      - uses: swift-actions/setup-swift@v1
         with:
-          swift-version: "5.7.0"
+          swift-version: "5.7"
+      - name: Verify swift version
+        run: swift --version
       - name: Build
         run: swift build
       - name: Run tests
