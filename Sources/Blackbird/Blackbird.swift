@@ -205,13 +205,13 @@ public class Blackbird {
 
 // MARK: - Utilities
 
-internal protocol BlackbirdLock: Sendable {
+public protocol BlackbirdLock: Sendable {
     func lock()
     func unlock()
     @discardableResult func withLock<R>(_ body: () throws -> R) rethrows -> R where R : Sendable
 }
 extension BlackbirdLock {
-    @discardableResult internal func withLock<R>(_ body: () throws -> R) rethrows -> R where R : Sendable {
+    @discardableResult public func withLock<R>(_ body: () throws -> R) rethrows -> R where R : Sendable {
         lock()
         defer { unlock() }
         return try body()
@@ -220,7 +220,7 @@ extension BlackbirdLock {
 
 import os
 extension Blackbird {
-    internal static func Lock() -> BlackbirdLock {
+    public static func Lock() -> BlackbirdLock {
         if #available(macOS 13.0, iOS 16.0, tvOS 16.0, watchOS 9.0, *) {
             return UnfairLock()
         } else {
@@ -235,7 +235,7 @@ extension Blackbird {
         internal func unlock() { _lock.unlock() }
     }
 
-    fileprivate final class LegacyUnfairLock: BlackbirdLock, @unchecked Sendable /* unchecked due to known-safe use of UnsafeMutablePointer */ {
+    fileprivate final class LegacyUnfairLock: BlackbirdLock, @unchecked Sendable /* unchecked due to known-safe use of an UnsafeMutablePointer */ {
         private var _lock: UnsafeMutablePointer<os_unfair_lock>
         internal func lock()   { os_unfair_lock_lock(_lock) }
         internal func unlock() { os_unfair_lock_unlock(_lock) }
@@ -247,7 +247,7 @@ extension Blackbird {
         deinit { _lock.deallocate() }
     }
 
-    final class Locked<T: Sendable>: @unchecked Sendable /* unchecked due to use of internal locking */ {
+    public final class Locked<T: Sendable>: @unchecked Sendable /* unchecked due to use of internal locking */ {
         public var value: T {
             get {
                 return lock.withLock { _value }

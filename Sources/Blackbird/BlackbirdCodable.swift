@@ -248,7 +248,7 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
     }
     
     func decode(_ type: Int64.Type, forKey key: K) throws -> Int64 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
+        guard let value = row[key.stringValue]?.int64Value else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
         return Int64(value)
     }
     
@@ -268,12 +268,12 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
     }
     
     func decode(_ type: UInt32.Type, forKey key: K) throws -> UInt32 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
+        guard let value = row[key.stringValue]?.int64Value else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
         return UInt32(value)
     }
     
     func decode(_ type: UInt64.Type, forKey key: K) throws -> UInt64 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
+        guard let value = row[key.stringValue]?.int64Value else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
         return UInt64(value)
     }
 
