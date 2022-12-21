@@ -221,6 +221,9 @@ extension Blackbird {
             
             /// Sends ``Blackbird/legacyChangeNotification`` notifications using `NotificationCenter`.
             public static let sendLegacyChangeNotifications = Options(rawValue: 1 << 4)
+
+            /// Monitor for changes to the database file from outside of this connection, such as from a different process or a different SQLite library within the same process.
+            public static let monitorForExternalChanges     = Options(rawValue: 1 << 8)
         }
         
         internal final class InstancePool: Sendable {
@@ -250,7 +253,8 @@ extension Blackbird {
         internal let core: Core
         internal let changeReporter: ChangeReporter
         internal let perfLog: PerformanceLogger
-        
+        internal let fileChangeMonitor: FileChangeMonitor?
+                
         private let isClosedLocked = Locked(false)
         
         /// Whether ``close()`` has been called on this database yet. Does **not** indicate whether the close operation has completed.
@@ -285,7 +289,10 @@ extension Blackbird {
             defer { performanceLog.end(state: spState) }
 
             var normalizedOptions = options
-            if path.isEmpty || path == ":memory:" { normalizedOptions.insert(.inMemoryDatabase) }
+            if path.isEmpty || path == ":memory:" {
+                normalizedOptions.insert(.inMemoryDatabase)
+                normalizedOptions.remove(.monitorForExternalChanges)
+            }
 
             self.options = normalizedOptions
             self.path = normalizedOptions.contains(.inMemoryDatabase) ? nil : path
@@ -312,7 +319,21 @@ extension Blackbird {
                 throw Error.unsupportedConfigurationAtPath(path: path)
             }
 
-            core = Core(handle, changeReporter: changeReporter, options: options)
+            if options.contains(.monitorForExternalChanges), let sqliteFilenameRef = sqlite3_db_filename(handle, nil) {
+                fileChangeMonitor = FileChangeMonitor()
+                
+                if let cStr = sqlite3_filename_database(sqliteFilenameRef), let dbFilename = String(cString: cStr, encoding: .utf8), !dbFilename.isEmpty {
+                    fileChangeMonitor?.addFile(filePath: dbFilename)
+                }
+
+                if let cStr = sqlite3_filename_wal(sqliteFilenameRef), let walFilename = String(cString: cStr, encoding: .utf8), !walFilename.isEmpty {
+                    fileChangeMonitor?.addFile(filePath: walFilename)
+                }
+            } else {
+                fileChangeMonitor = nil
+            }
+
+            core = Core(handle, changeReporter: changeReporter, fileChangeMonitor: fileChangeMonitor, options: options)
             perfLog = performanceLog
             
             sqlite3_update_hook(handle, { ctx, operation, dbName, tableName, rowid in
@@ -322,6 +343,11 @@ extension Blackbird {
                     changeReporter.reportChange(tableName: tableNameStr)
                 }
             }, Unmanaged<ChangeReporter>.passUnretained(changeReporter).toOpaque())
+
+            fileChangeMonitor?.onChange { [weak self] in
+                guard let self else { return }
+                Task { await self.core.checkForExternalDatabaseChange() }
+            }
         }
         
         deinit {
@@ -368,25 +394,40 @@ extension Blackbird {
         
         /// An actor for protected concurrent access to a database.
         public actor Core: BlackbirdQueryable {
+            private struct PreparedStatement {
+                let handle: OpaquePointer
+                let isReadOnly: Bool
+            }
+        
             private var debugPrintEveryQuery = false
 
             internal var dbHandle: OpaquePointer
             private weak var changeReporter: ChangeReporter?
-            private var cachedStatements: [String: OpaquePointer] = [:]
+            private weak var fileChangeMonitor: FileChangeMonitor?
+            private var cachedStatements: [String: PreparedStatement] = [:]
             private var isClosed = false
             private var nextTransactionID: Int64 = 0
 
+            private var dataVersionStmt: OpaquePointer? = nil
+            private var previousDataVersion: Int64 = 0
+
             private var perfLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database.Core")
 
-            internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter, options: Database.Options) {
+            internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
                 self.dbHandle = dbHandle
                 self.changeReporter = changeReporter
+                self.fileChangeMonitor = fileChangeMonitor
                 self.debugPrintEveryQuery = options.contains(.debugPrintEveryQuery)
+                
+                if options.contains(.monitorForExternalChanges), SQLITE_OK == sqlite3_prepare_v3(dbHandle, "PRAGMA data_version", -1, UInt32(SQLITE_PREPARE_PERSISTENT), &dataVersionStmt, nil) {
+                    if SQLITE_ROW == sqlite3_step(dataVersionStmt) { previousDataVersion = sqlite3_column_int64(dataVersionStmt, 0) }
+                    sqlite3_reset(dataVersionStmt)
+                }
             }
 
             deinit {
                 if !isClosed {
-                    for (_, statement) in cachedStatements { sqlite3_finalize(statement) }
+                    for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle) }
                     sqlite3_close(dbHandle)
                     isClosed = true
                 }
@@ -396,7 +437,7 @@ extension Blackbird {
                 if isClosed { return }
                 let spState = perfLog.begin(signpost: .closeDatabase)
                 defer { perfLog.end(state: spState) }
-                for (_, statement) in cachedStatements { sqlite3_finalize(statement) }
+                for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle) }
                 sqlite3_close(dbHandle)
                 isClosed = true
             }
@@ -404,6 +445,20 @@ extension Blackbird {
             private var artificialQueryDelay: TimeInterval? = nil
             public func setArtificialQueryDelay(_ delay: TimeInterval?) {
                 artificialQueryDelay = delay
+            }
+                        
+            internal func checkForExternalDatabaseChange() {
+                guard let dataVersionStmt else { return }
+                if debugPrintEveryQuery { print("[Blackbird.Database] PRAGMA data_version") }
+                
+                var newVersion: Int64 = 0
+                if SQLITE_ROW == sqlite3_step(dataVersionStmt) { newVersion = sqlite3_column_int64(dataVersionStmt, 0) }
+                sqlite3_reset(dataVersionStmt)
+
+                if newVersion != previousDataVersion {
+                    previousDataVersion = newVersion
+                    changeReporter?.reportEntireDatabaseChange()
+                }
             }
 
             public func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Void) ) throws {
@@ -418,7 +473,12 @@ extension Blackbird {
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
                 changeReporter?.beginTransaction(transactionID)
-                defer { changeReporter?.endTransaction(transactionID) }
+                fileChangeMonitor?.beginExpectedChange(transactionID)
+                defer {
+                    changeReporter?.endTransaction(transactionID)
+                    fileChangeMonitor?.endExpectedChange(transactionID)
+                    checkForExternalDatabaseChange()
+                }
 
                 let spState = perfLog.begin(signpost: .cancellableTransaction, message: "Transaction ID: \(transactionID)")
                 defer { perfLog.end(state: spState) }
@@ -447,7 +507,12 @@ extension Blackbird {
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
                 changeReporter?.beginTransaction(transactionID)
-                defer { changeReporter?.endTransaction(transactionID) }
+                fileChangeMonitor?.beginExpectedChange(transactionID)
+                defer {
+                    changeReporter?.endTransaction(transactionID)
+                    fileChangeMonitor?.endExpectedChange(transactionID)
+                    checkForExternalDatabaseChange()
+                }
                 
                 let result = sqlite3_exec(dbHandle, query, nil, nil, nil)
                 if result != SQLITE_OK { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
@@ -475,10 +540,11 @@ extension Blackbird {
             public func query(_ query: String, arguments: [Sendable]) throws -> [Blackbird.Row] {
                 if isClosed { throw Error.databaseIsClosed }
                 let statement = try preparedStatement(query)
+                let statementHandle = statement.handle
                 var idx = 1 // SQLite bind-parameter indexes start at 1, not 0!
                 for any in arguments {
                     let value = try Value.fromAny(any)
-                    try value.bind(database: self, statement: statement, index: Int32(idx), for: query)
+                    try value.bind(database: self, statement: statementHandle, index: Int32(idx), for: query)
                     idx += 1
                 }
                 return try rowsByExecutingPreparedStatement(statement, from: query)
@@ -488,24 +554,28 @@ extension Blackbird {
             public func query(_ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row] {
                 if isClosed { throw Error.databaseIsClosed }
                 let statement = try preparedStatement(query)
+                let statementHandle = statement.handle
                 for (name, any) in arguments {
                     let value = try Value.fromAny(any)
-                    try value.bind(database: self, statement: statement, name: name, for: query)
+                    try value.bind(database: self, statement: statementHandle, name: name, for: query)
                 }
                 return try rowsByExecutingPreparedStatement(statement, from: query)
             }
 
-            private func preparedStatement(_ query: String) throws -> OpaquePointer {
+            private func preparedStatement(_ query: String) throws -> PreparedStatement {
                 if let cached = cachedStatements[query] { return cached }
-                var statement: OpaquePointer? = nil
-                let result = sqlite3_prepare_v3(dbHandle, query, -1, UInt32(SQLITE_PREPARE_PERSISTENT), &statement, nil)
-                guard result == SQLITE_OK, let statement else { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
+                var statementHandle: OpaquePointer? = nil
+                let result = sqlite3_prepare_v3(dbHandle, query, -1, UInt32(SQLITE_PREPARE_PERSISTENT), &statementHandle, nil)
+                guard result == SQLITE_OK, let statementHandle else { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
+                
+                let statement = PreparedStatement(handle: statementHandle, isReadOnly: sqlite3_stmt_readonly(statementHandle) > 0)
                 cachedStatements[query] = statement
                 return statement
             }
             
-            private func rowsByExecutingPreparedStatement(_ statement: OpaquePointer, from query: String) throws -> [Blackbird.Row] {
+            private func rowsByExecutingPreparedStatement(_ statement: PreparedStatement, from query: String) throws -> [Blackbird.Row] {
                 if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
+                let statementHandle = statement.handle
 
                 let spState = perfLog.begin(signpost: .rowsByPreparedFunc, message: query)
                 defer { perfLog.end(state: spState) }
@@ -515,15 +585,22 @@ extension Blackbird {
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
                 changeReporter?.beginTransaction(transactionID)
-                defer { changeReporter?.endTransaction(transactionID) }
+                if !statement.isReadOnly { fileChangeMonitor?.beginExpectedChange(transactionID) }
+                defer {
+                    changeReporter?.endTransaction(transactionID)
+                    if !statement.isReadOnly {
+                        fileChangeMonitor?.endExpectedChange(transactionID)
+                        checkForExternalDatabaseChange()
+                    }
+                }
 
-                var result = sqlite3_step(statement)
+                var result = sqlite3_step(statementHandle)
                 
                 guard result == SQLITE_ROW || result == SQLITE_DONE else { throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle)) }
 
-                let columnCount = sqlite3_column_count(statement)
+                let columnCount = sqlite3_column_count(statementHandle)
                 if columnCount == 0 {
-                    guard sqlite3_reset(statement) == SQLITE_OK, sqlite3_clear_bindings(statement) == SQLITE_OK else {
+                    guard sqlite3_reset(statementHandle) == SQLITE_OK, sqlite3_clear_bindings(statementHandle) == SQLITE_OK else {
                         throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
                     }
                     return []
@@ -531,7 +608,7 @@ extension Blackbird {
                 
                 var columnNames: [String] = []
                 for i in 0 ..< columnCount {
-                    guard let charPtr = sqlite3_column_name(statement, i), case let name = String(cString: charPtr) else {
+                    guard let charPtr = sqlite3_column_name(statementHandle, i), case let name = String(cString: charPtr) else {
                         throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
                     }
                     columnNames.append(name)
@@ -541,19 +618,19 @@ extension Blackbird {
                 while result == SQLITE_ROW {
                     var row: Blackbird.Row = [:]
                     for i in 0 ..< Int(columnCount) {
-                        switch sqlite3_column_type(statement, Int32(i)) {
+                        switch sqlite3_column_type(statementHandle, Int32(i)) {
                             case SQLITE_NULL:    row[columnNames[i]] = .null
-                            case SQLITE_INTEGER: row[columnNames[i]] = .integer(sqlite3_column_int64(statement, Int32(i)))
-                            case SQLITE_FLOAT:   row[columnNames[i]] = .double(sqlite3_column_double(statement, Int32(i)))
+                            case SQLITE_INTEGER: row[columnNames[i]] = .integer(sqlite3_column_int64(statementHandle, Int32(i)))
+                            case SQLITE_FLOAT:   row[columnNames[i]] = .double(sqlite3_column_double(statementHandle, Int32(i)))
 
                             case SQLITE_TEXT:
-                                guard let charPtr = sqlite3_column_text(statement, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
+                                guard let charPtr = sqlite3_column_text(statementHandle, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
                                 row[columnNames[i]] = .text(String(cString: charPtr))
             
                             case SQLITE_BLOB:
-                                let byteLength = sqlite3_column_bytes(statement, Int32(i))
+                                let byteLength = sqlite3_column_bytes(statementHandle, Int32(i))
                                 if byteLength > 0 {
-                                    guard let bytes = sqlite3_column_blob(statement, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
+                                    guard let bytes = sqlite3_column_blob(statementHandle, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
                                     row[columnNames[i]] = .data(Data(bytes: bytes, count: Int(byteLength)))
                                 } else {
                                     row[columnNames[i]] = .data(Data())
@@ -564,11 +641,11 @@ extension Blackbird {
                     }
                     rows.append(row)
 
-                    result = sqlite3_step(statement)
+                    result = sqlite3_step(statementHandle)
                 }
                 if result != SQLITE_DONE { throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle)) }
                 
-                guard sqlite3_reset(statement) == SQLITE_OK, sqlite3_clear_bindings(statement) == SQLITE_OK else {
+                guard sqlite3_reset(statementHandle) == SQLITE_OK, sqlite3_clear_bindings(statementHandle) == SQLITE_OK else {
                     throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
                 }
                 return rows

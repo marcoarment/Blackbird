@@ -16,12 +16,12 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A92E4F222951FBE700954C3F /* Blackbird */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Blackbird; path = ../..; sourceTree = "<group>"; };
 		A9E94F83293E2A8E00A89AC3 /* BlackbirdSwiftUITest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlackbirdSwiftUITest.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A9E94F86293E2A8E00A89AC3 /* BlackbirdSwiftUITestApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackbirdSwiftUITestApp.swift; sourceTree = "<group>"; };
 		A9E94F88293E2A8E00A89AC3 /* ContentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViews.swift; sourceTree = "<group>"; };
 		A9E94F8A293E2A8F00A89AC3 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A9E94F8D293E2A8F00A89AC3 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		A9E94F95293E2ABF00A89AC3 /* Blackbird */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Blackbird; path = ../..; sourceTree = "<group>"; };
 		A9EE2E2A293E2C5600BCEBCE /* BlackbirdTestData.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = BlackbirdTestData.swift; path = ../../BlackbirdTests/BlackbirdTestData.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -78,7 +78,7 @@
 		A9E94F94293E2ABF00A89AC3 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				A9E94F95293E2ABF00A89AC3 /* Blackbird */,
+				A92E4F222951FBE700954C3F /* Blackbird */,
 			);
 			name = Packages;
 			sourceTree = "<group>";

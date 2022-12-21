@@ -150,6 +150,19 @@ extension Blackbird.Database {
             }
             lock.unlock()
         }
+        
+        public func reportEntireDatabaseChange() {
+            if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] ⚠️ database changed externally, reporting changes to all tables!") }
+
+            lock.lock()
+            for tableName in tableChangePublishers.keys { accumulatedChangesForEntireTables.insert(tableName) }
+            
+            if !flushIsEnqueued, activeTransactions.isEmpty {
+                flushIsEnqueued = true
+                DispatchQueue.main.async { [weak self] in self?.flush() }
+            }
+            lock.unlock()
+        }
 
         public func reportChange(tableName: String, primaryKey: [Blackbird.Value]? = nil) {
             lock.lock()

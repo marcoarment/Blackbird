@@ -269,5 +269,66 @@ extension Blackbird {
             return lock.withLock { return body(&_value) }
         }
     }
-}
 
+    public final class FileChangeMonitor: @unchecked Sendable /* unchecked due to use of internal locking */ {
+        private var sources: [DispatchSourceFileSystemObject] = []
+
+        private var changeHandler: (() -> Void)?
+        private var isClosed = false
+        private var currentExpectedChanges = Set<Int64>()
+        
+        private let lock = Lock()
+
+        public func addFile(filePath: String) {
+            let fsPath = (filePath as NSString).fileSystemRepresentation
+            let fd = open(fsPath, O_EVTONLY)
+            guard fd >= 0 else { return }
+            
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename, .revoke], queue: nil)
+            source.setCancelHandler { Darwin.close(fd) }
+            
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                if self.currentExpectedChanges.isEmpty, !self.isClosed, let handler = self.changeHandler { handler() }
+                self.lock.unlock()
+            }
+
+            source.activate()
+            
+            self.lock.lock()
+            self.sources.append(source)
+            self.lock.unlock()
+        }
+        
+        deinit {
+            cancel()
+        }
+        
+        public func onChange(_ handler: @escaping (() -> Void)) {
+            self.lock.lock()
+            self.changeHandler = handler
+            self.lock.unlock()
+        }
+        
+        public func cancel() {
+            self.lock.lock()
+            self.isClosed = true
+            for source in sources { source.cancel() }
+            self.lock.unlock()
+            
+        }
+        
+        public func beginExpectedChange(_ changeID: Int64) {
+            self.lock.lock()
+            self.currentExpectedChanges.insert(changeID)
+            self.lock.unlock()
+        }
+        
+        public func endExpectedChange(_ changeID: Int64) {
+            self.lock.lock()
+            self.currentExpectedChanges.remove(changeID)
+            self.lock.unlock()
+        }
+    }
+}
