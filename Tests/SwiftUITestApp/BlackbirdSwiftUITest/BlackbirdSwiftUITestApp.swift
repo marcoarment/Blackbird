@@ -93,6 +93,9 @@ struct BlackbirdSwiftUITestApp: App {
                         try firstPost.writeIsolated(to: database, core: core)
                         for _ in 0..<5 { try! Post(id: TestData.randomInt64(), title: TestData.randomTitle).writeIsolated(to: database, core: core) }
                     }
+                    
+                    // For testing "loading" states:
+//                     await database.setArtificialQueryDelay(1.0)
                 }
             }
         }

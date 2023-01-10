@@ -39,6 +39,26 @@ extension EnvironmentValues {
     }
 }
 
+extension Blackbird {
+    /// The results wrapper for @BlackbirdLiveQuery and @BlackbirdLiveModels.
+    public struct LiveResults<T: Sendable>: Sendable, Equatable where T: Equatable {
+        public static func == (lhs: Blackbird.LiveResults<T>, rhs: Blackbird.LiveResults<T>) -> Bool { lhs.didLoad == rhs.didLoad && lhs.results == rhs.results }
+        
+        /// The latest results fetched.
+        public var results: [T] = []
+        
+        /// Whether this result set has **ever** completed loading.
+        ///
+        /// When used by ``BlackbirdLiveModels`` or ``BlackbirdLiveQuery``, this will only be set to `false` during their initial load.
+        /// It will **not** be set to `false` during subsequent updates triggered by changes to the underlying database.
+        public var didLoad = false
+        
+        public init(results: [T] = [], didLoad: Bool = false) {
+            self.results = results
+            self.didLoad = didLoad
+        }
+    }
+}
 
 // MARK: - Fetch property wrappers
 
@@ -48,21 +68,23 @@ extension EnvironmentValues {
 ///
 /// The generator is passed the current database as its sole argument (`$0`).
 ///
-/// Example:
+/// ## Example
 ///
 /// ```swift
 /// @BlackbirdLiveQuery(tableName: "Post", {
 ///     try await $0.query("SELECT COUNT(*) AS c FROM Post")
-/// }) var countResults
-///
-/// // countResults.first["c"] will be the resulting Blackbird.Value
+/// }) var count
 /// ```
+///
+/// `count` is a ``Blackbird/LiveResults`` object:
+/// * `count.results.first["c"]` will be the resulting ``Blackbird/Value``
+/// * `count.didLoad` will be `false` during the initial load (useful for displaying a loading state in the UI)
+///
 @propertyWrapper public struct BlackbirdLiveQuery: DynamicProperty {
-    @State private var results: [Blackbird.Row] = []
-    @State private var didLoad = false
+    @State private var results = Blackbird.LiveResults<Blackbird.Row>()
     @Environment(\.blackbirdDatabase) var environmentDatabase
 
-    public var wrappedValue: [Blackbird.Row] {
+    public var wrappedValue: Blackbird.LiveResults<Blackbird.Row> {
         get { results }
         set { }
     }
@@ -78,7 +100,7 @@ extension EnvironmentValues {
     }
 
     public func update() {
-        queryUpdater.bind(from: environmentDatabase, tableName: tableName, to: $results, didLoad: $didLoad, generator: generator)
+        queryUpdater.bind(from: environmentDatabase, tableName: tableName, to: $results, generator: generator)
     }
 }
 
@@ -88,21 +110,24 @@ extension EnvironmentValues {
 ///
 /// The generator is passed the current database as its sole argument (`$0`).
 ///
-/// Example:
+/// ## Example
 ///
 /// ```swift
 /// @BlackbirdLiveModels({
 ///     try await Post.read(from: $0, where: "id > 3 ORDER BY date")
 /// }) var posts
-///
-/// // posts will be an array of Post models matching the query
 /// ```
+///
+/// `posts` is a ``Blackbird/LiveResults`` object:
+/// * `posts.results` will be an array of Post models matching the query
+/// * `posts.didLoad` will be `false` during the initial load (useful for displaying a loading state in the UI)
+///
 @propertyWrapper public struct BlackbirdLiveModels<T: BlackbirdModel>: DynamicProperty {
-    @State private var results: [T] = []
+    @State private var result = Blackbird.LiveResults<T>()
     @Environment(\.blackbirdDatabase) var environmentDatabase
     
-    public var wrappedValue: [T] {
-        get { results }
+    public var wrappedValue: Blackbird.LiveResults<T> {
+        get { result }
         set { }
     }
     
@@ -114,7 +139,7 @@ extension EnvironmentValues {
     }
 
     public func update() {
-        queryUpdater.bind(from: environmentDatabase, to: $results, generator: generator)
+        queryUpdater.bind(from: environmentDatabase, to: $result, generator: generator)
     }
 }
 
@@ -149,10 +174,13 @@ extension EnvironmentValues {
         set { }
     }
     
-    private let queryUpdater = Blackbird.ModelUpdater<T>()
+    private let queryUpdater: Blackbird.ModelUpdater<T>
     private var generator: Blackbird.CachedResultGenerator<T?>?
 
     public init(_ instance: T) {
+        _instance = State(initialValue: instance)
+        queryUpdater = Blackbird.ModelUpdater<T>(initialValue: instance)
+
         do {
             let encoder = BlackbirdSQLiteEncoder()
             try instance.encode(to: encoder)
@@ -162,8 +190,6 @@ extension EnvironmentValues {
         } catch {
             print("[Blackbird.BlackbirdLiveModel<\(String(describing: T.self))>] ⚠️ Error getting primary key values: \(error.localizedDescription)")
         }
-
-        _instance = State(initialValue: instance)
     }
 
     public func update() {
@@ -173,37 +199,34 @@ extension EnvironmentValues {
 
 extension BlackbirdModel {
     public var liveModel: BlackbirdLiveModel<Self> { get { BlackbirdLiveModel(self) } }
+    public typealias LiveResults = Blackbird.LiveResults<Self>
 }
 
 // MARK: - Multi-row query updaters
 
 extension Blackbird {
     public final class QueryUpdater {
-        @Binding public var results: [Blackbird.Row]
-        @Binding public var didLoad: Bool
+        @Binding public var results: Blackbird.LiveResults<Blackbird.Row>
 
         private var resultPublisher = CachedResultPublisher<[Blackbird.Row]>()
         private var changePublishers: [AnyCancellable] = []
 
         public init() {
-            _results = Binding<[Blackbird.Row]>(get: { [] }, set: { _ in })
-            _didLoad = Binding<Bool>(get: { false }, set: { _ in })
+            _results = Binding<Blackbird.LiveResults<Blackbird.Row>>(get: { Blackbird.LiveResults<Blackbird.Row>() }, set: { _ in })
         }
         
-        public func bind(from database: Blackbird.Database?, tableName: String, to results: Binding<[Blackbird.Row]>, didLoad: Binding<Bool>? = nil, generator: CachedResultGenerator<[Blackbird.Row]>?) {
+        public func bind(from database: Blackbird.Database?, tableName: String, to results: Binding<Blackbird.LiveResults<Blackbird.Row>>, generator: CachedResultGenerator<[Blackbird.Row]>?) {
             changePublishers.removeAll()
             resultPublisher.subscribe(to: tableName, in: database, generator: generator)
             _results = results
-            if let didLoad { _didLoad = didLoad }
             
             changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
                 guard let self else { return }
                 DispatchQueue.main.async { // kicking this to the next runloop to prevent state updates from happening while building the view
                     if let value {
-                        self.results = value
-                        self.didLoad = true
+                        self.results = Blackbird.LiveResults<Blackbird.Row>(results: value, didLoad: true)
                     } else {
-                        self.results = []
+                        self.results = Blackbird.LiveResults<Blackbird.Row>(results: [], didLoad: false)
                     }
                 }
             })
@@ -211,31 +234,28 @@ extension Blackbird {
     }
 
     public final class ModelArrayUpdater<T: BlackbirdModel> {
-        @Binding public var results: [T]
-        @Binding public var didLoad: Bool
+        @Binding public var results: Blackbird.LiveResults<T>
 
-        private var resultPublisher = CachedResultPublisher<[T]>()
+        private var resultPublisher: CachedResultPublisher<[T]>
         private var changePublishers: [AnyCancellable] = []
 
-        public init() {
-            _results = Binding<[T]>(get: { [] }, set: { _ in })
-            _didLoad = Binding<Bool>(get: { false }, set: { _ in })
+        public init(initialValue: [T]? = nil) {
+            _results = Binding<Blackbird.LiveResults<T>>(get: { Blackbird.LiveResults<T>(results: initialValue ?? [], didLoad: initialValue != nil) }, set: { _ in })
+            resultPublisher = CachedResultPublisher<[T]>(initialValue: initialValue)
         }
         
-        public func bind(from database: Blackbird.Database?, to results: Binding<[T]>, didLoad: Binding<Bool>? = nil, generator: CachedResultGenerator<[T]>?) {
+        public func bind(from database: Blackbird.Database?, to results: Binding<Blackbird.LiveResults<T>>, generator: CachedResultGenerator<[T]>?) {
             changePublishers.removeAll()
             resultPublisher.subscribe(to: T.table.name(type: T.self), in: database, generator: generator)
             _results = results
-            if let didLoad { _didLoad = didLoad }
             
             changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
                 guard let self else { return }
                 DispatchQueue.main.async {
                     if let value {
-                        self.results = value
-                        self.didLoad = true
+                        self.results = Blackbird.LiveResults<T>(results: value, didLoad: true)
                     } else {
-                        self.results = []
+                        self.results = Blackbird.LiveResults<T>(results: [], didLoad: false)
                     }
                 }
             })
@@ -244,31 +264,23 @@ extension Blackbird {
 
     public class ModelUpdater<T: BlackbirdModel> {
         @Binding public var instance: T?
-        @Binding public var didLoad: Bool
 
-        private var resultPublisher = CachedResultPublisher<T?>()
+        private var resultPublisher: CachedResultPublisher<T?>
         private var changePublishers: [AnyCancellable] = []
 
-        public init() {
-            _instance = Binding<T?>(get: { nil }, set: { _ in })
-            _didLoad = Binding<Bool>(get: { false }, set: { _ in })
+        public init(initialValue: T? = nil) {
+            _instance = Binding<T?>(get: { initialValue }, set: { _ in })
+            resultPublisher = CachedResultPublisher<T?>(initialValue: initialValue)
         }
         
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, generator: CachedResultGenerator<T?>?) {
+        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, generator: CachedResultGenerator<T?>?) {
             changePublishers.removeAll()
             resultPublisher.subscribe(to: T.table.name(type: T.self), in: database, generator: generator)
             _instance = instance
-            if let didLoad { _didLoad = didLoad }
-            
             changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
                 guard let self else { return }
                 DispatchQueue.main.async {
-                    if let value {
-                        self.instance = value
-                        self.didLoad = true
-                    } else {
-                        self.instance = nil
-                    }
+                    self.instance = value ?? nil
                 }
             })
         }

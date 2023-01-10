@@ -237,7 +237,7 @@ extension Blackbird {
     public typealias CachedResultGenerator<T: Sendable> = (@Sendable (_ db: Blackbird.Database) async throws -> T)
 
     public final class CachedResultPublisher<T: Sendable>: Sendable {
-        public let valuePublisher = CurrentValueSubject<T?, Never>(nil)
+        public let valuePublisher: CurrentValueSubject<T?, Never>
 
         private struct State: Sendable {
             fileprivate var cachedResults: T? = nil
@@ -248,6 +248,10 @@ extension Blackbird {
         }
         
         private let config = Locked(State())
+        
+        public init(initialValue: T? = nil) {
+            valuePublisher = CurrentValueSubject<T?, Never>(initialValue)
+        }
 
         public func subscribe(to tableName: String, in database: Blackbird.Database?, generator: CachedResultGenerator<T>?) {
             config.withLock {
