@@ -401,9 +401,18 @@ extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrapp
 
 // Keeping this one @unchecked-Sendable for now to see if locking around .value is really necessary in practice.
 // I know this is wrong and I apologize to the world as necessary.
-@propertyWrapper public final class BlackbirdColumn<T>: ColumnWrapper, WrappedType, @unchecked Sendable, Codable where T: BlackbirdColumnWrappable {
+@propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, @unchecked Sendable, Codable where T: BlackbirdColumnWrappable {
+    internal final class StringClassWrapper: @unchecked Sendable {
+        var value: String? = nil
+    }
+    
+    internal var _internalNameInSchemaGenerator = StringClassWrapper()
+    var internalNameInSchemaGenerator: String? {
+        get { _internalNameInSchemaGenerator.value }
+        set { _internalNameInSchemaGenerator.value = newValue }
+    }
+
     internal var value: T
-    internal var internalNameInSchemaGenerator: String?
 
     public var projectedValue: BlackbirdColumn<T> { self }
     static func schemaGeneratorWrappedType() -> Any.Type { T.self }
