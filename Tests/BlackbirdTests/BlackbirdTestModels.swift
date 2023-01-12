@@ -28,7 +28,7 @@ import Foundation
 @testable import Blackbird
 
 struct TestModel: BlackbirdModel {
-    static var indexes: [[ColumnKeyPath]] = [
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ]
     ]
 
@@ -40,14 +40,14 @@ struct TestModel: BlackbirdModel {
 }
 
 struct TestModelWithoutIDColumn: BlackbirdModel {
-    static var primaryKeyPaths: [ColumnKeyPath] = [ \.$pk ]
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
 
     @BlackbirdColumn var pk: Int
     @BlackbirdColumn var title: String
 }
 
 struct TestModelWithDescription: BlackbirdModel {
-    static var indexes: [[ColumnKeyPath]] = [
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ],
         [ \.$url ]
     ]
@@ -75,7 +75,7 @@ struct TypeTest: BlackbirdModel {
 }
 
 struct MulticolumnPrimaryKeyTest: BlackbirdModel {
-    static var primaryKeyPaths: [ColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
@@ -86,7 +86,7 @@ struct MulticolumnPrimaryKeyTest: BlackbirdModel {
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
     static var tableName = "SchemaChangeAddPrimaryKeyColumn"
-    static var primaryKeyPaths: [ColumnKeyPath] = [ \.$userID, \.$feedID ]
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID ]
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
@@ -95,7 +95,7 @@ struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
 
 struct SchemaChangeAddPrimaryKeyColumnChanged: BlackbirdModel {
     static var tableName = "SchemaChangeAddPrimaryKeyColumn"
-    static var primaryKeyPaths: [ColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
@@ -128,7 +128,7 @@ struct SchemaChangeAddColumnsChanged: BlackbirdModel {
 
 struct SchemaChangeRebuildTableInitial: BlackbirdModel {
     static var tableName = "SchemaChangeRebuild"
-    static var primaryKeyPaths: [ColumnKeyPath] = [ \.$id, \.$title ]
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
@@ -155,7 +155,7 @@ struct SchemaChangeAddIndexInitial: BlackbirdModel {
 
 struct SchemaChangeAddIndexChanged: BlackbirdModel {
     static var tableName = "SchemaChangeAddIndex"
-    static var indexes: [[ColumnKeyPath]] = [
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ]
     ]
 

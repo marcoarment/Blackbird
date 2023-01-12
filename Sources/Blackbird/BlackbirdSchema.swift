@@ -30,40 +30,10 @@ import Foundation
 
 extension Blackbird {
 
-    /// The SQLite data type for a ``Column`` in a ``Table``.
-    ///
-    /// See  [SQLite data types](https://www.sqlite.org/datatype3.html) for implementation and storage details.
-    ///
-    /// These default values are used for non-`NULL` columns:
-    ///
-    /// Type | Default Value
-    /// ---------|-------
-    /// `.integer` | `0`
-    /// `.double` | `0.0`
-    /// `.text` |  Empty string (`""`)
-    /// `.data` |  Empty data
-    ///
-    /// Custom default values for columns are not supported by Blackbird.
-    public enum ColumnType: Sendable {
-
-        /// Stored as a **signed** integer up to 64-bit.
-        ///
-        /// **Default value:** `0`
+    internal enum ColumnType: Sendable {
         case integer
-        
-        /// Stored as a 64-bit floating-point number.
-        ///
-        /// **Default value:** `0.0`
         case double
-        
-        /// Stored as a UTF-8 string.
-        ///
-        /// **Default value:** empty string (`""`)
         case text
-        
-        /// Stored as an unmodified binary blob.
-        ///
-        /// **Default value:** empty data
         case data
         
         internal static func parseType(_ str: String) -> ColumnType? {
@@ -93,8 +63,7 @@ extension Blackbird {
         }
     }
 
-    /// A column in a ``Table``.
-    public struct Column: Equatable, Hashable, Sendable {
+    internal struct Column: Equatable, Hashable, Sendable {
         enum Error: Swift.Error {
             case cannotParseColumnDefinition(table: String, description: String)
         }
@@ -116,13 +85,7 @@ extension Blackbird {
         internal func definition() -> String {
             "`\(name)` \(type.definition()) \(mayBeNull ? "NULL" : "NOT NULL") DEFAULT \((mayBeNull ? .null : type.defaultValue()).sqliteLiteral())"
         }
-        
-        
-        /// Defines a single column in a ``Blackbird/Table``.
-        /// - Parameters:
-        ///   - name: The column name. Must not be empty.
-        ///   - type: A ``Blackbird/ColumnType``.
-        ///   - mayBeNull: Whether this column may be `NULL` in the database and `nil` in the model, which requires the corresponding model property to be an optional type.
+                
         public init(name: String, type: ColumnType, mayBeNull: Bool = false) {
             self.name = name
             self.type = type
@@ -146,8 +109,7 @@ extension Blackbird {
         }
     }
     
-    /// An index in a ``Table``.
-    public struct Index: Equatable, Hashable, Sendable {
+    internal struct Index: Equatable, Hashable, Sendable {
         public enum Error: Swift.Error {
             case cannotParseIndexDefinition(definition: String, description: String)
         }
@@ -170,10 +132,6 @@ extension Blackbird {
             return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
         }
         
-        /// Defines a single [SQLite index](https://www.sqlite.org/lang_createindex.html) in a ``Blackbird/Table``.
-        /// - Parameters:
-        ///   - columnNames: An array of strings of the column names to index, in order.
-        ///   - unique: Whether this index requires values to be unique. `NULL` values are exempt from the uniqueness requirement.
         public init(columnNames: [String], unique: Bool = false) {
             guard !columnNames.isEmpty else { fatalError("No columns specified") }
             self.columnNames = columnNames
@@ -207,8 +165,7 @@ extension Blackbird {
         }
     }
 
-    /// The schema for a SQLite table in a ``Database``.
-    public struct Table: Hashable, Sendable {
+    internal struct Table: Hashable, Sendable {
         enum Error: Swift.Error {
             case invalidTableDefinition(table: String, description: String)
         }
@@ -229,17 +186,7 @@ extension Blackbird {
         private static let resolvedTablesWithDatabases = Locked([Table: Set<Database.InstanceID>]())
         private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID : Set<String>]())
         
-        /// Defines the schema of an SQLite table in a ``Blackbird/Database`` for a type conforming to ``BlackbirdModel``.
-        /// - Parameters:
-        ///   - name: A custom name for the table.
-        ///
-        ///       **Default:** The ``BlackbirdModel``-conforming type's name.
-        ///   - columns: An array of ``Blackbird/Column`` definitions. Must not be empty.
-        ///   - primaryKeyColumnNames: An array of column names to define the primary key.
-        ///
-        ///       **Default:** `["id"]`
-        ///   - indexes: An array of ``Blackbird/Index`` definitions for any additional indexed columns. The primary key is implicitly indexed and should not be included here.
-        public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = []) {
+        public init(name: String = "bogus", columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = []) {
             if columns.isEmpty { fatalError("No columns specified") }
             
             self.name = name
@@ -371,14 +318,13 @@ extension Blackbird {
     }
 }
 
-// MARK: - New schema
-
 internal protocol ColumnWrapper {
     associatedtype ValueType: Codable & Hashable & Sendable
     var value: ValueType { get }
     var internalNameInSchemaGenerator: String? { get set }
 }
 
+/// A wrapped data type supported by ``BlackbirdColumn``.
 public protocol BlackbirdColumnWrappable: Hashable, Codable, Sendable { }
 
 // UInt, UInt64 intentionally omitted since SQLite integers max out at 64-bit signed
@@ -506,8 +452,6 @@ internal final class SchemaGenerator: Sendable {
                 }
                 
                 columns.append(Blackbird.Column(name: label, type: columnType, mayBeNull: isOptional))
-                
-//                print("    \(label)\t\(String(describing: columnType).uppercased()) \(isOptional ? "NULL" : "NOT NULL")")
             }
         }
         
@@ -520,7 +464,7 @@ internal final class SchemaGenerator: Sendable {
             return name
         }
                 
-        var primaryKeyNames = T.primaryKeyPaths.map { keyPathToColumnName($0, "primary key") }
+        var primaryKeyNames = T.primaryKey.map { keyPathToColumnName($0, "primary key") }
         if primaryKeyNames.count == 0 {
             if hasColumNamedID { primaryKeyNames = ["id"] }
             else { fatalError("\(String(describing: T.self)): Must specify a primary key or have a property named \"id\" to automatically use as primary key") }
@@ -530,9 +474,6 @@ internal final class SchemaGenerator: Sendable {
         indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "unique index") }, unique: true) })
 
         return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes)
-        
-//        print("\nprimary keys: \(primaryKeyNames.joined(separator: ", "))")
-//        print("indexes: \(indexColumnNames)")
     }
 }
 

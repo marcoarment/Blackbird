@@ -37,20 +37,47 @@ extension PartialKeyPath: @unchecked Sendable { }
 /// **Example:** A simple model:
 /// ```swift
 /// struct Post: BlackbirdModel {
-///     static var table = Blackbird.Table(
-///         columns: [
-///             Blackbird.Column(name: "id",    type: .integer),
-///             Blackbird.Column(name: "title", type: .text),
-///             Blackbird.Column(name: "url",   type: .text, mayBeNull: true),
-///         ]
-///     )
-///
-///     let id: Int
-///     var title: String
-///     var url: URL?     // optional since mayBeNull == true
+///     @BlackbirdColumn var id: Int
+///     @BlackbirdColumn var title: String
+///     @BlackbirdColumn var url: URL?
 /// }
 /// ```
 /// > If the primary key is not specified, it is assumed to be a column named `"id"`.
+///
+/// **Example:** A model with a custom primary-key column:
+/// ```swift
+/// struct CustomPrimaryKeyModel: BlackbirdModel {
+///     static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
+///
+///     @BlackbirdColumn var pk: Int
+///     @BlackbirdColumn var title: String
+/// }
+/// ```
+///
+/// **Example:** A model with indexes and a multicolumn primary key:
+/// ```swift
+/// struct Post: BlackbirdModel {
+///     @BlackbirdColumn var id: Int
+///     @BlackbirdColumn var title: String
+///     @BlackbirdColumn var date: Date
+///     @BlackbirdColumn var isPublished: Bool
+///     @BlackbirdColumn var url: URL?
+///     @BlackbirdColumn var productID: Int
+///
+///     static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
+///
+///     static var indexes: [[BlackbirdColumnKeyPath]] = [
+///         [ \.$title ],
+///         [ \.$isPublished, \.$date ]
+///     ]
+///
+///     static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+///         [ \.$productID ]
+///     ]
+/// }
+/// ```
+///
+/// ### Schema migrations
 ///
 /// If a table with the same name already exists in a database, a schema migration will be attempted for the following operations:
 /// * Adding or dropping columns
@@ -113,13 +140,29 @@ extension PartialKeyPath: @unchecked Sendable { }
 /// and their use may cause some features not to behave as expected.
 ///
 public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
-    typealias ColumnKeyPath = PartialKeyPath<Self>
+    typealias BlackbirdColumnKeyPath = PartialKeyPath<Self>
     
+    /// The table name to use in the database. By default, the type's name is used.
     static var tableName: String { get }
-    static var primaryKeyPaths: [ColumnKeyPath] { get }
-    static var indexes: [[ColumnKeyPath]] { get }
-    static var uniqueIndexes: [[ColumnKeyPath]] { get }
-
+    
+    /// The column or columns to use as the primary key in the database table.
+    ///
+    /// If unspecified, the primary key is assumed to be a single column named `id`, and if no such column exists, an error is thrown.
+    static var primaryKey: [BlackbirdColumnKeyPath] { get }
+    
+    /// An array of arrays, each specifying an index to create on the database table.
+    ///
+    /// The primary key is always implicitly indexed. Do not specify it as a separate index.
+    ///
+    /// If unspecified, no additional indexes are created.
+    static var indexes: [[BlackbirdColumnKeyPath]] { get }
+    
+    /// An array of arrays, each specifying an index to create on the database table in which each row must have a unique value or `NULL`.
+    ///
+    /// The primary key is always implicitly uniquely indexed. Do not specify it as a separate index.
+    ///
+    /// If unspecified, no additional unique indexes are created.
+    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { get }
 
     /// Performs setup and any necessary schema migrations.
     ///
@@ -331,14 +374,14 @@ internal extension BlackbirdModel {
 
 extension BlackbirdModel {
     public static var tableName: String { String(describing: Self.self) }
-    public static var primaryKeyPaths: [ColumnKeyPath] { [] }
-    public static var indexes: [[ColumnKeyPath]] { [] }
-    public static var uniqueIndexes: [[ColumnKeyPath]] { [] }
+    public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
+    public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
+    public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
         
     // Identifiable
     public var id: [AnyHashable] {
-        Self.primaryKeyPaths.map {
-            guard let wrapper = self[keyPath: $0] as? any ColumnWrapper else { fatalError("Cannot access @BlackbirdColumn wrapper from primaryKeyPaths") }
+        Self.primaryKey.map {
+            guard let wrapper = self[keyPath: $0] as? any ColumnWrapper else { fatalError("Cannot access @BlackbirdColumn wrapper from primaryKey") }
             return AnyHashable(wrapper.value)
         }
     }
