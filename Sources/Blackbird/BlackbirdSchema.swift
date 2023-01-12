@@ -401,7 +401,9 @@ extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrapp
 
 // Keeping this one @unchecked-Sendable for now to see if locking around .value is really necessary in practice.
 // I know this is wrong and I apologize to the world as necessary.
-@propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, @unchecked Sendable, Codable where T: BlackbirdColumnWrappable {
+@propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, @unchecked Sendable, Codable where T: BlackbirdColumnWrappable {
+    public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
+
     internal final class StringClassWrapper: @unchecked Sendable {
         var value: String? = nil
     }
