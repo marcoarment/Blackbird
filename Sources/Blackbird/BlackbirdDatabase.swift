@@ -208,22 +208,25 @@ extension Blackbird {
             public let rawValue: Int
             public init(rawValue: Int) { self.rawValue = rawValue }
 
-            internal static let inMemoryDatabase            = Options(rawValue: 1 << 0)
+            internal static let inMemoryDatabase             = Options(rawValue: 1 << 0)
 
             /// Sets the database to read-only. Any calls to ``BlackbirdModel`` write functions with a read-only database will terminate with a fatal error.
-            public static let readOnly                      = Options(rawValue: 1 << 1)
+            public static let readOnly                       = Options(rawValue: 1 << 1)
             
             /// Logs every query with `print()`. Useful for debugging.
-            public static let debugPrintEveryQuery          = Options(rawValue: 1 << 2)
-            
+            public static let debugPrintEveryQuery           = Options(rawValue: 1 << 2)
+
+            /// When using ``debugPrintEveryQuery``, parameterized query values will be included in the logged query strings instead of their placeholders. Useful for debugging.
+            public static let debugPrintQueryParameterValues = Options(rawValue: 1 << 3)
+
             /// Logs every change reported by ``Blackbird/ChangePublisher`` instances for this database with `print()`. Useful for debugging.
-            public static let debugPrintEveryReportedChange = Options(rawValue: 1 << 3)
+            public static let debugPrintEveryReportedChange  = Options(rawValue: 1 << 4)
             
             /// Sends ``Blackbird/legacyChangeNotification`` notifications using `NotificationCenter`.
-            public static let sendLegacyChangeNotifications = Options(rawValue: 1 << 4)
+            public static let sendLegacyChangeNotifications  = Options(rawValue: 1 << 5)
 
             /// Monitor for changes to the database file from outside of this connection, such as from a different process or a different SQLite library within the same process.
-            public static let monitorForExternalChanges     = Options(rawValue: 1 << 8)
+            public static let monitorForExternalChanges      = Options(rawValue: 1 << 6)
         }
         
         internal final class InstancePool: Sendable {
@@ -400,6 +403,7 @@ extension Blackbird {
             }
         
             private var debugPrintEveryQuery = false
+            private var debugPrintQueryParameterValues = false
 
             internal var dbHandle: OpaquePointer
             private weak var changeReporter: ChangeReporter?
@@ -418,6 +422,7 @@ extension Blackbird {
                 self.changeReporter = changeReporter
                 self.fileChangeMonitor = fileChangeMonitor
                 self.debugPrintEveryQuery = options.contains(.debugPrintEveryQuery)
+                self.debugPrintQueryParameterValues = options.contains(.debugPrintQueryParameterValues)
                 
                 if options.contains(.monitorForExternalChanges), SQLITE_OK == sqlite3_prepare_v3(dbHandle, "PRAGMA data_version", -1, UInt32(SQLITE_PREPARE_PERSISTENT), &dataVersionStmt, nil) {
                     if SQLITE_ROW == sqlite3_step(dataVersionStmt) { previousDataVersion = sqlite3_column_int64(dataVersionStmt, 0) }
@@ -574,7 +579,13 @@ extension Blackbird {
             }
             
             private func rowsByExecutingPreparedStatement(_ statement: PreparedStatement, from query: String) throws -> [Blackbird.Row] {
-                if debugPrintEveryQuery { print("[Blackbird.Database] \(query)") }
+                if debugPrintEveryQuery {
+                    if debugPrintQueryParameterValues, let cStr = sqlite3_expanded_sql(statement.handle), let expandedQuery = String(cString: cStr, encoding: .utf8) {
+                        print("[Blackbird.Database] \(expandedQuery)")
+                    } else {
+                        print("[Blackbird.Database] \(query)")
+                    }
+                }
                 let statementHandle = statement.handle
 
                 let spState = perfLog.begin(signpost: .rowsByPreparedFunc, message: query)

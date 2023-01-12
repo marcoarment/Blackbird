@@ -30,40 +30,10 @@ import Foundation
 
 extension Blackbird {
 
-    /// The SQLite data type for a ``Column`` in a ``Table``.
-    ///
-    /// See  [SQLite data types](https://www.sqlite.org/datatype3.html) for implementation and storage details.
-    ///
-    /// These default values are used for non-`NULL` columns:
-    ///
-    /// Type | Default Value
-    /// ---------|-------
-    /// `.integer` | `0`
-    /// `.double` | `0.0`
-    /// `.text` |  Empty string (`""`)
-    /// `.data` |  Empty data
-    ///
-    /// Custom default values for columns are not supported by Blackbird.
-    public enum ColumnType: Sendable {
-
-        /// Stored as a **signed** integer up to 64-bit.
-        ///
-        /// **Default value:** `0`
+    internal enum ColumnType: Sendable {
         case integer
-        
-        /// Stored as a 64-bit floating-point number.
-        ///
-        /// **Default value:** `0.0`
         case double
-        
-        /// Stored as a UTF-8 string.
-        ///
-        /// **Default value:** empty string (`""`)
         case text
-        
-        /// Stored as an unmodified binary blob.
-        ///
-        /// **Default value:** empty data
         case data
         
         internal static func parseType(_ str: String) -> ColumnType? {
@@ -93,8 +63,7 @@ extension Blackbird {
         }
     }
 
-    /// A column in a ``Table``.
-    public struct Column: Equatable, Hashable, Sendable {
+    internal struct Column: Equatable, Hashable, Sendable {
         enum Error: Swift.Error {
             case cannotParseColumnDefinition(table: String, description: String)
         }
@@ -116,13 +85,7 @@ extension Blackbird {
         internal func definition() -> String {
             "`\(name)` \(type.definition()) \(mayBeNull ? "NULL" : "NOT NULL") DEFAULT \((mayBeNull ? .null : type.defaultValue()).sqliteLiteral())"
         }
-        
-        
-        /// Defines a single column in a ``Blackbird/Table``.
-        /// - Parameters:
-        ///   - name: The column name. Must not be empty.
-        ///   - type: A ``Blackbird/ColumnType``.
-        ///   - mayBeNull: Whether this column may be `NULL` in the database and `nil` in the model, which requires the corresponding model property to be an optional type.
+                
         public init(name: String, type: ColumnType, mayBeNull: Bool = false) {
             self.name = name
             self.type = type
@@ -146,8 +109,7 @@ extension Blackbird {
         }
     }
     
-    /// An index in a ``Table``.
-    public struct Index: Equatable, Hashable, Sendable {
+    internal struct Index: Equatable, Hashable, Sendable {
         public enum Error: Swift.Error {
             case cannotParseIndexDefinition(definition: String, description: String)
         }
@@ -170,10 +132,6 @@ extension Blackbird {
             return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
         }
         
-        /// Defines a single [SQLite index](https://www.sqlite.org/lang_createindex.html) in a ``Blackbird/Table``.
-        /// - Parameters:
-        ///   - columnNames: An array of strings of the column names to index, in order.
-        ///   - unique: Whether this index requires values to be unique. `NULL` values are exempt from the uniqueness requirement.
         public init(columnNames: [String], unique: Bool = false) {
             guard !columnNames.isEmpty else { fatalError("No columns specified") }
             self.columnNames = columnNames
@@ -207,25 +165,19 @@ extension Blackbird {
         }
     }
 
-    /// The schema for a SQLite table in a ``Database``.
-    public struct Table: Hashable, Sendable {
+    internal struct Table: Hashable, Sendable {
         enum Error: Swift.Error {
             case invalidTableDefinition(table: String, description: String)
         }
     
         public func hash(into hasher: inout Hasher) {
-            hasher.combine(customName)
+            hasher.combine(name)
             hasher.combine(columns)
             hasher.combine(indexes)
             hasher.combine(primaryKeys)
         }
-
-        internal func name<T>(type: T.Type) -> String {
-            if let customName { return customName }
-            return String(describing: type)
-        }
         
-        private let customName: String?
+        internal let name: String
         internal let columns: [Column]
         internal let columnNames: Set<String>
         internal let primaryKeys: [Column]
@@ -234,20 +186,10 @@ extension Blackbird {
         private static let resolvedTablesWithDatabases = Locked([Table: Set<Database.InstanceID>]())
         private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID : Set<String>]())
         
-        /// Defines the schema of an SQLite table in a ``Blackbird/Database`` for a type conforming to ``BlackbirdModel``.
-        /// - Parameters:
-        ///   - name: A custom name for the table.
-        ///
-        ///       **Default:** The ``BlackbirdModel``-conforming type's name.
-        ///   - columns: An array of ``Blackbird/Column`` definitions. Must not be empty.
-        ///   - primaryKeyColumnNames: An array of column names to define the primary key.
-        ///
-        ///       **Default:** `["id"]`
-        ///   - indexes: An array of ``Blackbird/Index`` definitions for any additional indexed columns. The primary key is implicitly indexed and should not be included here.
-        public init(name: String? = nil, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = []) {
+        public init(name: String = "bogus", columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = []) {
             if columns.isEmpty { fatalError("No columns specified") }
             
-            self.customName = name
+            self.name = name
             self.columns = columns
             self.indexes = indexes
             self.columnNames = Set(columns.map { $0.name })
@@ -271,7 +213,7 @@ extension Blackbird {
             if columns.isEmpty { return nil }
             primaryKeyColumns.sort { $0.primaryKeyIndex < $1.primaryKeyIndex }
             
-            self.customName = tableName
+            self.name = tableName
             self.columns = columns
             self.primaryKeys = primaryKeyColumns
             self.columnNames = Set(columns.map { $0.name })
@@ -281,13 +223,13 @@ extension Blackbird {
             }
         }
         
-        internal func createTableStatement<T>(type: T.Type, tableName: String? = nil) -> String {
+        internal func createTableStatement<T>(type: T.Type, overrideTableName: String? = nil) -> String {
             let columnDefs = columns.map { $0.definition() }.joined(separator: ",")
             let pkDef = primaryKeys.isEmpty ? "" : ",PRIMARY KEY (`\(primaryKeys.map { $0.name }.joined(separator: "`,`"))`)"
-            return "CREATE TABLE \(tableName ?? name(type: type)) (\(columnDefs)\(pkDef))"
+            return "CREATE TABLE \(overrideTableName ?? name) (\(columnDefs)\(pkDef))"
         }
         
-        internal func createIndexStatements<T>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name(type: type)) } }
+        internal func createIndexStatements<T>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
         
         internal func resolveWithDatabase<T>(type: T.Type, database: Database, core: Database.Core, validator: (@Sendable () throws -> Void)?) async throws {
             if _isAlreadyResolved(type: type, in: database) { return }
@@ -303,10 +245,7 @@ extension Blackbird {
 
         internal func _isAlreadyResolved<T>(type: T.Type, in database: Database) -> Bool {
             let alreadyResolved = Self.resolvedTablesWithDatabases.withLock { $0[self]?.contains(database.id) ?? false }
-            if !alreadyResolved,
-                case let name = name(type: type),
-                Self.resolvedTableNamesInDatabases.withLock({ $0[database.id]?.contains(name) ?? false })
-            {
+            if !alreadyResolved, Self.resolvedTableNamesInDatabases.withLock({ $0[database.id]?.contains(name) ?? false }) {
                 fatalError("Multiple BlackbirdModel types cannot use the same table name (\"\(name)\") in one Database")
             }
             return alreadyResolved
@@ -315,15 +254,14 @@ extension Blackbird {
         private func _resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
             // Table not created yet
             let schemaInDB: Table
-            let tableName = name(type: type)
             do {
-                let existingSchemaInDB = try Table(isolatedCore: core, tableName: tableName)
+                let existingSchemaInDB = try Table(isolatedCore: core, tableName: name)
                 if let existingSchemaInDB {
                     schemaInDB = existingSchemaInDB
                 } else {
                     try core.execute(createTableStatement(type: type))
                     for createIndexStatement in createIndexStatements(type: type) { try core.execute(createIndexStatement) }
-                    schemaInDB = try Table(isolatedCore: core, tableName: tableName)!
+                    schemaInDB = try Table(isolatedCore: core, tableName: name)!
                 }
             }
 
@@ -339,28 +277,28 @@ extension Blackbird {
                     // drop indexes and columns
                     var schemaInDB = schemaInDB
                     for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(indexToDrop.name)`") }
-                    for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(tableName)` DROP COLUMN `\(columnNameToDrop)`") }
-                    schemaInDB = try Table(isolatedCore: core, tableName: tableName)!
+                    for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(name)` DROP COLUMN `\(columnNameToDrop)`") }
+                    schemaInDB = try Table(isolatedCore: core, tableName: name)!
                     
                     if primaryKeysChanged || !Set(schemaInDB.columns).subtracting(columns).isEmpty {
                         // At least one column has changed type -- do a full rebuild
-                        let tempTableName = "_\(tableName)__\(Int32.random(in: 0..<Int32.max))"
-                        try core.execute(createTableStatement(type: type, tableName: tempTableName))
+                        let tempTableName = "_\(name)__\(Int32.random(in: 0..<Int32.max))"
+                        try core.execute(createTableStatement(type: type, overrideTableName: tempTableName))
 
                         let commonColumnNames = Set(schemaInDB.columnNames).intersection(columnNames)
                         let commonColumnsOrderedNameList = schemaInDB.columns.filter { commonColumnNames.contains($0.name) }.map { $0.name }
                         if !commonColumnsOrderedNameList.isEmpty {
                             let fieldList = "`\(commonColumnsOrderedNameList.joined(separator: "`,`"))`"
-                            try core.execute("INSERT INTO `\(tempTableName)` (\(fieldList)) SELECT \(fieldList) FROM `\(tableName)`")
+                            try core.execute("INSERT INTO `\(tempTableName)` (\(fieldList)) SELECT \(fieldList) FROM `\(name)`")
                         }
-                        try core.execute("DROP TABLE `\(tableName)`")
-                        try core.execute("ALTER TABLE `\(tempTableName)` RENAME TO `\(tableName)`")
-                        schemaInDB = try Table(isolatedCore: core, tableName: tableName)!
+                        try core.execute("DROP TABLE `\(name)`")
+                        try core.execute("ALTER TABLE `\(tempTableName)` RENAME TO `\(name)`")
+                        schemaInDB = try Table(isolatedCore: core, tableName: name)!
                     }
 
                     // add columns and indexes
-                    for columnToAdd in Set(columns).subtracting(schemaInDB.columns) { try core.execute("ALTER TABLE `\(tableName)` ADD COLUMN \(columnToAdd.definition())") }
-                    for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: tableName)) }
+                    for columnToAdd in Set(columns).subtracting(schemaInDB.columns) { try core.execute("ALTER TABLE `\(name)` ADD COLUMN \(columnToAdd.definition())") }
+                    for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: name)) }
 
                     // allow calling model to verify before committing
                     if let validator { try validator() }
@@ -374,8 +312,285 @@ extension Blackbird {
             
             Self.resolvedTableNamesInDatabases.withLock {
                 if $0[database.id] == nil { $0[database.id] = Set<String>() }
-                $0[database.id]!.insert(tableName)
+                $0[database.id]!.insert(name)
             }
         }
+    }
+}
+
+internal protocol ColumnWrapper {
+    associatedtype ValueType: Codable & Hashable & Sendable
+    var value: ValueType { get }
+    var internalNameInSchemaGenerator: String? { get set }
+}
+
+/// A wrapped data type supported by ``BlackbirdColumn``.
+public protocol BlackbirdColumnWrappable: Hashable, Codable, Sendable { }
+
+// UInt, UInt64 intentionally omitted since SQLite integers max out at 64-bit signed
+extension Bool:     BlackbirdColumnWrappable { }
+extension String:   BlackbirdColumnWrappable { }
+extension Data:     BlackbirdColumnWrappable { }
+extension Double:   BlackbirdColumnWrappable { }
+extension Float:    BlackbirdColumnWrappable { }
+extension Int:      BlackbirdColumnWrappable { }
+extension Int8:     BlackbirdColumnWrappable { }
+extension Int16:    BlackbirdColumnWrappable { }
+extension Int32:    BlackbirdColumnWrappable { }
+extension Int64:    BlackbirdColumnWrappable { }
+extension UInt8:    BlackbirdColumnWrappable { }
+extension UInt16:   BlackbirdColumnWrappable { }
+extension UInt32:   BlackbirdColumnWrappable { }
+extension Date:     BlackbirdColumnWrappable { }
+extension URL:      BlackbirdColumnWrappable { }
+extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrappable { }
+
+// Keeping this one @unchecked-Sendable for now to see if locking around .value is really necessary in practice.
+// I know this is wrong and I apologize to the world as necessary.
+@propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, @unchecked Sendable, Codable where T: BlackbirdColumnWrappable {
+    public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
+
+    internal final class StringClassWrapper: @unchecked Sendable {
+        var value: String? = nil
+    }
+    
+    internal var _internalNameInSchemaGenerator = StringClassWrapper()
+    var internalNameInSchemaGenerator: String? {
+        get { _internalNameInSchemaGenerator.value }
+        set { _internalNameInSchemaGenerator.value = newValue }
+    }
+
+    internal var value: T
+
+    public var projectedValue: BlackbirdColumn<T> { self }
+    static func schemaGeneratorWrappedType() -> Any.Type { T.self }
+
+    public var wrappedValue: T {
+        get { value }
+        set { value = newValue }
+    }
+
+    public init(wrappedValue: T) { self.value = wrappedValue }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        value = try container.decode(T.self)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+}
+
+internal final class SchemaGenerator: Sendable {
+    internal static let shared = SchemaGenerator()
+    
+    let tableCache = Blackbird.Locked<[ObjectIdentifier : Blackbird.Table]>([:])
+    
+    internal func table<T: BlackbirdModel>(for type: T.Type) -> Blackbird.Table {
+        tableCache.withLock { cache in
+            let identifier = ObjectIdentifier(type)
+            if let cached = cache[identifier] { return cached }
+
+            let table = Self.generateTableDefinition(type)
+            cache[identifier] = table
+            return table
+        }
+    }
+
+    private static func generateTableDefinition<T>(_ type: T.Type) -> Blackbird.Table where T: BlackbirdModel {
+        guard let emptyInstance = try? T(from: EmptyDecoder()) else { fatalError("\(String(describing: T.self)) instances cannot be generated by simple decoding") }
+        let mirror = Mirror(reflecting: emptyInstance)
+        
+        var columns: [Blackbird.Column] = []
+        var hasColumNamedID = false
+        for child in mirror.children {
+            guard var label = child.label else { continue }
+
+            if var column = child.value as? any ColumnWrapper {
+                // remove the "_" preceding internal names of property-wrapped values
+                guard label.hasPrefix("_"), label.count > 1, let firstCharIndex = label.indices.first else {
+                    fatalError("\(String(describing: T.self)).\(label): cannot parse label format, expected e.g. \"_name\"")
+                }
+                label.remove(at: firstCharIndex)
+                
+                column.internalNameInSchemaGenerator = label
+                if label == "id" { hasColumNamedID = true }
+
+                var isOptional = false
+                var unwrappedType = Swift.type(of: column.value) as Any
+                while let wrappedType = unwrappedType as? WrappedType.Type {
+                    if unwrappedType is OptionalProtocol.Type { isOptional = true }
+                    unwrappedType = wrappedType.schemaGeneratorWrappedType()
+                }
+                
+                var columnType: Blackbird.ColumnType
+                switch unwrappedType {
+                    case is String.Type: columnType = .text
+                    case is URL.Type:    columnType = .text
+                    
+                    case is Double.Type: columnType = .double
+                    case is Float.Type:  columnType = .double
+                    case is Date.Type:   columnType = .double
+                    
+                    case is Bool.Type:   columnType = .integer
+                    case is Int.Type:    columnType = .integer
+                    case is Int.Type:    columnType = .integer
+                    case is Int8.Type:   columnType = .integer
+                    case is Int16.Type:  columnType = .integer
+                    case is Int32.Type:  columnType = .integer
+                    case is Int64.Type:  columnType = .integer
+                    case is UInt.Type:   columnType = .integer
+                    case is UInt8.Type:  columnType = .integer
+                    case is UInt16.Type: columnType = .integer
+                    case is UInt32.Type: columnType = .integer
+                    
+                    case is Data.Type: columnType = .data
+                    
+                    default: fatalError("\(String(describing: T.self)).\(label): \(String(describing: unwrappedType)) is not a supported type for a database column")
+                }
+                
+                columns.append(Blackbird.Column(name: label, type: columnType, mayBeNull: isOptional))
+            }
+        }
+        
+        let keyPathToColumnName = { (keyPath: AnyKeyPath, messageLabel: String) in
+            guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else {
+                fatalError("\(String(describing: T.self)): \(messageLabel) includes a key path that is not a @BlackbirdColumn")
+            }
+            
+            guard let name = column.internalNameInSchemaGenerator else { fatalError("\(String(describing: T.self)): Failed to look up \(messageLabel) key-path name") }
+            return name
+        }
+                
+        var primaryKeyNames = T.primaryKey.map { keyPathToColumnName($0, "primary key") }
+        if primaryKeyNames.count == 0 {
+            if hasColumNamedID { primaryKeyNames = ["id"] }
+            else { fatalError("\(String(describing: T.self)): Must specify a primary key or have a property named \"id\" to automatically use as primary key") }
+        }
+
+        var indexes = T.indexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "index") }, unique: false) }
+        indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "unique index") }, unique: true) })
+
+        return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes)
+    }
+}
+
+// MARK: - Accessing wrapped types of optionals and column wrappers
+fileprivate protocol OptionalProtocol { }
+extension Optional: OptionalProtocol { }
+
+fileprivate protocol WrappedType {
+    static func schemaGeneratorWrappedType() -> Any.Type
+}
+
+extension Optional: WrappedType {
+    fileprivate static func schemaGeneratorWrappedType() -> Any.Type { Wrapped.self }
+}
+
+// MARK: - Empty initialization of Codable types
+//
+// HUGE credit to https://github.com/jjrscott/EmptyInitializer for this EmptyDecoder trick!
+// The following is mostly a condensed version of that code with minor tweaks,
+//  mostly to work with BlackbirdColumn wrappers and support URL as a property type.
+
+fileprivate struct EmptyDecoder: Decoder {
+    var codingPath: [CodingKey] = []
+    var userInfo: [CodingUserInfoKey: Any] = [:]
+    func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey { KeyedDecodingContainer(EmptyKeyedDecodingContainer<Key>()) }
+    func unkeyedContainer() throws -> UnkeyedDecodingContainer { EmptyUnkeyedDecodingContainer() }
+    func singleValueContainer() throws -> SingleValueDecodingContainer { EmptySingleValueDecodingContainer() }
+}
+
+fileprivate struct EmptyKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingContainerProtocol {
+    var codingPath: [CodingKey] = []
+    var allKeys: [Key] = []
+    func contains(_ key: Key) -> Bool { true }
+    func decodeNil(forKey key: Key) throws -> Bool { true }
+    func decode(_ type: Bool.Type, forKey key: Key) throws -> Bool     { false }
+    func decode(_ type: String.Type, forKey key: Key) throws -> String { "" }
+    func decode(_ type: Double.Type, forKey key: Key) throws -> Double { 0 }
+    func decode(_ type: Float.Type, forKey key: Key) throws -> Float   { 0 }
+    func decode(_ type: Int.Type, forKey key: Key) throws -> Int       { 0 }
+    func decode(_ type: Int8.Type, forKey key: Key) throws -> Int8     { 0 }
+    func decode(_ type: Int16.Type, forKey key: Key) throws -> Int16   { 0 }
+    func decode(_ type: Int32.Type, forKey key: Key) throws -> Int32   { 0 }
+    func decode(_ type: Int64.Type, forKey key: Key) throws -> Int64   { 0 }
+    func decode(_ type: UInt.Type, forKey key: Key) throws -> UInt     { 0 }
+    func decode(_ type: UInt8.Type, forKey key: Key) throws -> UInt8   { 0 }
+    func decode(_ type: UInt16.Type, forKey key: Key) throws -> UInt16 { 0 }
+    func decode(_ type: UInt32.Type, forKey key: Key) throws -> UInt32 { 0 }
+    func decode(_ type: UInt64.Type, forKey key: Key) throws -> UInt64 { 0 }
+    func decode<T>(_ type: BlackbirdColumn<T>.Type, forKey key: Key) throws -> BlackbirdColumn<T> { BlackbirdColumn<T>(wrappedValue: try T(from: EmptyDecoder())) }
+    func decode<T>(_ type: T.Type, forKey key: Key) throws -> T where T: Decodable {
+        if T.self == URL.self { return URL(string: "file:///") as! T }
+        if T.self == Data.self { return Data() as! T }
+        return try T(from: EmptyDecoder())
+    }
+    func nestedUnkeyedContainer(forKey key: Key) throws -> UnkeyedDecodingContainer { EmptyUnkeyedDecodingContainer() }
+    func superDecoder() throws -> Decoder { EmptyDecoder() }
+    func superDecoder(forKey key: Key) throws -> Decoder { EmptyDecoder() }
+    func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: Key) throws -> KeyedDecodingContainer<NestedKey> where NestedKey: CodingKey {
+        KeyedDecodingContainer(EmptyKeyedDecodingContainer<NestedKey>())
+    }
+}
+
+fileprivate struct EmptySingleValueDecodingContainer: SingleValueDecodingContainer {
+    var codingPath: [CodingKey] = []
+    func decodeNil() -> Bool { true }
+    func decode(_ type: Bool.Type) throws -> Bool     { false }
+    func decode(_ type: String.Type) throws -> String { "" }
+    func decode(_ type: Double.Type) throws -> Double { 0 }
+    func decode(_ type: Float.Type) throws -> Float   { 0 }
+    func decode(_ type: Int.Type) throws -> Int       { 0 }
+    func decode(_ type: Int8.Type) throws -> Int8     { 0 }
+    func decode(_ type: Int16.Type) throws -> Int16   { 0 }
+    func decode(_ type: Int32.Type) throws -> Int32   { 0 }
+    func decode(_ type: Int64.Type) throws -> Int64   { 0 }
+    func decode(_ type: UInt.Type) throws -> UInt     { 0 }
+    func decode(_ type: UInt8.Type) throws -> UInt8   { 0 }
+    func decode(_ type: UInt16.Type) throws -> UInt16 { 0 }
+    func decode(_ type: UInt32.Type) throws -> UInt32 { 0 }
+    func decode(_ type: UInt64.Type) throws -> UInt64 { 0 }
+    func decode<T>(_ type: BlackbirdColumn<T>.Type) throws -> BlackbirdColumn<T> { BlackbirdColumn<T>(wrappedValue: try T(from: EmptyDecoder())) }
+    func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
+        if T.self == URL.self { return URL(string: "file:///") as! T }
+        if T.self == Data.self { return Data() as! T }
+        return try T(from: EmptyDecoder())
+    }
+}
+
+fileprivate struct EmptyUnkeyedDecodingContainer: UnkeyedDecodingContainer {
+    var codingPath: [CodingKey] = []
+    var count: Int?
+    var isAtEnd: Bool = true
+    var currentIndex: Int = 0
+    mutating func decodeNil() throws -> Bool { true }
+    mutating func decode(_ type: Bool.Type) throws -> Bool     { false }
+    mutating func decode(_ type: String.Type) throws -> String { "" }
+    mutating func decode(_ type: Double.Type) throws -> Double { 0 }
+    mutating func decode(_ type: Float.Type) throws -> Float   { 0 }
+    mutating func decode(_ type: Int.Type) throws -> Int       { 0 }
+    mutating func decode(_ type: Int8.Type) throws -> Int8     { 0 }
+    mutating func decode(_ type: Int16.Type) throws -> Int16   { 0 }
+    mutating func decode(_ type: Int32.Type) throws -> Int32   { 0 }
+    mutating func decode(_ type: Int64.Type) throws -> Int64   { 0 }
+    mutating func decode(_ type: UInt.Type) throws -> UInt     { 0 }
+    mutating func decode(_ type: UInt8.Type) throws -> UInt8   { 0 }
+    mutating func decode(_ type: UInt16.Type) throws -> UInt16 { 0 }
+    mutating func decode(_ type: UInt32.Type) throws -> UInt32 { 0 }
+    mutating func decode(_ type: UInt64.Type) throws -> UInt64 { 0 }
+    mutating func decode<T>(_ type: BlackbirdColumn<T>.Type) throws -> BlackbirdColumn<T> { BlackbirdColumn<T>(wrappedValue: try T(from: EmptyDecoder())) }
+    mutating func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
+        if T.self == URL.self { return URL(string: "file:///") as! T }
+        if T.self == Data.self { return Data() as! T }
+        return try T(from: EmptyDecoder())
+    }
+    
+    mutating func nestedUnkeyedContainer() throws -> UnkeyedDecodingContainer { EmptyUnkeyedDecodingContainer() }
+    mutating func superDecoder() throws -> Decoder { EmptyDecoder() }
+    mutating func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type) throws -> KeyedDecodingContainer<NestedKey> where NestedKey: CodingKey {
+        KeyedDecodingContainer(EmptyKeyedDecodingContainer<NestedKey>())
     }
 }

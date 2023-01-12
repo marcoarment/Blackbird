@@ -27,6 +27,8 @@
 import Foundation
 import Combine
 
+extension PartialKeyPath: @unchecked Sendable { }
+
 /// A model protocol based on `Codable` and SQLite.
 ///
 /// ## Defining the schema
@@ -35,20 +37,47 @@ import Combine
 /// **Example:** A simple model:
 /// ```swift
 /// struct Post: BlackbirdModel {
-///     static var table = Blackbird.Table(
-///         columns: [
-///             Blackbird.Column(name: "id",    type: .integer),
-///             Blackbird.Column(name: "title", type: .text),
-///             Blackbird.Column(name: "url",   type: .text, mayBeNull: true),
-///         ]
-///     )
-///
-///     let id: Int
-///     var title: String
-///     var url: URL?     // optional since mayBeNull == true
+///     @BlackbirdColumn var id: Int
+///     @BlackbirdColumn var title: String
+///     @BlackbirdColumn var url: URL?
 /// }
 /// ```
 /// > If the primary key is not specified, it is assumed to be a column named `"id"`.
+///
+/// **Example:** A model with a custom primary-key column:
+/// ```swift
+/// struct CustomPrimaryKeyModel: BlackbirdModel {
+///     static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
+///
+///     @BlackbirdColumn var pk: Int
+///     @BlackbirdColumn var title: String
+/// }
+/// ```
+///
+/// **Example:** A model with indexes and a multicolumn primary key:
+/// ```swift
+/// struct Post: BlackbirdModel {
+///     @BlackbirdColumn var id: Int
+///     @BlackbirdColumn var title: String
+///     @BlackbirdColumn var date: Date
+///     @BlackbirdColumn var isPublished: Bool
+///     @BlackbirdColumn var url: URL?
+///     @BlackbirdColumn var productID: Int
+///
+///     static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
+///
+///     static var indexes: [[BlackbirdColumnKeyPath]] = [
+///         [ \.$title ],
+///         [ \.$isPublished, \.$date ]
+///     ]
+///
+///     static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+///         [ \.$productID ]
+///     ]
+/// }
+/// ```
+///
+/// ### Schema migrations
 ///
 /// If a table with the same name already exists in a database, a schema migration will be attempted for the following operations:
 /// * Adding or dropping columns
@@ -111,9 +140,30 @@ import Combine
 /// and their use may cause some features not to behave as expected.
 ///
 public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
-    /// Defines the database schema for models of this type.
-    static var table: Blackbird.Table { get }
+    typealias BlackbirdColumnKeyPath = PartialKeyPath<Self>
     
+    /// The table name to use in the database. By default, the type's name is used.
+    static var tableName: String { get }
+    
+    /// The column or columns to use as the primary key in the database table.
+    ///
+    /// If unspecified, the primary key is assumed to be a single column named `id`, and if no such column exists, an error is thrown.
+    static var primaryKey: [BlackbirdColumnKeyPath] { get }
+    
+    /// An array of arrays, each specifying an index to create on the database table.
+    ///
+    /// The primary key is always implicitly indexed. Do not specify it as a separate index.
+    ///
+    /// If unspecified, no additional indexes are created.
+    static var indexes: [[BlackbirdColumnKeyPath]] { get }
+    
+    /// An array of arrays, each specifying an index to create on the database table in which each row must have a unique value or `NULL`.
+    ///
+    /// The primary key is always implicitly uniquely indexed. Do not specify it as a separate index.
+    ///
+    /// If unspecified, no additional unique indexes are created.
+    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { get }
+
     /// Performs setup and any necessary schema migrations.
     ///
     /// Optional. If not called manually, setup and schema migrations will occur when the first database operation is performed for the conforming type's table.
@@ -318,8 +368,25 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     typealias InstanceUpdater = Blackbird.ModelInstanceUpdater<Self>
 }
 
+internal extension BlackbirdModel {
+    static var table: Blackbird.Table { SchemaGenerator.shared.table(for: Self.self) }
+}
+
 extension BlackbirdModel {
-    public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.table.name(type: self)) }
+    public static var tableName: String { String(describing: Self.self) }
+    public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
+    public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
+    public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
+        
+    // Identifiable
+    public var id: [AnyHashable] {
+        Self.primaryKey.map {
+            guard let wrapper = self[keyPath: $0] as? any ColumnWrapper else { fatalError("Cannot access @BlackbirdColumn wrapper from primaryKey") }
+            return AnyHashable(wrapper.value)
+        }
+    }
+    
+    public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.tableName) }
     
     public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? { return try await self.read(from: database, where: "id = ?", id).first }
 
@@ -331,21 +398,21 @@ extension BlackbirdModel {
 
     public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [Sendable]) async throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
-            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(table.name(type: self))")
+            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
         return try await self.read(from: database, where: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [Sendable]) throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
-            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(table.name(type: self))")
+            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
         return try self.readIsolated(from: database, core: core, where: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
     public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [String: Sendable]) async throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
-            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(table.name(type: self))")
+            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
         
         var andClauses: [String] = []
@@ -360,7 +427,7 @@ extension BlackbirdModel {
 
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [String: Sendable]) throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
-            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(table.name(type: self))")
+            fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
         
         var andClauses: [String] = []
@@ -417,13 +484,13 @@ extension BlackbirdModel {
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name(type: Self.self)), arguments: arguments)
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name(type: Self.self)), arguments: arguments)
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
     @discardableResult
@@ -435,13 +502,13 @@ extension BlackbirdModel {
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.Row] {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
-        return try core.query(query.replacingOccurrences(of: "$T", with: table.name(type: Self.self)), arguments: arguments)
+        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row] {
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema() }
-        return try core.query(query.replacingOccurrences(of: "$T", with: table.name(type: Self.self)), arguments: arguments)
+        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
     private static func validateSchema() throws -> Void {
@@ -451,7 +518,7 @@ extension BlackbirdModel {
         do {
             _ = try Self(from: decoder)
         } catch {
-            fatalError("Table \"\(table.name(type: self))\" definition defaults do not decode to model \(String(describing: self)): \(error)")
+            fatalError("Table \"\(tableName)\" definition defaults do not decode to model \(String(describing: self)): \(error)")
         }
     }
     
@@ -464,7 +531,7 @@ extension BlackbirdModel {
 
         let encoder = BlackbirdSQLiteEncoder()
         try self.encode(to: encoder)
-        let encodedValues = encoder.sqliteArguments()
+        let encodedValues = encoder.sqliteArguments
         let primaryKeyValues = table.primaryKeys.map { encodedValues[$0.name]! }
         
         var columnNames: [String] = []
@@ -475,8 +542,8 @@ extension BlackbirdModel {
             placeholders.append("?")
             values.append(value)
         }
-        
-        let sql = "REPLACE INTO `\(table.name(type: Self.self))` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
+
+        let sql = "REPLACE INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
         return (sql: sql, values: values, primaryKeyValues: primaryKeyValues)
     }
     
@@ -489,10 +556,10 @@ extension BlackbirdModel {
         try Self.table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
 
         let (sql, values, primaryKeyValues) = try insertQueryValues()
-        database.changeReporter.ignoreWritesToTable(Self.table.name(type: Self.self))
+        database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.table.name(type: Self.self), primaryKey: primaryKeyValues)
+            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValues)
         }
         try core.query(sql, arguments: values)
     }
@@ -508,7 +575,7 @@ extension BlackbirdModel {
 
         let encoder = BlackbirdSQLiteEncoder()
         try self.encode(to: encoder)
-        let sqliteColumnValues = encoder.sqliteArguments()
+        let sqliteColumnValues = encoder.sqliteArguments
 
         var andClauses: [String] = []
         var values: [Blackbird.Value] = []
@@ -518,12 +585,12 @@ extension BlackbirdModel {
             values.append(value)
         }
         
-        database.changeReporter.ignoreWritesToTable(Self.table.name(type: Self.self))
+        database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.table.name(type: Self.self), primaryKey: values)
+            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: values)
         }
-        let sql = "DELETE FROM `\(table.name(type: Self.self))` WHERE \(andClauses.joined(separator: " AND "))"
+        let sql = "DELETE FROM `\(Self.tableName)` WHERE \(andClauses.joined(separator: " AND "))"
         try core.query(sql, arguments: values)
     }
 
