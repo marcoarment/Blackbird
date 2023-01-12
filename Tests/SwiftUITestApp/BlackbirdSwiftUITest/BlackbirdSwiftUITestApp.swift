@@ -27,15 +27,11 @@
 import SwiftUI
 import Blackbird
 
-struct Post: BlackbirdModel {
-    static var table = Blackbird.Table(columns: [
-        Blackbird.Column(name: "id", type: .integer),
-        Blackbird.Column(name: "title", type: .text),
-    ])
-    
-    var id: Int64
-    var title: String
+struct Post: BlackbirdModel {    
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
 }
+
 
 @main
 struct BlackbirdSwiftUITestApp: App {

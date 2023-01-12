@@ -344,7 +344,7 @@ extension BlackbirdModel {
     }
     
     // Equatable
-    static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.id == rhs.id }
+    public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.id == rhs.id }
     
     public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.tableName) }
     

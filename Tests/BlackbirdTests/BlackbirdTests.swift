@@ -261,8 +261,8 @@ final class BlackbirdTestTests: XCTestCase {
     
     func testMultiStatements() async throws {
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
-        try await Post.resolveSchema(in: db)
-        try await db.execute("PRAGMA user_version = 234; UPDATE Post SET url = NULL")
+        try await TestModel.resolveSchema(in: db)
+        try await db.execute("PRAGMA user_version = 234; UPDATE TestModel SET url = NULL")
         let userVersion = try await db.query("PRAGMA user_version").first?["user_version"]
         XCTAssert(userVersion != nil)
         XCTAssert(userVersion!.intValue == 234)

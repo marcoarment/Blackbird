@@ -58,13 +58,6 @@ struct TestModelWithDescription: BlackbirdModel {
     @BlackbirdColumn var description: String
 }
 
-struct Post: BlackbirdModel {
-    @BlackbirdColumn var id: Int
-    @BlackbirdColumn var title: String
-    @BlackbirdColumn var url: URL?
-    @BlackbirdColumn var image: Data?
-}
-
 struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var id: Int64
     
