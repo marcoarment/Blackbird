@@ -158,9 +158,12 @@ final class BlackbirdTestTests: XCTestCase {
         let paramFormat3Results = try await TestModelWithDescription.read(from: db, where: "title LIKE :title", arguments: [":title" : "the%"])
         XCTAssert(paramFormat3Results.count == 231)
 
-        let id42 = try await TestModelWithDescription.read(from: db, id: 42)
+        var id42 = try await TestModelWithDescription.read(from: db, id: 42)
         XCTAssertNotNil(id42)
         XCTAssert(id42!.id == 42)
+        
+        id42?.url = nil
+        try await id42?.write(to: db)
         
         try await id42!.delete(from: db)
         let id42AfterDelete = try await TestModelWithDescription.read(from: db, id: 42)
@@ -186,6 +189,45 @@ final class BlackbirdTestTests: XCTestCase {
         XCTAssert(read!.typeDataNull == nil)
         XCTAssert(read!.typeDataNotNull == "dataNotNull!".data(using: .utf8)!)
     }
+
+    func testJSONSerialization() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
+        try await db.transaction { core in
+            for i in 0..<count {
+                let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
+                try m.writeIsolated(to: db, core: core)
+            }
+        }
+
+        let the = try await TestModelWithDescription.read(from: db, where: "title LIKE 'the%'")
+        XCTAssert(the.count == 231)
+        
+        let results = [
+            TestModel(id: 1, title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 4)),
+            TestModel(id: 2, title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 4)),
+            TestModel(id: 3, title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 4)),
+            TestModel(id: 4, title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 4)),
+        ]
+
+        let encoder = JSONEncoder()
+        let json = try encoder.encode(results)
+        print("json: \(String(data: json, encoding: .utf8)!)")
+        
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode([TestModel].self, from: json)
+        XCTAssert(decoded == results)
+        
+        for i in 0..<3 {
+            let m1 = results[i]
+            let m2 = decoded[i]
+            XCTAssert(m1.id == m2.id)
+            XCTAssert(m1.title == m2.title)
+            XCTAssert(m1.url == m2.url)
+            XCTAssert(m1.nonColumn == m2.nonColumn)
+        }
+    }
+
 
     func testHeavyWorkload() async throws {
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])

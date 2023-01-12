@@ -184,7 +184,7 @@ extension Blackbird {
         do {
             let encoder = BlackbirdSQLiteEncoder()
             try instance.encode(to: encoder)
-            let encodedValues = encoder.sqliteArguments()
+            let encodedValues = encoder.sqliteArguments
             let primaryKeyValues = T.table.primaryKeys.map { encodedValues[$0.name]! }
             generator = { try await T.read(from: $0, multicolumnPrimaryKey: primaryKeyValues) }
         } catch {
@@ -246,7 +246,7 @@ extension Blackbird {
         
         public func bind(from database: Blackbird.Database?, to results: Binding<Blackbird.LiveResults<T>>, generator: CachedResultGenerator<[T]>?) {
             changePublishers.removeAll()
-            resultPublisher.subscribe(to: T.table.name(type: T.self), in: database, generator: generator)
+            resultPublisher.subscribe(to: T.table.name, in: database, generator: generator)
             _results = results
             
             changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
@@ -275,7 +275,7 @@ extension Blackbird {
         
         public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, generator: CachedResultGenerator<T?>?) {
             changePublishers.removeAll()
-            resultPublisher.subscribe(to: T.table.name(type: T.self), in: database, generator: generator)
+            resultPublisher.subscribe(to: T.table.name, in: database, generator: generator)
             _instance = instance
             changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
                 guard let self else { return }
@@ -366,7 +366,7 @@ extension Blackbird {
             database = newDatabase
             
             if let database {
-                self.changePublisher = database.changeReporter.changePublisher(for: T.table.name(type: T.self)).sink { [weak self] changedPrimaryKeys in
+                self.changePublisher = database.changeReporter.changePublisher(for: T.table.name).sink { [weak self] changedPrimaryKeys in
                     guard let self, Blackbird.isRelevantPrimaryKeyChange(watchedPrimaryKeys: self.watchedPrimaryKeys, changedPrimaryKeys: changedPrimaryKeys) else { return }
                     self.enqueueUpdate()
                 }
