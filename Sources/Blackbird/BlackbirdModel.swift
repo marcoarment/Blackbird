@@ -380,9 +380,20 @@ extension BlackbirdModel {
         
     // Identifiable
     public var id: [AnyHashable] {
-        Self.primaryKey.map {
-            guard let wrapper = self[keyPath: $0] as? any ColumnWrapper else { fatalError("Cannot access @BlackbirdColumn wrapper from primaryKey") }
-            return AnyHashable(wrapper.value)
+        let primaryKeyPaths = Self.primaryKey
+        if primaryKeyPaths.count > 0 {
+            return primaryKeyPaths.map {
+                guard let wrapper = self[keyPath: $0] as? any ColumnWrapper else { fatalError("Cannot access @BlackbirdColumn wrapper from primaryKey") }
+                return AnyHashable(wrapper.value)
+            }
+        } else {
+            let mirror = Mirror(reflecting: self)
+            for child in mirror.children {
+                if child.label == "id", let value = child.value as? any Hashable {
+                    return [AnyHashable(value)]
+                }
+            }
+            fatalError("\(String(describing: Self.self)): Cannot detect primary-key value for Identifiable. Specify a primaryKey.")
         }
     }
     
