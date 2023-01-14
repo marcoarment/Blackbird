@@ -93,7 +93,13 @@ internal struct BlackbirdSQLiteSingleValueEncodingContainer: SingleValueEncoding
         storage[""] = .integer(Int64(value))
     }
     
-    mutating func encode<T>(_ value: T) throws where T : Encodable { fatalError("unsupported") }
+    mutating func encode<T>(_ value: T) throws where T : Encodable {
+        if      let intEnum = value as? any BlackbirdIntegerEnum   { storage[""] = .integer(intEnum.rawValue.unifiedRepresentation()) }
+        else if let stringEnum = value as? any BlackbirdStringEnum { storage[""] = .text(stringEnum.rawValue.unifiedRepresentation()) }
+        else {
+            fatalError("unsupported")
+        }
+    }
 }
 
 internal struct BlackbirdSQLiteKeyedEncodingContainer<K: CodingKey>: KeyedEncodingContainerProtocol {
@@ -211,9 +217,48 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
     func decode(_ type: UInt64.Type) throws -> UInt64 { UInt64((try value()).int64Value ?? 0) }
 
     func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
-        if T.self == Data.self { return ((try value()).dataValue ?? Data()) as! T }
-        if T.self == URL.self, let urlStr = (try value()).stringValue, let url = URL(string: urlStr) { return url as! T }
+        let value = try value()
+        if T.self == Data.self { return (value.dataValue ?? Data()) as! T }
+        if T.self == URL.self, let urlStr = value.stringValue, let url = URL(string: urlStr) { return url as! T }
+        if T.self == Date.self { return Date(timeIntervalSince1970: value.doubleValue ?? 0) as! T }
+
+        if let eT = T.self as? any BlackbirdIntegerOptionalEnum.Type, value.int64Value == nil {
+            return (try decodeNilRepresentable(eT) as? T)!
+        }
+
+        if let eT = T.self as? any BlackbirdStringOptionalEnum.Type, value.stringValue == nil {
+            return (try decodeNilRepresentable(eT) as? T)!
+        }
+
+        if let eT = T.self as? any BlackbirdIntegerEnum.Type {
+            let rawValue = value.int64Value ?? 0
+            let integerEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue)
+            return (integerEnum as? T)!
+        }
+
+        if let eT = T.self as? any BlackbirdStringEnum.Type {
+            let rawValue = value.stringValue ?? ""
+            let stringEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue)
+            return (stringEnum as? T)!
+        }
+
         return try T(from: BlackbirdSQLiteDecoder(row, codingPath: codingPath))
+    }
+
+    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: Int64) throws -> T where T: BlackbirdIntegerEnum {
+        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))!
+    }
+
+    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: String) throws -> T where T: BlackbirdStringEnum {
+        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))!
+    }
+
+    func decodeNilRepresentable<T>(_ type: T.Type) throws -> T where T: BlackbirdIntegerOptionalEnum {
+        T.nilInstance()
+    }
+
+    func decodeNilRepresentable<T>(_ type: T.Type) throws -> T where T: BlackbirdStringOptionalEnum {
+        T.nilInstance()
     }
 }
 

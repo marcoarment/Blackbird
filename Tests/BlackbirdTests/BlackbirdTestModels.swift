@@ -72,6 +72,45 @@ struct TypeTest: BlackbirdModel {
 
     @BlackbirdColumn var typeDataNull: Data?
     @BlackbirdColumn var typeDataNotNull: Data
+    
+    enum RepresentableIntEnum: Int, BlackbirdIntegerEnum {
+        case zero = 0
+        case one = 1
+        case two = 2
+    }
+    @BlackbirdColumn var typeIntEnum: RepresentableIntEnum
+    @BlackbirdColumn var typeIntEnumNull: RepresentableIntEnum?
+    @BlackbirdColumn var typeIntEnumNullWithValue: RepresentableIntEnum?
+
+    enum RepresentableStringEnum: String, BlackbirdStringEnum {
+        case empty = ""
+        case zero = "zero"
+        case one = "one"
+        case two = "two"
+    }
+    @BlackbirdColumn var typeStringEnum: RepresentableStringEnum
+    @BlackbirdColumn var typeStringEnumNull: RepresentableStringEnum?
+    @BlackbirdColumn var typeStringEnumNullWithValue: RepresentableStringEnum?
+
+    enum RepresentableIntNonZero: Int, BlackbirdIntegerEnum {
+        case one = 1
+        case two = 2
+    }
+    @BlackbirdColumn var typeIntNonZeroEnumNull: RepresentableIntNonZero?
+    @BlackbirdColumn var typeIntNonZeroEnumNullWithValue: RepresentableIntNonZero?
+
+    enum RepresentableStringNonEmpty: String, BlackbirdStringEnum {
+        case one = "one"
+        case two = "two"
+    }
+    @BlackbirdColumn var typeStringNonEmptyEnumNull: RepresentableStringNonEmpty?
+    @BlackbirdColumn var typeStringNonEmptyEnumNullWithValue: RepresentableStringNonEmpty?
+    
+    @BlackbirdColumn var typeURLNull: URL?
+    @BlackbirdColumn var typeURLNotNull: URL
+
+    @BlackbirdColumn var typeDateNull: Date?
+    @BlackbirdColumn var typeDateNotNull: Date
 }
 
 struct MulticolumnPrimaryKeyTest: BlackbirdModel {

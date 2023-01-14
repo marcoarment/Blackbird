@@ -57,26 +57,15 @@ public class Blackbird {
         public static func fromAny(_ value: Sendable?) throws -> Value {
             guard let value else { return .null }
             switch value {
-                case let v as Value:  return v
-                case _ as NSNull:     return .null
-                case let v as Bool:   return .integer(Int64(v ? 1 : 0))
-                case let v as Int:    return .integer(Int64(v))
-                case let v as Int8:   return .integer(Int64(v))
-                case let v as Int16:  return .integer(Int64(v))
-                case let v as Int32:  return .integer(Int64(v))
-                case let v as Int64:  return .integer(v)
-                case let v as UInt:   return .integer(Int64(v))
-                case let v as UInt8:  return .integer(Int64(v))
-                case let v as UInt16: return .integer(Int64(v))
-                case let v as UInt32: return .integer(Int64(v))
-                case let v as Double: return .double(v)
-                case let v as Float:  return .double(Double(v))
-                case let v as String: return .text(v)
+                case _ as NSNull: return .null
+                case let v as Value: return v
                 case let v as any StringProtocol: return .text(String(v))
-                case let v as Data:   return .data(v)
-                case let v as Date:   return .double(v.timeIntervalSince1970)
-                case let v as URL:    return .text(v.absoluteString)
-
+                case let v as any BlackbirdStorableAsInteger: return .integer(v.unifiedRepresentation())
+                case let v as any BlackbirdStorableAsDouble: return .double(v.unifiedRepresentation())
+                case let v as any BlackbirdStorableAsText: return .text(v.unifiedRepresentation())
+                case let v as any BlackbirdStorableAsData: return .data(v.unifiedRepresentation())
+                case let v as any BlackbirdIntegerEnum: return .integer(v.rawValue.unifiedRepresentation())
+                case let v as any BlackbirdStringEnum: return .text(v.rawValue.unifiedRepresentation())
                 default: throw Error.cannotConvertToValue(value)
             }
         }

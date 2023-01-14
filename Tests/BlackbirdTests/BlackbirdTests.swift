@@ -86,10 +86,10 @@ final class BlackbirdTestTests: XCTestCase {
         XCTAssert((try Blackbird.Value.fromAny(Int16(12345))) == .integer(12345))
         XCTAssert((try Blackbird.Value.fromAny(Int32(123456))) == i)
         XCTAssert((try Blackbird.Value.fromAny(Int64(123456))) == i)
-        XCTAssert((try Blackbird.Value.fromAny(UInt(123456))) == i)
         XCTAssert((try Blackbird.Value.fromAny(UInt8(123))) == .integer(123))
         XCTAssert((try Blackbird.Value.fromAny(UInt16(12345))) == .integer(12345))
         XCTAssert((try Blackbird.Value.fromAny(UInt32(123456))) == i)
+        XCTAssertThrowsError(try Blackbird.Value.fromAny(UInt(123456)))
         XCTAssertThrowsError(try Blackbird.Value.fromAny(UInt64(123456)))
         XCTAssert((try Blackbird.Value.fromAny(false)) == .integer(0))
         XCTAssert((try Blackbird.Value.fromAny(true)) == .integer(1))
@@ -174,7 +174,9 @@ final class BlackbirdTestTests: XCTestCase {
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
         try await TypeTest.resolveSchema(in: db)
         
-        let tt = TypeTest(id: Int64.max, typeIntNull: nil, typeIntNotNull: Int64.min, typeTextNull: nil, typeTextNotNull: "textNotNull!", typeDoubleNull: nil, typeDoubleNotNull: Double.pi, typeDataNull: nil, typeDataNotNull: "dataNotNull!".data(using: .utf8)!)
+        let now = Date()
+        
+        let tt = TypeTest(id: Int64.max, typeIntNull: nil, typeIntNotNull: Int64.min, typeTextNull: nil, typeTextNotNull: "textNotNull!", typeDoubleNull: nil, typeDoubleNotNull: Double.pi, typeDataNull: nil, typeDataNotNull: "dataNotNull!".data(using: .utf8)!, typeIntEnum: .two, typeIntEnumNullWithValue: .one, typeStringEnum: .one, typeStringEnumNullWithValue: .two, typeIntNonZeroEnumNullWithValue: .two, typeStringNonEmptyEnumNullWithValue: .two, typeURLNull: nil, typeURLNotNull: URL(string: "https://marco.org/")!, typeDateNull: nil, typeDateNotNull: now)
         try await tt.write(to: db)
         
         let read = try await TypeTest.read(from: db, id: Int64.max)
@@ -188,6 +190,34 @@ final class BlackbirdTestTests: XCTestCase {
         XCTAssert(read!.typeDoubleNotNull == Double.pi)
         XCTAssert(read!.typeDataNull == nil)
         XCTAssert(read!.typeDataNotNull == "dataNotNull!".data(using: .utf8)!)
+        XCTAssert(read!.typeIntEnum == .two)
+        XCTAssert(read!.typeIntEnumNull == nil)
+        XCTAssert(read!.typeIntEnumNullWithValue == .one)
+        XCTAssert(read!.typeStringEnum == .one)
+        XCTAssert(read!.typeStringEnumNull == nil)
+        XCTAssert(read!.typeStringEnumNullWithValue == .two)
+        XCTAssert(read!.typeIntNonZeroEnumNull == nil)
+        XCTAssert(read!.typeIntNonZeroEnumNullWithValue == .two)
+        XCTAssert(read!.typeStringNonEmptyEnumNull == nil)
+        XCTAssert(read!.typeStringNonEmptyEnumNullWithValue == .two)
+        XCTAssert(read!.typeURLNull == nil)
+        XCTAssert(read!.typeURLNotNull == URL(string: "https://marco.org/")!)
+        XCTAssert(read!.typeDateNull == nil)
+        XCTAssert(read!.typeDateNotNull.timeIntervalSince1970 == now.timeIntervalSince1970)
+        
+        let results1 = try await TypeTest.read(from: db, where: "typeIntEnum = ?", TypeTest.RepresentableIntEnum.one)
+        XCTAssert(results1.count == 0)
+
+        let results2 = try await TypeTest.read(from: db, where: "typeIntEnum = ?", TypeTest.RepresentableIntEnum.two)
+        XCTAssert(results2.count == 1)
+        XCTAssert(results2.first!.id == Int64.max)
+
+        let results3 = try await TypeTest.read(from: db, where: "typeStringEnum = ?", TypeTest.RepresentableStringEnum.two)
+        XCTAssert(results3.count == 0)
+
+        let results4 = try await TypeTest.read(from: db, where: "typeStringEnum = ?", TypeTest.RepresentableStringEnum.one)
+        XCTAssert(results4.count == 1)
+        XCTAssert(results4.first!.id == Int64.max)
     }
 
     func testJSONSerialization() async throws {
