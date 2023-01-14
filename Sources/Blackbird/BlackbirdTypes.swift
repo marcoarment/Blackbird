@@ -132,10 +132,10 @@ extension UInt32: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
 // MARK: - Enums, hacks for optionals
 
 /// Declares an enum as compatible with Blackbird column storage, with a raw type of `String` or `URL`.
-public protocol BlackbirdStringEnum: RawRepresentable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsText { }
+public protocol BlackbirdStringEnum: RawRepresentable, CaseIterable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsText { }
 
 /// Declares an enum as compatible with Blackbird column storage, with a Blackbird-compatible raw integer type such as `Int`.
-public protocol BlackbirdIntegerEnum: RawRepresentable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsInteger {
+public protocol BlackbirdIntegerEnum: RawRepresentable, CaseIterable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsInteger {
     associatedtype RawValue
     static func unifiedRawValue(from unifiedRepresentation: Int64) -> RawValue
 }
@@ -155,9 +155,14 @@ extension Optional: RawRepresentable where Wrapped: RawRepresentable {
     public var rawValue: Wrapped.RawValue { fatalError() }
 }
 
+extension Optional: CaseIterable where Wrapped: CaseIterable {
+    public static var allCases: [Optional<Wrapped>] { Wrapped.allCases.map { Optional<Wrapped>($0) } }
+}
+
 internal protocol BlackbirdIntegerOptionalEnum {
     static func nilInstance() -> Self
 }
+
 extension Optional: BlackbirdIntegerEnum, BlackbirdIntegerOptionalEnum where Wrapped: BlackbirdIntegerEnum {
     static func nilInstance() -> Self { .none }
 }

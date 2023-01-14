@@ -176,7 +176,7 @@ final class BlackbirdTestTests: XCTestCase {
         
         let now = Date()
         
-        let tt = TypeTest(id: Int64.max, typeIntNull: nil, typeIntNotNull: Int64.min, typeTextNull: nil, typeTextNotNull: "textNotNull!", typeDoubleNull: nil, typeDoubleNotNull: Double.pi, typeDataNull: nil, typeDataNotNull: "dataNotNull!".data(using: .utf8)!, typeIntEnum: .two, typeIntEnumNullWithValue: .one, typeStringEnum: .one, typeStringEnumNullWithValue: .two, typeIntNonZeroEnumNullWithValue: .two, typeStringNonEmptyEnumNullWithValue: .two, typeURLNull: nil, typeURLNotNull: URL(string: "https://marco.org/")!, typeDateNull: nil, typeDateNotNull: now)
+        let tt = TypeTest(id: Int64.max, typeIntNull: nil, typeIntNotNull: Int64.min, typeTextNull: nil, typeTextNotNull: "textNotNull!", typeDoubleNull: nil, typeDoubleNotNull: Double.pi, typeDataNull: nil, typeDataNotNull: "dataNotNull!".data(using: .utf8)!, typeIntEnum: .two, typeIntEnumNullWithValue: .one, typeStringEnum: .one, typeStringEnumNullWithValue: .two, typeIntNonZeroEnum: .two, typeIntNonZeroEnumNullWithValue: .two, typeStringNonEmptyEnum: .one, typeStringNonEmptyEnumNullWithValue: .two, typeURLNull: nil, typeURLNotNull: URL(string: "https://marco.org/")!, typeDateNull: nil, typeDateNotNull: now)
         try await tt.write(to: db)
         
         let read = try await TypeTest.read(from: db, id: Int64.max)
@@ -196,8 +196,12 @@ final class BlackbirdTestTests: XCTestCase {
         XCTAssert(read!.typeStringEnum == .one)
         XCTAssert(read!.typeStringEnumNull == nil)
         XCTAssert(read!.typeStringEnumNullWithValue == .two)
+        XCTAssert(read!.typeIntNonZeroEnum == .two)
+        XCTAssert(read!.typeIntNonZeroEnumWithDefault == .one)
         XCTAssert(read!.typeIntNonZeroEnumNull == nil)
         XCTAssert(read!.typeIntNonZeroEnumNullWithValue == .two)
+        XCTAssert(read!.typeStringNonEmptyEnum == .one)
+        XCTAssert(read!.typeStringNonEmptyEnumWithDefault == .two)
         XCTAssert(read!.typeStringNonEmptyEnumNull == nil)
         XCTAssert(read!.typeStringNonEmptyEnumNullWithValue == .two)
         XCTAssert(read!.typeURLNull == nil)

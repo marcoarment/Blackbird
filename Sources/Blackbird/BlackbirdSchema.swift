@@ -497,6 +497,7 @@ fileprivate struct EmptyKeyedDecodingContainer<Key: CodingKey>: KeyedDecodingCon
     func decode<T>(_ type: T.Type, forKey key: Key) throws -> T where T: Decodable {
         if T.self == URL.self { return URL(string: "file:///") as! T }
         if T.self == Data.self { return Data() as! T }
+        if let iterableT = T.self as? any CaseIterable.Type, let first = (iterableT.allCases as any Collection).first { return first as! T }
         return try T(from: EmptyDecoder())
     }
     func nestedUnkeyedContainer(forKey key: Key) throws -> UnkeyedDecodingContainer { EmptyUnkeyedDecodingContainer() }
@@ -528,6 +529,7 @@ fileprivate struct EmptySingleValueDecodingContainer: SingleValueDecodingContain
     func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
         if T.self == URL.self { return URL(string: "file:///") as! T }
         if T.self == Data.self { return Data() as! T }
+        if let iterableT = T.self as? any CaseIterable.Type, let first = (iterableT.allCases as any Collection).first { return first as! T }
         return try T(from: EmptyDecoder())
     }
 }
@@ -556,6 +558,7 @@ fileprivate struct EmptyUnkeyedDecodingContainer: UnkeyedDecodingContainer {
     mutating func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
         if T.self == URL.self { return URL(string: "file:///") as! T }
         if T.self == Data.self { return Data() as! T }
+        if let iterableT = T.self as? any CaseIterable.Type, let first = (iterableT.allCases as any Collection).first { return first as! T }
         return try T(from: EmptyDecoder())
     }
     

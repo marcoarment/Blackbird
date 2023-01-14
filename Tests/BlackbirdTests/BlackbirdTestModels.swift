@@ -96,6 +96,8 @@ struct TypeTest: BlackbirdModel {
         case one = 1
         case two = 2
     }
+    @BlackbirdColumn var typeIntNonZeroEnum: RepresentableIntNonZero
+    @BlackbirdColumn var typeIntNonZeroEnumWithDefault: RepresentableIntNonZero = .one
     @BlackbirdColumn var typeIntNonZeroEnumNull: RepresentableIntNonZero?
     @BlackbirdColumn var typeIntNonZeroEnumNullWithValue: RepresentableIntNonZero?
 
@@ -103,6 +105,8 @@ struct TypeTest: BlackbirdModel {
         case one = "one"
         case two = "two"
     }
+    @BlackbirdColumn var typeStringNonEmptyEnum: RepresentableStringNonEmpty
+    @BlackbirdColumn var typeStringNonEmptyEnumWithDefault: RepresentableStringNonEmpty = .two
     @BlackbirdColumn var typeStringNonEmptyEnumNull: RepresentableStringNonEmpty?
     @BlackbirdColumn var typeStringNonEmptyEnumNullWithValue: RepresentableStringNonEmpty?
     
