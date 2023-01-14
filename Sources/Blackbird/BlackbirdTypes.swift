@@ -1,7 +1,7 @@
 //
 //  BlackbirdTypes.swift
 //  Created by Marco Arment on 1/14/23.
-//  Copyright (c) 2022 Marco Arment
+//  Copyright (c) 2023 Marco Arment
 //
 //  Released under the MIT License
 //
