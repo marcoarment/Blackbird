@@ -355,6 +355,8 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     /// Synchronous version of ``query(in:_:arguments:)-6eh8j`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row]
 
+    /// Creates a new instance of the called model type with all values set to their SQLite defaults: nil for optionals, 0 for numeric types, empty string for string values, and empty data for data values.
+    static func instanceFromDefaults() throws -> Self
 
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
@@ -396,7 +398,9 @@ extension BlackbirdModel {
             fatalError("\(String(describing: Self.self)): Cannot detect primary-key value for Identifiable. Specify a primaryKey.")
         }
     }
-    
+
+    public static func instanceFromDefaults() -> Self { SchemaGenerator.instanceFromDefaults(Self.self) }
+
     public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.tableName) }
     
     public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? { return try await self.read(from: database, where: "id = ?", id).first }
