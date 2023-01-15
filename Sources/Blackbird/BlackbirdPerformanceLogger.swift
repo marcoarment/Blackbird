@@ -36,7 +36,7 @@ import OSLog
 /// When Instruments starts pick the Logging profiling template then the Record button to start the profiling session.
 /// The `os_log` and `os_signpost` rows will fill up with data captured from the test being profile. You can expand those
 /// to pick the specific `subsystem` and `category` the `PerformanceLogger` was configured to use.
-/// Above the details pain at the bottom along the left hand side of the window there is a popup control labeled either `List`
+/// Above the details pane at the bottom along the left hand side of the window there is a popup control labeled either `List`
 /// or `Summary`. By picking `Summary: Intervals` you can see how many of each measured interval took place, the
 /// total execution time, the average execution time, etc.
 ///
