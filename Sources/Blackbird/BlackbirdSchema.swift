@@ -326,27 +326,25 @@ internal protocol ColumnWrapper: WrappedType {
     var internalNameInSchemaGenerator: Blackbird.Locked<String?> { get }
 }
 
-
 @propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, Sendable, Codable where T: BlackbirdColumnWrappable {
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
     
-    internal final class State<T> {
-        var value: T
+    private var _value: T
+    internal final class ColumnState<T>: @unchecked Sendable /* unchecked due to external locking in all uses */ {
         var hasChanged: Bool
         weak var lastUsedDatabase: Blackbird.Database?
         
-        init(value: T, hasChanged: Bool, lastUsedDatabase: Blackbird.Database? = nil) {
-            self.value = value
+        init(hasChanged: Bool, lastUsedDatabase: Blackbird.Database? = nil) {
             self.hasChanged = hasChanged
             self.lastUsedDatabase = lastUsedDatabase
         }
     }
     
-    private let state: Blackbird.Locked<State<T>>
+    private let state: Blackbird.Locked<ColumnState<T>>
     let internalNameInSchemaGenerator = Blackbird.Locked<String?>(nil)
 
     public var value: T {
-        get { state.value.value }
+        get { state.withLock { _ in self._value } }
         set { self.wrappedValue = newValue }
     }
 
@@ -354,11 +352,11 @@ internal protocol ColumnWrapper: WrappedType {
     static internal func schemaGeneratorWrappedType() -> Any.Type { T.self }
 
     public var wrappedValue: T {
-        get { state.value.value }
+        get { state.withLock { _ in self._value } }
         set {
             state.withLock { state in
-                guard state.value != newValue else { return }
-                state.value = newValue
+                guard self._value != newValue else { return }
+                self._value = newValue
                 state.hasChanged = true
             }
         }
@@ -379,23 +377,24 @@ internal protocol ColumnWrapper: WrappedType {
     }
 
     public init(wrappedValue: T) {
-        state = Blackbird.Locked(State(value: wrappedValue, hasChanged: true, lastUsedDatabase: nil))
+        _value = wrappedValue
+        state = Blackbird.Locked(ColumnState(hasChanged: true, lastUsedDatabase: nil))
     }
     
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let value = try container.decode(T.self)
-        
+        _value = value
         if let sqliteDecoder = decoder as? BlackbirdSQLiteDecoder {
-            state = Blackbird.Locked(State(value: value, hasChanged: false, lastUsedDatabase: sqliteDecoder.database))
+            state = Blackbird.Locked(ColumnState(hasChanged: false, lastUsedDatabase: sqliteDecoder.database))
         } else {
-            state = Blackbird.Locked(State(value: value, hasChanged: true, lastUsedDatabase: nil))
+            state = Blackbird.Locked(ColumnState(hasChanged: true, lastUsedDatabase: nil))
         }
     }
     
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(state.value.value)
+        try container.encode(self.value)
     }
 }
 
@@ -490,8 +489,19 @@ internal final class SchemaGenerator: Sendable {
 }
 
 // MARK: - Accessing wrapped types of optionals and column wrappers
-fileprivate protocol OptionalProtocol { }
-extension Optional: OptionalProtocol { }
+internal protocol OptionalProtocol {
+    var wrappedOptionalValue: Any? { get }
+}
+extension Optional: OptionalProtocol {
+    var wrappedOptionalValue: Any? {
+        get {
+            switch self {
+                case .some(let w): return w
+                default: return nil
+            }
+        }
+    }
+}
 
 internal protocol WrappedType {
     static func schemaGeneratorWrappedType() -> Any.Type

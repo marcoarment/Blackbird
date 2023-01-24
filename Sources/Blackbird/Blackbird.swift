@@ -50,14 +50,14 @@ public class Blackbird {
         case data(Data)
 
         public enum Error: Swift.Error {
-            case cannotConvertToValue(Sendable)
+            case cannotConvertToValue
         }
 
         public func hash(into hasher: inout Hasher) {
             hasher.combine(sqliteLiteral())
         }
         
-        public static func fromAny(_ value: Sendable?) throws -> Value {
+        public static func fromAny(_ value: Any?) throws -> Value {
             guard let value else { return .null }
             switch value {
                 case _ as NSNull: return .null
@@ -69,7 +69,7 @@ public class Blackbird {
                 case let v as any BlackbirdStorableAsData: return .data(v.unifiedRepresentation())
                 case let v as any BlackbirdIntegerEnum: return .integer(v.rawValue.unifiedRepresentation())
                 case let v as any BlackbirdStringEnum: return .text(v.rawValue.unifiedRepresentation())
-                default: throw Error.cannotConvertToValue(value)
+                default: throw Error.cannotConvertToValue
             }
         }
 

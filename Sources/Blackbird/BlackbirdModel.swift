@@ -355,6 +355,9 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     /// Creates a new instance of the called model type with all values set to their SQLite defaults: nil for optionals, 0 for numeric types, empty string for string values, and empty data for data values.
     static func instanceFromDefaults() throws -> Self
     
+    /// The primary-key values of the current instance, as an array (to support multi-column primary keys).
+    func primaryKeyValues() throws -> [Blackbird.Value]
+    
     /// The set of column names, as strings, that have changed since its last save to the specified database.
     ///
     /// This function errs toward over-reporting. If the instance was created by other means and was not read from a database, or it was read from a different database, it will return the names of all columns.
@@ -550,25 +553,28 @@ extension BlackbirdModel {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
     }
     
-    private func insertQueryValues(_ table: Blackbird.Table) throws -> (sql: String, values: [Sendable], primaryKeyValues: [Blackbird.Value]?) {
-        let table = Self.table
-
-        let encoder = BlackbirdSQLiteEncoder()
-        try self.encode(to: encoder)
-        let encodedValues = encoder.sqliteArguments
-        let primaryKeyValues = table.primaryKeys.map { encodedValues[$0.name]! }
-        
-        var columnNames: [String] = []
-        var placeholders: [String] = []
-        var values: [Blackbird.Value] = []
-        for (key, value) in encodedValues.filter({ table.columnNames.contains($0.key) }) {
-            columnNames.append(key)
-            placeholders.append("?")
-            values.append(value)
+    public func primaryKeyValues() throws -> [Blackbird.Value] {
+        var valuesByColumnName: [String: Blackbird.Value] = [:]
+        try enumerateColumnValues { column, name, value in
+            valuesByColumnName[name] = value
         }
+        return Self.table.primaryKeys.map { valuesByColumnName[$0.name]! }
+    }
+    
+    private func enumerateColumnValues(_ action: ((_ column: any ColumnWrapper, _ name: String, _ value: Blackbird.Value) -> Void)) throws {
+        for (label, child) in Mirror(reflecting: self).children {
+            guard var label, let column = child as? any ColumnWrapper else { continue }
+            label = label.removingLeadingUnderscore()
 
-        let sql = "REPLACE INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
-        return (sql: sql, values: values, primaryKeyValues: primaryKeyValues)
+            let value: Blackbird.Value
+            if let optional = column.value as? OptionalProtocol {
+                value = try Blackbird.Value.fromAny(optional.wrappedOptionalValue)
+            } else {
+                value = try Blackbird.Value.fromAny(column.value)
+            }
+            
+            action(column, label, value)
+        }
     }
     
     public func write(to database: Blackbird.Database) async throws {
@@ -579,19 +585,32 @@ extension BlackbirdModel {
         let table = Self.table
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
-        
+
+        var columnNames: [String] = []
+        var placeholders: [String] = []
+        var values: [Blackbird.Value] = []
+        var valuesByColumnName: [String: Blackbird.Value] = [:]
+
         var changedColumnNames = Blackbird.ColumnNames()
         var changedColumns: [any ColumnWrapper] = []
-        for (label, child) in Mirror(reflecting: self).children {
-            guard var label, let column = child as? any ColumnWrapper, column.hasChanged(in: database) else { continue }
-            label = label.removingLeadingUnderscore()
-            changedColumnNames.insert(label)
-            changedColumns.append(column)
+
+        try enumerateColumnValues { column, name, value in
+            values.append(value)
+            valuesByColumnName[name] = value
+            columnNames.append(name)
+            placeholders.append("?")
+
+            if column.hasChanged(in: database) {
+                changedColumnNames.insert(name)
+                changedColumns.append(column)
+            }
         }
         
         if changedColumns.isEmpty { return }
 
-        let (sql, values, primaryKeyValues) = try insertQueryValues(table)
+        let primaryKeyValues = table.primaryKeys.map { valuesByColumnName[$0.name]! }
+        let sql = "REPLACE INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
+
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
@@ -610,17 +629,8 @@ extension BlackbirdModel {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
 
-        let encoder = BlackbirdSQLiteEncoder()
-        try self.encode(to: encoder)
-        let sqliteColumnValues = encoder.sqliteArguments
-
-        var andClauses: [String] = []
-        var values: [Blackbird.Value] = []
-        for column in table.primaryKeys {
-            andClauses.append("`\(column.name)` = ?")
-            let value = sqliteColumnValues[column.name]!
-            values.append(value)
-        }
+        let values = try self.primaryKeyValues()
+        let andClauses: [String] = table.primaryKeys.map { "`\($0.name)` = ?" }
         
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {

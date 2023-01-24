@@ -182,10 +182,7 @@ extension Blackbird {
         queryUpdater = Blackbird.ModelUpdater<T>(initialValue: instance)
 
         do {
-            let encoder = BlackbirdSQLiteEncoder()
-            try instance.encode(to: encoder)
-            let encodedValues = encoder.sqliteArguments
-            let primaryKeyValues = T.table.primaryKeys.map { encodedValues[$0.name]! }
+            let primaryKeyValues = try instance.primaryKeyValues()
             generator = { try await T.read(from: $0, multicolumnPrimaryKey: primaryKeyValues) }
         } catch {
             print("[Blackbird.BlackbirdLiveModel<\(String(describing: T.self))>] ⚠️ Error getting primary key values: \(error.localizedDescription)")
