@@ -171,25 +171,29 @@ internal class BlackbirdSQLiteDecoder: Decoder {
     public var codingPath: [CodingKey] = []
     public var userInfo: [CodingUserInfoKey: Any] = [:]
 
+    let database: Blackbird.Database
     let row: Blackbird.Row
-    init(_ row: Blackbird.Row, codingPath: [CodingKey] = []) {
+    init(database: Blackbird.Database, row: Blackbird.Row, codingPath: [CodingKey] = []) {
+        self.database = database
         self.row = row
         self.codingPath = codingPath
     }
 
     public func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey {
-        return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(codingPath: codingPath, row: row))
+        return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(codingPath: codingPath, database: database, row: row))
     }
     public func unkeyedContainer() throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
-    public func singleValueContainer() throws -> SingleValueDecodingContainer { BlackbirdSQLiteSingleValueDecodingContainer(codingPath: codingPath, row: row) }
+    public func singleValueContainer() throws -> SingleValueDecodingContainer { BlackbirdSQLiteSingleValueDecodingContainer(codingPath: codingPath, database: database, row: row) }
 }
 
 fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecodingContainer {
     var codingPath: [CodingKey] = []
+    let database: Blackbird.Database
     var row: Blackbird.Row
     
-    init(codingPath: [CodingKey], row: Blackbird.Row) {
+    init(codingPath: [CodingKey], database: Blackbird.Database, row: Blackbird.Row) {
         self.codingPath = codingPath
+        self.database = database
         self.row = row
     }
     
@@ -242,7 +246,7 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
             return (stringEnum as? T)!
         }
 
-        return try T(from: BlackbirdSQLiteDecoder(row, codingPath: codingPath))
+        return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: codingPath))
     }
 
     func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: Int64) throws -> T where T: BlackbirdIntegerEnum {
@@ -265,9 +269,11 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
 fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDecodingContainerProtocol {
     typealias Key = K
     let codingPath: [CodingKey]
+    let database: Blackbird.Database
     var row: Blackbird.Row
     
-    init(codingPath: [CodingKey] = [], row: Blackbird.Row) {
+    init(codingPath: [CodingKey] = [], database: Blackbird.Database, row: Blackbird.Row) {
+        self.database = database
         self.row = row
         self.codingPath = codingPath
     }
@@ -314,7 +320,7 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
         
         var newPath = codingPath
         newPath.append(key)
-        return try T(from: BlackbirdSQLiteDecoder(row, codingPath: newPath))
+        return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: newPath))
     }
     
     func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: K) throws -> KeyedDecodingContainer<NestedKey> where NestedKey : CodingKey { fatalError("unsupported") }

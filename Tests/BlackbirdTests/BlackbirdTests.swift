@@ -459,52 +459,61 @@ final class BlackbirdTestTests: XCTestCase {
     
     func testColumnChanges() async throws {
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        let db2 = try Blackbird.Database.inMemoryDatabase()
         
         var t = TestModel(id: TestData.randomInt64(), title: "Original Title", url: TestData.randomURL)
-        XCTAssert(t.$id.hasChanged)
-        XCTAssert(t.$title.hasChanged)
-        XCTAssert(t.$url.hasChanged)
-        XCTAssert(t.changedColumns == Blackbird.ColumnNames(["id", "title", "url"]))
+        XCTAssert(t.$id.hasChanged(in: db))
+        XCTAssert(t.$title.hasChanged(in: db))
+        XCTAssert(t.$url.hasChanged(in: db))
+        XCTAssert(t.changedColumns(in: db) == Blackbird.ColumnNames(["id", "title", "url"]))
+        XCTAssert(t.$id.hasChanged(in: db2))
+        XCTAssert(t.$title.hasChanged(in: db2))
+        XCTAssert(t.$url.hasChanged(in: db2))
+        XCTAssert(t.changedColumns(in: db2) == Blackbird.ColumnNames(["id", "title", "url"]))
 
         try await t.write(to: db)
 
-        XCTAssert(!t.$id.hasChanged)
-        XCTAssert(!t.$title.hasChanged)
-        XCTAssert(!t.$url.hasChanged)
-        XCTAssert(t.changedColumns.isEmpty)
+        XCTAssert(!t.$id.hasChanged(in: db))
+        XCTAssert(!t.$title.hasChanged(in: db))
+        XCTAssert(!t.$url.hasChanged(in: db))
+        XCTAssert(t.changedColumns(in: db).isEmpty)
+        XCTAssert(t.$id.hasChanged(in: db2))
+        XCTAssert(t.$title.hasChanged(in: db2))
+        XCTAssert(t.$url.hasChanged(in: db2))
+        XCTAssert(t.changedColumns(in: db2) == Blackbird.ColumnNames(["id", "title", "url"]))
         
         t.title = "Updated Title"
 
-        XCTAssert(!t.$id.hasChanged)
-        XCTAssert(t.$title.hasChanged)
-        XCTAssert(!t.$url.hasChanged)
-        XCTAssert(t.changedColumns == Blackbird.ColumnNames(["title"]))
+        XCTAssert(!t.$id.hasChanged(in: db))
+        XCTAssert(t.$title.hasChanged(in: db))
+        XCTAssert(!t.$url.hasChanged(in: db))
+        XCTAssert(t.changedColumns(in: db) == Blackbird.ColumnNames(["title"]))
 
         try await t.write(to: db)
 
-        XCTAssert(!t.$id.hasChanged)
-        XCTAssert(!t.$title.hasChanged)
-        XCTAssert(!t.$url.hasChanged)
-        XCTAssert(t.changedColumns.isEmpty)
+        XCTAssert(!t.$id.hasChanged(in: db))
+        XCTAssert(!t.$title.hasChanged(in: db))
+        XCTAssert(!t.$url.hasChanged(in: db))
+        XCTAssert(t.changedColumns(in: db).isEmpty)
         
         var t2 = try await TestModel.read(from: db, id: t.id)!
-        XCTAssert(!t2.$id.hasChanged)
-        XCTAssert(!t2.$title.hasChanged)
-        XCTAssert(!t2.$url.hasChanged)
-        XCTAssert(t2.changedColumns.isEmpty)
+        XCTAssert(!t2.$id.hasChanged(in: db))
+        XCTAssert(!t2.$title.hasChanged(in: db))
+        XCTAssert(!t2.$url.hasChanged(in: db))
+        XCTAssert(t2.changedColumns(in: db).isEmpty)
         
         t2.title = "Third Title"
-        XCTAssert(!t2.$id.hasChanged)
-        XCTAssert(t2.$title.hasChanged)
-        XCTAssert(!t2.$url.hasChanged)
-        XCTAssert(t2.changedColumns == Blackbird.ColumnNames(["title"]))
+        XCTAssert(!t2.$id.hasChanged(in: db))
+        XCTAssert(t2.$title.hasChanged(in: db))
+        XCTAssert(!t2.$url.hasChanged(in: db))
+        XCTAssert(t2.changedColumns(in: db) == Blackbird.ColumnNames(["title"]))
         
         try await t2.write(to: db)
 
-        XCTAssert(!t.$id.hasChanged)
-        XCTAssert(!t.$title.hasChanged)
-        XCTAssert(!t.$url.hasChanged)
-        XCTAssert(t.changedColumns.isEmpty)
+        XCTAssert(!t.$id.hasChanged(in: db))
+        XCTAssert(!t.$title.hasChanged(in: db))
+        XCTAssert(!t.$url.hasChanged(in: db))
+        XCTAssert(t.changedColumns(in: db).isEmpty)
     }
     
     var _testChangeNotificationsExpectedChangedKeys: Blackbird.PrimaryKeyValues? = nil

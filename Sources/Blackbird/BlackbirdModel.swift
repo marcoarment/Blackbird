@@ -125,30 +125,6 @@ extension PartialKeyPath: @unchecked Sendable { }
 /// }
 /// ```
 ///
-/// ## Using multiple databases
-///
-/// `BlackbirdModel` **types** can be safely used between multiple `BlackbirdDatabase` instances, but individual `BlackbirdModel` **instances** should not.
-///
-/// For example:
-///
-/// ```swift
-/// let db1 = try Blackbird.Database(path: "/tmp/test1.sqlite")
-/// let db2 = try Blackbird.Database(path: "/tmp/test2.sqlite")
-///
-/// // This is OK: separate instances for each database
-/// let post1 = Post(id: 1, title: "What I had for breakfast in db1")
-/// try await post1.write(to: db1)
-/// let post2 = Post(id: 1, title: "What I had for breakfast in db2")
-/// try await post2.write(to: db2)
-///
-/// // This is not safe: saving the same instance to multiple databases
-/// let post1 = Post(id: 1, title: "What I had for breakfast in both DBs")
-/// try await post1.write(to: db1)
-/// try await post1.write(to: db2)
-/// ```
-///
-/// Writing the same instance to multiple databases may result in skipped writes or incorrect reporting of which column names have changed.
-///
 /// ## Unsupported SQLite features
 ///
 /// `BlackbirdModel` assumes simple and straightforward SQLite usage.
@@ -379,8 +355,10 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     /// Creates a new instance of the called model type with all values set to their SQLite defaults: nil for optionals, 0 for numeric types, empty string for string values, and empty data for data values.
     static func instanceFromDefaults() throws -> Self
     
-    /// The set of column names, as strings, that have changed since its last save to a database.
-    var changedColumns: Blackbird.ColumnNames { get }
+    /// The set of column names, as strings, that have changed since its last save to the specified database.
+    ///
+    /// This function errs toward over-reporting. If the instance was created by other means and was not read from a database, or it was read from a different database, it will return the names of all columns.
+    func changedColumns(in database: Blackbird.Database) -> Blackbird.ColumnNames
 
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
@@ -423,13 +401,11 @@ extension BlackbirdModel {
         }
     }
 
-    public var changedColumns: Blackbird.ColumnNames {
-        get {
-            Blackbird.ColumnNames(Mirror(reflecting: self).children.compactMap { (label: String?, value: Any) in
-                guard let column = value as? any ColumnWrapper, column.hasChanged else { return nil }
-                return label?.removingLeadingUnderscore()
-            })
-        }
+    public func changedColumns(in database: Blackbird.Database) -> Blackbird.ColumnNames {
+        Blackbird.ColumnNames(Mirror(reflecting: self).children.compactMap { (label: String?, value: Any) in
+            guard let column = value as? any ColumnWrapper, column.hasChanged(in: database) else { return nil }
+            return label?.removingLeadingUnderscore()
+        })
     }
 
     public static func instanceFromDefaults() -> Self { SchemaGenerator.instanceFromDefaults(Self.self) }
@@ -494,14 +470,14 @@ extension BlackbirdModel {
 
     public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder($0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
             return try Self(from: decoder)
         }
     }
 
     public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder($0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
             return try Self(from: decoder)
         }
     }
@@ -512,14 +488,14 @@ extension BlackbirdModel {
 
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [Sendable]) throws -> [Self] {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder($0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
             return try Self(from: decoder)
         }
     }
 
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [String: Sendable]) throws -> [Self] {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder($0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
             return try Self(from: decoder)
         }
     }
@@ -531,13 +507,13 @@ extension BlackbirdModel {
 
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] {
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] {
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
@@ -549,20 +525,20 @@ extension BlackbirdModel {
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.Row] {
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
         return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row] {
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema() }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: database) }
         return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
     }
 
-    private static func validateSchema() throws -> Void {
+    private static func validateSchema(database: Blackbird.Database) throws -> Void {
         var testRow = Blackbird.Row()
         for column in table.columns { testRow[column.name] = column.mayBeNull ? .null : column.type.defaultValue() }
-        let decoder = BlackbirdSQLiteDecoder(testRow)
+        let decoder = BlackbirdSQLiteDecoder(database: database, row: testRow)
         do {
             _ = try Self(from: decoder)
         } catch {
@@ -571,7 +547,7 @@ extension BlackbirdModel {
     }
     
     public static func resolveSchema(in database: Blackbird.Database) async throws {
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
     }
     
     private func insertQueryValues(_ table: Blackbird.Table) throws -> (sql: String, values: [Sendable], primaryKeyValues: [Blackbird.Value]?) {
@@ -602,12 +578,12 @@ extension BlackbirdModel {
     public func writeIsolated(to database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
         let table = Self.table
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
         
         var changedColumnNames = Blackbird.ColumnNames()
         var changedColumns: [any ColumnWrapper] = []
         for (label, child) in Mirror(reflecting: self).children {
-            guard var label, let column = child as? any ColumnWrapper, column.hasChanged else { continue }
+            guard var label, let column = child as? any ColumnWrapper, column.hasChanged(in: database) else { continue }
             label = label.removingLeadingUnderscore()
             changedColumnNames.insert(label)
             changedColumns.append(column)
@@ -622,7 +598,7 @@ extension BlackbirdModel {
             database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValues, changedColumns: changedColumnNames)
         }
         try core.query(sql, arguments: values)
-        for column in changedColumns { column.clearHasChanged() }
+        for column in changedColumns { column.clearHasChanged(in: database) }
     }
 
     public func delete(from database: Blackbird.Database) async throws {
@@ -632,7 +608,7 @@ extension BlackbirdModel {
     public func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot delete BlackbirdModel from a read-only database") }
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
 
         let encoder = BlackbirdSQLiteEncoder()
         try self.encode(to: encoder)

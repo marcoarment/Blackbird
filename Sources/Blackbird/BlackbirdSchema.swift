@@ -321,21 +321,32 @@ extension Blackbird {
 internal protocol ColumnWrapper: WrappedType {
     associatedtype ValueType: BlackbirdColumnWrappable
     var value: ValueType { get }
-    var hasChanged: Bool { get }
-    func clearHasChanged()
+    func hasChanged(in database: Blackbird.Database) -> Bool
+    func clearHasChanged(in database: Blackbird.Database)
     var internalNameInSchemaGenerator: Blackbird.Locked<String?> { get }
 }
 
 
 @propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, Sendable, Codable where T: BlackbirdColumnWrappable {
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
-
-    private let _hasChanged: Blackbird.Locked<Bool>
+    
+    internal final class State<T> {
+        var value: T
+        var hasChanged: Bool
+        weak var lastUsedDatabase: Blackbird.Database?
+        
+        init(value: T, hasChanged: Bool, lastUsedDatabase: Blackbird.Database? = nil) {
+            self.value = value
+            self.hasChanged = hasChanged
+            self.lastUsedDatabase = lastUsedDatabase
+        }
+    }
+    
+    private let state: Blackbird.Locked<State<T>>
     let internalNameInSchemaGenerator = Blackbird.Locked<String?>(nil)
 
-    internal let _value: Blackbird.Locked<T>
     public var value: T {
-        get { _value.value }
+        get { state.value.value }
         set { self.wrappedValue = newValue }
     }
 
@@ -343,38 +354,48 @@ internal protocol ColumnWrapper: WrappedType {
     static internal func schemaGeneratorWrappedType() -> Any.Type { T.self }
 
     public var wrappedValue: T {
-        get { _value.value }
+        get { state.value.value }
         set {
-            let hasChanged = _value.withLock { value in
-                guard value != newValue else { return false }
-                value = newValue
-                return true
+            state.withLock { state in
+                guard state.value != newValue else { return }
+                state.value = newValue
+                state.hasChanged = true
             }
-            if hasChanged { _hasChanged.value = true }
         }
     }
     
-    public var hasChanged: Bool {
-        get { _hasChanged.value }
+    public func hasChanged(in database: Blackbird.Database) -> Bool {
+        state.withLock { state in
+            if state.lastUsedDatabase != database { return true }
+            return state.hasChanged
+        }
     }
     
-    internal func clearHasChanged() { _hasChanged.value = false }
+    internal func clearHasChanged(in database: Blackbird.Database) {
+        state.withLock { state in
+            state.lastUsedDatabase = database
+            state.hasChanged = false
+        }
+    }
 
     public init(wrappedValue: T) {
-        _value = Blackbird.Locked(wrappedValue)
-        _hasChanged = Blackbird.Locked(true)
+        state = Blackbird.Locked(State(value: wrappedValue, hasChanged: true, lastUsedDatabase: nil))
     }
     
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let value = try container.decode(T.self)
-        _value = Blackbird.Locked(value)
-        _hasChanged = Blackbird.Locked( !(decoder is BlackbirdSQLiteDecoder) )
+        
+        if let sqliteDecoder = decoder as? BlackbirdSQLiteDecoder {
+            state = Blackbird.Locked(State(value: value, hasChanged: false, lastUsedDatabase: sqliteDecoder.database))
+        } else {
+            state = Blackbird.Locked(State(value: value, hasChanged: true, lastUsedDatabase: nil))
+        }
     }
     
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(_value.value)
+        try container.encode(state.value.value)
     }
 }
 
