@@ -38,6 +38,9 @@ public class Blackbird {
     /// A set of primary-key values, where each is an array of values (to support multi-column primary keys).
     public typealias PrimaryKeyValues = Set<[Blackbird.Value]>
 
+    /// A set of column names.
+    public typealias ColumnNames = Set<String>
+
     /// A wrapper for SQLite's column data types.
     public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
         case null

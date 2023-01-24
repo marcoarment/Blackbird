@@ -393,8 +393,8 @@ extension Blackbird {
             database = newDatabase
             
             if let database {
-                self.changePublisher = database.changeReporter.changePublisher(for: T.table.name).sink { [weak self] changedPrimaryKeys in
-                    guard let self, Blackbird.isRelevantPrimaryKeyChange(watchedPrimaryKeys: self.watchedPrimaryKeys, changedPrimaryKeys: changedPrimaryKeys) else { return }
+                self.changePublisher = database.changeReporter.changePublisher(for: T.table.name).sink { [weak self] change in
+                    guard let self, Blackbird.isRelevantPrimaryKeyChange(watchedPrimaryKeys: self.watchedPrimaryKeys, changedPrimaryKeys: change.primaryKeys) else { return }
                     self.enqueueUpdate()
                 }
             } else {

@@ -31,9 +31,6 @@ extension PartialKeyPath: @unchecked Sendable { }
 
 /// A model protocol based on `Codable` and SQLite.
 ///
-/// ## Defining the schema
-/// Types that conform to `BlackbirdModel` must define a ``Blackbird/Table`` with database columns, indexes, and a primary key.
-///
 /// **Example:** A simple model:
 /// ```swift
 /// struct Post: BlackbirdModel {
@@ -127,6 +124,30 @@ extension PartialKeyPath: @unchecked Sendable { }
 ///     print("Post IDs changed: \(changedPrimaryKeys ?? "all of them")")
 /// }
 /// ```
+///
+/// ## Using multiple databases
+///
+/// `BlackbirdModel` **types** can be safely used between multiple `BlackbirdDatabase` instances, but individual `BlackbirdModel` **instances** should not.
+///
+/// For example:
+///
+/// ```swift
+/// let db1 = try Blackbird.Database(path: "/tmp/test1.sqlite")
+/// let db2 = try Blackbird.Database(path: "/tmp/test2.sqlite")
+///
+/// // This is OK: separate instances for each database
+/// let post1 = Post(id: 1, title: "What I had for breakfast in db1")
+/// try await post1.write(to: db1)
+/// let post2 = Post(id: 1, title: "What I had for breakfast in db2")
+/// try await post2.write(to: db2)
+///
+/// // This is not safe: saving the same instance to multiple databases
+/// let post1 = Post(id: 1, title: "What I had for breakfast in both DBs")
+/// try await post1.write(to: db1)
+/// try await post1.write(to: db2)
+/// ```
+///
+/// Writing the same instance to multiple databases may result in skipped writes or incorrect reporting of which column names have changed.
 ///
 /// ## Unsupported SQLite features
 ///
@@ -357,6 +378,9 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
 
     /// Creates a new instance of the called model type with all values set to their SQLite defaults: nil for optionals, 0 for numeric types, empty string for string values, and empty data for data values.
     static func instanceFromDefaults() throws -> Self
+    
+    /// The set of column names, as strings, that have changed since its last save to a database.
+    var changedColumns: Blackbird.ColumnNames { get }
 
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
@@ -396,6 +420,15 @@ extension BlackbirdModel {
                 }
             }
             fatalError("\(String(describing: Self.self)): Cannot detect primary-key value for Identifiable. Specify a primaryKey.")
+        }
+    }
+
+    public var changedColumns: Blackbird.ColumnNames {
+        get {
+            Blackbird.ColumnNames(Mirror(reflecting: self).children.compactMap { (label: String?, value: Any) in
+                guard let column = value as? any ColumnWrapper, column.hasChanged else { return nil }
+                return label?.removingLeadingUnderscore()
+            })
         }
     }
 
@@ -541,7 +574,7 @@ extension BlackbirdModel {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema() }
     }
     
-    private func insertQueryValues() throws -> (sql: String, values: [Sendable], primaryKeyValues: [Blackbird.Value]?) {
+    private func insertQueryValues(_ table: Blackbird.Table) throws -> (sql: String, values: [Sendable], primaryKeyValues: [Blackbird.Value]?) {
         let table = Self.table
 
         let encoder = BlackbirdSQLiteEncoder()
@@ -567,16 +600,29 @@ extension BlackbirdModel {
     }
     
     public func writeIsolated(to database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
+        let table = Self.table
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
-        try Self.table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema() }
+        
+        var changedColumnNames = Blackbird.ColumnNames()
+        var changedColumns: [any ColumnWrapper] = []
+        for (label, child) in Mirror(reflecting: self).children {
+            guard var label, let column = child as? any ColumnWrapper, column.hasChanged else { continue }
+            label = label.removingLeadingUnderscore()
+            changedColumnNames.insert(label)
+            changedColumns.append(column)
+        }
+        
+        if changedColumns.isEmpty { return }
 
-        let (sql, values, primaryKeyValues) = try insertQueryValues()
+        let (sql, values, primaryKeyValues) = try insertQueryValues(table)
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValues)
+            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValues, changedColumns: changedColumnNames)
         }
         try core.query(sql, arguments: values)
+        for column in changedColumns { column.clearHasChanged() }
     }
 
     public func delete(from database: Blackbird.Database) async throws {
@@ -603,7 +649,7 @@ extension BlackbirdModel {
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: values)
+            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: values, changedColumns: table.columnNames)
         }
         let sql = "DELETE FROM `\(Self.tableName)` WHERE \(andClauses.joined(separator: " AND "))"
         try core.query(sql, arguments: values)

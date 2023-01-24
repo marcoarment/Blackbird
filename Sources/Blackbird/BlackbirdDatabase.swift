@@ -343,7 +343,7 @@ extension Blackbird {
                 guard let ctx else { return }
                 let changeReporter = Unmanaged<ChangeReporter>.fromOpaque(ctx).takeUnretainedValue()
                 if let tableName, let tableNameStr = String(cString: tableName, encoding: .utf8) {
-                    changeReporter.reportChange(tableName: tableNameStr)
+                    changeReporter.reportChange(tableName: tableNameStr, changedColumns: nil)
                 }
             }, Unmanaged<ChangeReporter>.passUnretained(changeReporter).toOpaque())
 

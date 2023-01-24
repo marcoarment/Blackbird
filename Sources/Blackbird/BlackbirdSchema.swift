@@ -179,7 +179,7 @@ extension Blackbird {
         
         internal let name: String
         internal let columns: [Column]
-        internal let columnNames: Set<String>
+        internal let columnNames: ColumnNames
         internal let primaryKeys: [Column]
         internal let indexes: [Index]
         
@@ -319,47 +319,69 @@ extension Blackbird {
 }
 
 internal protocol ColumnWrapper: WrappedType {
-    associatedtype ValueType: Codable & Hashable & Sendable
+    associatedtype ValueType: BlackbirdColumnWrappable
     var value: ValueType { get }
-    var internalNameInSchemaGenerator: String? { get set }
+    var hasChanged: Bool { get }
+    func clearHasChanged()
+    var internalNameInSchemaGenerator: Blackbird.Locked<String?> { get }
 }
 
 
-// Keeping this one @unchecked-Sendable for now to see if locking around .value is really necessary in practice.
-// I know this is wrong and I apologize to the world as necessary.
-@propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, @unchecked Sendable, Codable where T: BlackbirdColumnWrappable {
+@propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, Sendable, Codable where T: BlackbirdColumnWrappable {
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
 
-    internal final class StringClassWrapper: @unchecked Sendable {
-        var value: String? = nil
-    }
-    
-    internal var _internalNameInSchemaGenerator = StringClassWrapper()
-    var internalNameInSchemaGenerator: String? {
-        get { _internalNameInSchemaGenerator.value }
-        set { _internalNameInSchemaGenerator.value = newValue }
-    }
+    private let _hasChanged: Blackbird.Locked<Bool>
+    let internalNameInSchemaGenerator = Blackbird.Locked<String?>(nil)
 
-    internal var value: T
+    internal let _value: Blackbird.Locked<T>
+    public var value: T {
+        get { _value.value }
+        set { self.wrappedValue = newValue }
+    }
 
     public var projectedValue: BlackbirdColumn<T> { self }
     static internal func schemaGeneratorWrappedType() -> Any.Type { T.self }
 
     public var wrappedValue: T {
-        get { value }
-        set { value = newValue }
+        get { _value.value }
+        set {
+            let hasChanged = _value.withLock { value in
+                guard value != newValue else { return false }
+                value = newValue
+                return true
+            }
+            if hasChanged { _hasChanged.value = true }
+        }
     }
+    
+    public var hasChanged: Bool {
+        get { _hasChanged.value }
+    }
+    
+    internal func clearHasChanged() { _hasChanged.value = false }
 
-    public init(wrappedValue: T) { self.value = wrappedValue }
+    public init(wrappedValue: T) {
+        _value = Blackbird.Locked(wrappedValue)
+        _hasChanged = Blackbird.Locked(true)
+    }
     
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        value = try container.decode(T.self)
+        let value = try container.decode(T.self)
+        _value = Blackbird.Locked(value)
+        _hasChanged = Blackbird.Locked( !(decoder is BlackbirdSQLiteDecoder) )
     }
     
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(value)
+        try container.encode(_value.value)
+    }
+}
+
+internal extension String {
+    func removingLeadingUnderscore() -> String {
+        guard self.hasPrefix("_"), self.count > 1, let firstCharIndex = self.indices.first else { return self }
+        return String(self.suffix(from: self.index(after: firstCharIndex)))
     }
 }
 
@@ -396,14 +418,9 @@ internal final class SchemaGenerator: Sendable {
         for child in mirror.children {
             guard var label = child.label else { continue }
 
-            if var column = child.value as? any ColumnWrapper {
-                // remove the "_" preceding internal names of property-wrapped values
-                guard label.hasPrefix("_"), label.count > 1, let firstCharIndex = label.indices.first else {
-                    fatalError("\(String(describing: T.self)).\(label): cannot parse label format, expected e.g. \"_name\"")
-                }
-                label.remove(at: firstCharIndex)
-                
-                column.internalNameInSchemaGenerator = label
+            if let column = child.value as? any ColumnWrapper {
+                label = label.removingLeadingUnderscore()
+                column.internalNameInSchemaGenerator.value = label
                 if label == "id" { hasColumNamedID = true }
 
                 var isOptional = false
@@ -434,7 +451,7 @@ internal final class SchemaGenerator: Sendable {
                 fatalError("\(String(describing: T.self)): \(messageLabel) includes a key path that is not a @BlackbirdColumn")
             }
             
-            guard let name = column.internalNameInSchemaGenerator else { fatalError("\(String(describing: T.self)): Failed to look up \(messageLabel) key-path name") }
+            guard let name = column.internalNameInSchemaGenerator.value else { fatalError("\(String(describing: T.self)): Failed to look up \(messageLabel) key-path name") }
             return name
         }
                 

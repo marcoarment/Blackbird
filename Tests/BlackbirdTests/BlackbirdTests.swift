@@ -368,7 +368,7 @@ final class BlackbirdTestTests: XCTestCase {
 
     func testSchemaChangeAddColumns() async throws {
         let id = TestData.randomInt64()
-        let title = TestData.titles.randomElement()!
+        let title = TestData.randomTitle
 
         var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
         try await SchemaChangeAddColumnsInitial(id: id, title: title).write(to: db)
@@ -389,7 +389,7 @@ final class BlackbirdTestTests: XCTestCase {
 
     func testSchemaChangeDropColumns() async throws {
         let id = TestData.randomInt64()
-        let title = TestData.titles.randomElement()!
+        let title = TestData.randomTitle
 
         var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
         try await SchemaChangeAddColumnsChanged(id: id, title: title, description: "Custom", url: TestData.randomURL, art: TestData.randomData(length: 2048)).write(to: db)
@@ -406,7 +406,7 @@ final class BlackbirdTestTests: XCTestCase {
 
     func testSchemaChangeAddIndex() async throws {
         let id = TestData.randomInt64()
-        let title = TestData.titles.randomElement()!
+        let title = TestData.randomTitle
 
         var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
         try await SchemaChangeAddIndexInitial(id: id, title: title).write(to: db)
@@ -423,7 +423,7 @@ final class BlackbirdTestTests: XCTestCase {
 
     func testSchemaChangeDropIndex() async throws {
         let id = TestData.randomInt64()
-        let title = TestData.titles.randomElement()!
+        let title = TestData.randomTitle
 
         var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
         try await SchemaChangeAddIndexChanged(id: id, title: title).write(to: db)
@@ -440,7 +440,7 @@ final class BlackbirdTestTests: XCTestCase {
 
     func testSchemaChangeRebuildTable() async throws {
         let id = TestData.randomInt64()
-        let title = TestData.titles.randomElement()!
+        let title = TestData.randomTitle
 
         var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
         try await SchemaChangeRebuildTableInitial(id: id, title: title, flags: 15).write(to: db)
@@ -457,7 +457,58 @@ final class BlackbirdTestTests: XCTestCase {
         XCTAssert(modifiedInstance!.flags == "15")
     }
     
-    var _testChangeNotificationsExpectedChangedKeys: Blackbird.PrimaryKeyValues?
+    func testColumnChanges() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        
+        var t = TestModel(id: TestData.randomInt64(), title: "Original Title", url: TestData.randomURL)
+        XCTAssert(t.$id.hasChanged)
+        XCTAssert(t.$title.hasChanged)
+        XCTAssert(t.$url.hasChanged)
+        XCTAssert(t.changedColumns == Blackbird.ColumnNames(["id", "title", "url"]))
+
+        try await t.write(to: db)
+
+        XCTAssert(!t.$id.hasChanged)
+        XCTAssert(!t.$title.hasChanged)
+        XCTAssert(!t.$url.hasChanged)
+        XCTAssert(t.changedColumns.isEmpty)
+        
+        t.title = "Updated Title"
+
+        XCTAssert(!t.$id.hasChanged)
+        XCTAssert(t.$title.hasChanged)
+        XCTAssert(!t.$url.hasChanged)
+        XCTAssert(t.changedColumns == Blackbird.ColumnNames(["title"]))
+
+        try await t.write(to: db)
+
+        XCTAssert(!t.$id.hasChanged)
+        XCTAssert(!t.$title.hasChanged)
+        XCTAssert(!t.$url.hasChanged)
+        XCTAssert(t.changedColumns.isEmpty)
+        
+        var t2 = try await TestModel.read(from: db, id: t.id)!
+        XCTAssert(!t2.$id.hasChanged)
+        XCTAssert(!t2.$title.hasChanged)
+        XCTAssert(!t2.$url.hasChanged)
+        XCTAssert(t2.changedColumns.isEmpty)
+        
+        t2.title = "Third Title"
+        XCTAssert(!t2.$id.hasChanged)
+        XCTAssert(t2.$title.hasChanged)
+        XCTAssert(!t2.$url.hasChanged)
+        XCTAssert(t2.changedColumns == Blackbird.ColumnNames(["title"]))
+        
+        try await t2.write(to: db)
+
+        XCTAssert(!t.$id.hasChanged)
+        XCTAssert(!t.$title.hasChanged)
+        XCTAssert(!t.$url.hasChanged)
+        XCTAssert(t.changedColumns.isEmpty)
+    }
+    
+    var _testChangeNotificationsExpectedChangedKeys: Blackbird.PrimaryKeyValues? = nil
+    var _testChangeNotificationsExpectedChangedColumnNames: Blackbird.ColumnNames? = nil
     var _testChangeNotificationsListeners: [AnyCancellable] = []
     var _testChangeNotificationsCallCount = 0
     func testChangeNotifications() async throws {
@@ -470,8 +521,19 @@ final class BlackbirdTestTests: XCTestCase {
             XCTAssert(false, "Change listener called for incorrect table")
         })
 
-        _testChangeNotificationsListeners.append(TestModelWithDescription.changePublisher(in: db).sink { keys in
-            XCTAssertEqual(keys, self._testChangeNotificationsExpectedChangedKeys)
+        _testChangeNotificationsListeners.append(TestModelWithDescription.changePublisher(in: db).sink { change in
+            if change.primaryKeys == nil {
+                XCTAssertNil(self._testChangeNotificationsExpectedChangedKeys)
+            } else {
+                XCTAssertEqual(self._testChangeNotificationsExpectedChangedKeys, change.primaryKeys)
+            }
+            
+            if change.columnNames == nil {
+                XCTAssertNil(self._testChangeNotificationsExpectedChangedColumnNames)
+            } else {
+                XCTAssertEqual(self._testChangeNotificationsExpectedChangedColumnNames, change.columnNames)
+            }
+
             self._testChangeNotificationsCallCount += 1
         })
 
@@ -485,6 +547,7 @@ final class BlackbirdTestTests: XCTestCase {
                 try m.writeIsolated(to: db, core: core)
             }
             self._testChangeNotificationsExpectedChangedKeys = expectedBatchedKeys
+            self._testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "url", "title", "description"])
         }
         await MainActor.run { } // blocks until after the change has been sent to the publisher
         XCTAssert(_testChangeNotificationsCallCount == 1)
@@ -493,14 +556,73 @@ final class BlackbirdTestTests: XCTestCase {
         var m = try await TestModelWithDescription.read(from: db, id: 64)!
         m.title = "Edited title!"
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(64) ]])
+        _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["title"])
         try await m.write(to: db)
         await MainActor.run { }
         XCTAssert(_testChangeNotificationsCallCount == 2)
         
         // Unspecified/whole-table change notifications
         _testChangeNotificationsExpectedChangedKeys = nil
+        _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.query(in: db, "UPDATE $T SET url = NULL")
         await MainActor.run { }
         XCTAssert(_testChangeNotificationsCallCount == 3)
+
+        // Column-name merging
+        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(31) ], [ .integer(32) ]])
+        _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["title", "description"])
+        try await db.transaction { core in
+            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 31)!
+            t1.title = "Edited title!"
+            var t2 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 32)!
+            t2.description = "Edited description!"
+            
+            try t1.writeIsolated(to: db, core: core)
+            try t2.writeIsolated(to: db, core: core)
+        }
+        await MainActor.run { }
+        XCTAssert(_testChangeNotificationsCallCount == 4)
+
+        // Merging with insertions
+        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(40) ], [ .integer(Int64(count) + 1) ]])
+        _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "title", "description", "url"])
+        try await db.transaction { core in
+            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 40)!
+            t1.title = "Edited title!"
+            try t1.writeIsolated(to: db, core: core)
+            
+            let t2 = TestModelWithDescription(id: count + 1, title: "New entry", description: "New description")
+            try t2.writeIsolated(to: db, core: core)
+        }
+        await MainActor.run { }
+        XCTAssert(_testChangeNotificationsCallCount == 5)
+
+        // Merging with deletions
+        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(50) ], [ .integer(51) ]])
+        _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "title", "description", "url"])
+        try await db.transaction { core in
+            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 50)!
+            t1.title = "Edited title!"
+            try t1.writeIsolated(to: db, core: core)
+
+            let t2 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 51)!
+            try t2.deleteIsolated(from: db, core: core)
+        }
+        await MainActor.run { }
+        XCTAssert(_testChangeNotificationsCallCount == 6)
+
+        // Merging with table-wide updates
+        _testChangeNotificationsExpectedChangedKeys = nil
+        _testChangeNotificationsExpectedChangedColumnNames = nil
+        try await db.transaction { core in
+            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 60)!
+            t1.title = "Edited title!"
+            try t1.writeIsolated(to: db, core: core)
+
+            try TestModelWithDescription.queryIsolated(in: db, core: core, "UPDATE $T SET description = ? WHERE id = 61", "Test description")
+        }
+        await MainActor.run { }
+        XCTAssert(_testChangeNotificationsCallCount == 7)
+
     }
 }
