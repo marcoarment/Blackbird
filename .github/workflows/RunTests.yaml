@@ -1,5 +1,6 @@
 name: RunTests
 
+# only trigger on main or PR
 on:
   push:
     branches:
