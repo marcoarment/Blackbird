@@ -38,6 +38,9 @@ public class Blackbird {
     /// A set of primary-key values, where each is an array of values (to support multi-column primary keys).
     public typealias PrimaryKeyValues = Set<[Blackbird.Value]>
 
+    /// A set of column names.
+    public typealias ColumnNames = Set<String>
+
     /// A wrapper for SQLite's column data types.
     public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
         case null
@@ -47,37 +50,26 @@ public class Blackbird {
         case data(Data)
 
         public enum Error: Swift.Error {
-            case cannotConvertToValue(Sendable)
+            case cannotConvertToValue
         }
 
         public func hash(into hasher: inout Hasher) {
             hasher.combine(sqliteLiteral())
         }
         
-        public static func fromAny(_ value: Sendable?) throws -> Value {
+        public static func fromAny(_ value: Any?) throws -> Value {
             guard let value else { return .null }
             switch value {
-                case let v as Value:  return v
-                case _ as NSNull:     return .null
-                case let v as Bool:   return .integer(Int64(v ? 1 : 0))
-                case let v as Int:    return .integer(Int64(v))
-                case let v as Int8:   return .integer(Int64(v))
-                case let v as Int16:  return .integer(Int64(v))
-                case let v as Int32:  return .integer(Int64(v))
-                case let v as Int64:  return .integer(v)
-                case let v as UInt:   return .integer(Int64(v))
-                case let v as UInt8:  return .integer(Int64(v))
-                case let v as UInt16: return .integer(Int64(v))
-                case let v as UInt32: return .integer(Int64(v))
-                case let v as Double: return .double(v)
-                case let v as Float:  return .double(Double(v))
-                case let v as String: return .text(v)
+                case _ as NSNull: return .null
+                case let v as Value: return v
                 case let v as any StringProtocol: return .text(String(v))
-                case let v as Data:   return .data(v)
-                case let v as Date:   return .double(v.timeIntervalSince1970)
-                case let v as URL:    return .text(v.absoluteString)
-
-                default: throw Error.cannotConvertToValue(value)
+                case let v as any BlackbirdStorableAsInteger: return .integer(v.unifiedRepresentation())
+                case let v as any BlackbirdStorableAsDouble: return .double(v.unifiedRepresentation())
+                case let v as any BlackbirdStorableAsText: return .text(v.unifiedRepresentation())
+                case let v as any BlackbirdStorableAsData: return .data(v.unifiedRepresentation())
+                case let v as any BlackbirdIntegerEnum: return .integer(v.rawValue.unifiedRepresentation())
+                case let v as any BlackbirdStringEnum: return .text(v.rawValue.unifiedRepresentation())
+                default: throw Error.cannotConvertToValue
             }
         }
 
@@ -247,7 +239,7 @@ extension Blackbird {
         deinit { _lock.deallocate() }
     }
 
-    public final class Locked<T: Sendable>: @unchecked Sendable /* unchecked due to use of internal locking */ {
+    public final class Locked<T>: @unchecked Sendable /* unchecked due to use of internal locking */ {
         public var value: T {
             get {
                 return lock.withLock { _value }
@@ -269,5 +261,66 @@ extension Blackbird {
             return lock.withLock { return body(&_value) }
         }
     }
-}
 
+    public final class FileChangeMonitor: @unchecked Sendable /* unchecked due to use of internal locking */ {
+        private var sources: [DispatchSourceFileSystemObject] = []
+
+        private var changeHandler: (() -> Void)?
+        private var isClosed = false
+        private var currentExpectedChanges = Set<Int64>()
+        
+        private let lock = Lock()
+
+        public func addFile(filePath: String) {
+            let fsPath = (filePath as NSString).fileSystemRepresentation
+            let fd = open(fsPath, O_EVTONLY)
+            guard fd >= 0 else { return }
+            
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename, .revoke], queue: nil)
+            source.setCancelHandler { Darwin.close(fd) }
+            
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                if self.currentExpectedChanges.isEmpty, !self.isClosed, let handler = self.changeHandler { handler() }
+                self.lock.unlock()
+            }
+
+            source.activate()
+            
+            self.lock.lock()
+            self.sources.append(source)
+            self.lock.unlock()
+        }
+        
+        deinit {
+            cancel()
+        }
+        
+        public func onChange(_ handler: @escaping (() -> Void)) {
+            self.lock.lock()
+            self.changeHandler = handler
+            self.lock.unlock()
+        }
+        
+        public func cancel() {
+            self.lock.lock()
+            self.isClosed = true
+            for source in sources { source.cancel() }
+            self.lock.unlock()
+            
+        }
+        
+        public func beginExpectedChange(_ changeID: Int64) {
+            self.lock.lock()
+            self.currentExpectedChanges.insert(changeID)
+            self.lock.unlock()
+        }
+        
+        public func endExpectedChange(_ changeID: Int64) {
+            self.lock.lock()
+            self.currentExpectedChanges.remove(changeID)
+            self.lock.unlock()
+        }
+    }
+}

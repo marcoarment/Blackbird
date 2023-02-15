@@ -29,23 +29,14 @@ try await db.transaction { core in
 
 ## BlackbirdModel
 
-A model protocol, using Swift's `Codable`, stored in a `Database`.
+A protocol to store `Codable` structs in a `Database`.
 
 ```swift
 struct Post: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "url",   type: .text, mayBeNull: true),
-            Blackbird.Column(name: "image", type: .data, mayBeNull: true),
-        ]
-    )
-
-    let id: Int
-    var title: String
-    var url: URL?
-    var image: Data?
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var url: URL?
+    @BlackbirdColumn var image: Data?
 }
 
 let post = Post(id: 1, title: "What I had for breakfast")
@@ -61,7 +52,37 @@ let theSportsPost = try await Post.read(from: db, where: "title = ?", "Sports")
 let listener = Post.changePublisher(in: db).sink { changedPrimaryKeys in
     print("Post IDs changed: \(changedPrimaryKeys ?? "all of them")")
 }
+
+// A model with a custom primary-key column:
+struct CustomPrimaryKeyModel: BlackbirdModel {
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
+
+    @BlackbirdColumn var pk: Int
+    @BlackbirdColumn var title: String
+}
+
+// A model with indexes and a multicolumn primary key:
+struct Post: BlackbirdModel {
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var date: Date
+    @BlackbirdColumn var isPublished: Bool
+    @BlackbirdColumn var url: URL?
+    @BlackbirdColumn var productID: Int
+
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
+
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ],
+        [ \.$isPublished, \.$date ]
+    ]
+
+    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$productID ]
+    ]
+}
 ```
+
 
 ## Project status
 
@@ -78,13 +99,12 @@ Immediate to-do list:
 * More tests, especially around performance, multicolumn primary keys, legacy change notifications, and any Obj-C sync-method deadlock potential  
 * Actually start using Blackbird in [my app](https://overcast.fm/) to refine the API/conventions, find any edge-case bugs, and ensure Obj-C compatibility layer is useful enough
 * More examples in the documentation
-* Query-performance metrics (@siracusa)
 
 ## Wishlist for future Swift-language capabilities
 
-* __Type reflection for automatic/cleaner schema definitions:__ Swift currently has no way to reflect a type's properties — [Mirror](https://developer.apple.com/documentation/swift/mirror) only reflects property names and values of given instances. If the language adds type reflection in the future, I'd love to add optional automatic table definitions that didn't require repeating the column names and types in my `static var table = …` definition. (Could also be based on property wrappers, e.g. `@Column` and `@IndexedColumn`.)
+* __Static type reflection for cleaner schema detection:__ Swift currently has no way to reflect a type's properties without creating an instance — [Mirror](https://developer.apple.com/documentation/swift/mirror) only reflects property names and values of given instances. If the language adds static type reflection in the future, my schema detection wouldn't need to rely on a hack using a Decoder to generate empty instances.)
 
-    Ideally, any future language capabilities regarding type reflection would also include the default values of each property if set.
+* __KeyPath to/from String, static reflection of a type's KeyPaths:__ With the abilities to get a type's available KeyPaths (without some [crazy hacks](https://forums.swift.org/t/getting-keypaths-to-members-automatically-using-mirror/21207)) and create KeyPaths from strings at runtime, many of my hacks using Codable could be replaced with KeyPaths, which would be cleaner and probably much faster.
 
 * __Cleaner protocol name (`Blackbird.Model`):__ Swift protocols can't contain dots or be nested within another type.
 

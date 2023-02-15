@@ -28,284 +28,180 @@ import Foundation
 @testable import Blackbird
 
 struct TestModel: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "url",   type: .text),
-            Blackbird.Column(name: "meta",  type: .text),
-        ],
-        indexes: [
-            Blackbird.Index(columnNames: ["title"]),
-        ]
-    )
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ]
+    ]
 
-    let id: Int64
-    var title: String
-    var url: URL
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var url: URL
     
     var nonColumn: String = ""
-    
-    init(id: Int64, title: String, url: URL, nonColumn: String) {
-        self.id = id
-        self.title = title
-        self.url = url
-        self.nonColumn = nonColumn
-    }
-    
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decode(Int64.self, forKey: .id)
-        self.title = try container.decode(String.self, forKey: .title)
-        self.url = try container.decode(URL.self, forKey: .url)
-    }
 }
 
 struct TestModelWithoutIDColumn: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "pk",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-        ], primaryKeyColumnNames: [
-            "pk",
-        ]
-    )
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
 
-    var id: Int { pk }
-    var pk: Int
-    var title: String
+    @BlackbirdColumn var pk: Int
+    @BlackbirdColumn var title: String
 }
 
 struct TestModelWithDescription: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "url",   type: .text, mayBeNull: true),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "description",  type: .text),
-        ],
-        indexes: [
-            Blackbird.Index(columnNames: ["title"]),
-            Blackbird.Index(columnNames: ["url"]),
-        ]
-    )
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ],
+        [ \.$url ]
+    ]
 
-    let id: Int
-    var url: URL?
-    var title: String
-    var description: String
-}
-
-struct Post: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "url",   type: .text, mayBeNull: true),
-            Blackbird.Column(name: "image", type: .data, mayBeNull: true),
-        ]
-    )
-
-    let id: Int
-    var title: String
-    var url: URL?
-    var image: Data?
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var url: URL?
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var description: String
 }
 
 struct TypeTest: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "id", type: .integer),
-
-            Blackbird.Column(name: "typeIntNull", type: .integer, mayBeNull: true),
-            Blackbird.Column(name: "typeIntNotNull", type: .integer, mayBeNull: false),
-
-            Blackbird.Column(name: "typeTextNull", type: .text, mayBeNull: true),
-            Blackbird.Column(name: "typeTextNotNull", type: .text, mayBeNull: false),
-
-            Blackbird.Column(name: "typeDoubleNull", type: .double, mayBeNull: true),
-            Blackbird.Column(name: "typeDoubleNotNull", type: .double, mayBeNull: false),
-
-            Blackbird.Column(name: "typeDataNull", type: .data, mayBeNull: true),
-            Blackbird.Column(name: "typeDataNotNull", type: .data, mayBeNull: false),
-        ]
-    )
-
-    let id: Int64
+    @BlackbirdColumn var id: Int64
     
-    let typeIntNull: Int64?
-    let typeIntNotNull: Int64
+    @BlackbirdColumn var typeIntNull: Int64?
+    @BlackbirdColumn var typeIntNotNull: Int64
 
-    let typeTextNull: String?
-    let typeTextNotNull: String
+    @BlackbirdColumn var typeTextNull: String?
+    @BlackbirdColumn var typeTextNotNull: String
 
-    let typeDoubleNull: Double?
-    let typeDoubleNotNull: Double
+    @BlackbirdColumn var typeDoubleNull: Double?
+    @BlackbirdColumn var typeDoubleNotNull: Double
 
-    let typeDataNull: Data?
-    let typeDataNotNull: Data
+    @BlackbirdColumn var typeDataNull: Data?
+    @BlackbirdColumn var typeDataNotNull: Data
+    
+    enum RepresentableIntEnum: Int, BlackbirdIntegerEnum {
+        case zero = 0
+        case one = 1
+        case two = 2
+    }
+    @BlackbirdColumn var typeIntEnum: RepresentableIntEnum
+    @BlackbirdColumn var typeIntEnumNull: RepresentableIntEnum?
+    @BlackbirdColumn var typeIntEnumNullWithValue: RepresentableIntEnum?
+
+    enum RepresentableStringEnum: String, BlackbirdStringEnum {
+        case empty = ""
+        case zero = "zero"
+        case one = "one"
+        case two = "two"
+    }
+    @BlackbirdColumn var typeStringEnum: RepresentableStringEnum
+    @BlackbirdColumn var typeStringEnumNull: RepresentableStringEnum?
+    @BlackbirdColumn var typeStringEnumNullWithValue: RepresentableStringEnum?
+
+    enum RepresentableIntNonZero: Int, BlackbirdIntegerEnum {
+        case one = 1
+        case two = 2
+    }
+    @BlackbirdColumn var typeIntNonZeroEnum: RepresentableIntNonZero
+    @BlackbirdColumn var typeIntNonZeroEnumWithDefault: RepresentableIntNonZero = .one
+    @BlackbirdColumn var typeIntNonZeroEnumNull: RepresentableIntNonZero?
+    @BlackbirdColumn var typeIntNonZeroEnumNullWithValue: RepresentableIntNonZero?
+
+    enum RepresentableStringNonEmpty: String, BlackbirdStringEnum {
+        case one = "one"
+        case two = "two"
+    }
+    @BlackbirdColumn var typeStringNonEmptyEnum: RepresentableStringNonEmpty
+    @BlackbirdColumn var typeStringNonEmptyEnumWithDefault: RepresentableStringNonEmpty = .two
+    @BlackbirdColumn var typeStringNonEmptyEnumNull: RepresentableStringNonEmpty?
+    @BlackbirdColumn var typeStringNonEmptyEnumNullWithValue: RepresentableStringNonEmpty?
+    
+    @BlackbirdColumn var typeURLNull: URL?
+    @BlackbirdColumn var typeURLNotNull: URL
+
+    @BlackbirdColumn var typeDateNull: Date?
+    @BlackbirdColumn var typeDateNotNull: Date
 }
 
 struct MulticolumnPrimaryKeyTest: BlackbirdModel {
-    static var table = Blackbird.Table(
-        columns: [
-            Blackbird.Column(name: "userID", type: .integer),
-            Blackbird.Column(name: "feedID", type: .integer),
-            Blackbird.Column(name: "episodeID", type: .integer),
-            
-            Blackbird.Column(name: "completed", type: .integer),
-            Blackbird.Column(name: "deleted", type: .integer),
-            Blackbird.Column(name: "progress", type: .integer),
-        ],
-        primaryKeyColumnNames: ["userID", "feedID", "episodeID"]
-    )
-    
-    var id: String { get { "\(userID)-\(feedID)-\(episodeID)" } }
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
-    let userID: Int64
-    let feedID: Int64
-    let episodeID: Int64
+    @BlackbirdColumn var userID: Int64
+    @BlackbirdColumn var feedID: Int64
+    @BlackbirdColumn var episodeID: Int64
 }
 
 // MARK: - Schema change: Add primary-key column
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeAddPrimaryKeyColumn",
-        columns: [
-            Blackbird.Column(name: "userID", type: .integer),
-            Blackbird.Column(name: "feedID", type: .integer),
-            Blackbird.Column(name: "subscribed", type: .integer),
-        ],
-        primaryKeyColumnNames: ["userID", "feedID"]
-    )
+    static var tableName = "SchemaChangeAddPrimaryKeyColumn"
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID ]
 
-    var id: String { get { "\(userID)-\(feedID)" } }
-
-    let userID: Int64
-    let feedID: Int64
-    let subscribed: Bool
+    @BlackbirdColumn var userID: Int64
+    @BlackbirdColumn var feedID: Int64
+    @BlackbirdColumn var subscribed: Bool
 }
 
 struct SchemaChangeAddPrimaryKeyColumnChanged: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeAddPrimaryKeyColumn",
-        columns: [
-            Blackbird.Column(name: "userID", type: .integer),
-            Blackbird.Column(name: "feedID", type: .integer),
-            Blackbird.Column(name: "episodeID", type: .integer),
-            Blackbird.Column(name: "subscribed", type: .integer),
-        ],
-        primaryKeyColumnNames: ["userID", "feedID", "episodeID"]
-    )
+    static var tableName = "SchemaChangeAddPrimaryKeyColumn"
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
-    var id: String { get { "\(userID)-\(feedID)-\(episodeID)" } }
-
-    let userID: Int64
-    let feedID: Int64
-    let episodeID: Int64
-    let subscribed: Bool
+    @BlackbirdColumn var userID: Int64
+    @BlackbirdColumn var feedID: Int64
+    @BlackbirdColumn var episodeID: Int64
+    @BlackbirdColumn var subscribed: Bool
 }
-
 
 
 
 // MARK: - Schema change: Add columns
 
 struct SchemaChangeAddColumnsInitial: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeAddColumns",
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-        ]
-    )
+    static var tableName = "SchemaChangeAddColumns"
 
-    let id: Int64
-    var title: String
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
 }
 
 struct SchemaChangeAddColumnsChanged: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeAddColumns",
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "description", type: .text),
-            Blackbird.Column(name: "url",   type: .text, mayBeNull: true),
-            Blackbird.Column(name: "art",   type: .data),
-        ]
-    )
+    static var tableName = "SchemaChangeAddColumns"
 
-    let id: Int64
-    var title: String
-    var description: String
-    var url: URL?
-    var art: Data
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var description: String
+    @BlackbirdColumn var url: URL?
+    @BlackbirdColumn var art: Data
 }
 
 // MARK: - Schema change: Drop columns
 
 struct SchemaChangeRebuildTableInitial: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeRebuild",
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "flags", type: .integer),
-        ],
-        primaryKeyColumnNames: ["id", "title"]
-    )
+    static var tableName = "SchemaChangeRebuild"
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
 
-    let id: Int64
-    var title: String
-    var flags: Int
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var flags: Int
 }
 
 struct SchemaChangeRebuildTableChanged: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeRebuild",
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-            Blackbird.Column(name: "flags", type: .text),
-            Blackbird.Column(name: "description", type: .text),
-        ]
-    )
-
-    let id: Int64
-    var title: String
-    var flags: String
-    var description: String
+    static var tableName = "SchemaChangeRebuild"
+    
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var flags: String
+    @BlackbirdColumn var description: String
 }
 
 // MARK: - Schema change: Add index
 
 struct SchemaChangeAddIndexInitial: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeAddIndex",
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-        ]
-    )
+    static var tableName = "SchemaChangeAddIndex"
 
-    let id: Int64
-    var title: String
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
 }
 
 struct SchemaChangeAddIndexChanged: BlackbirdModel {
-    static var table = Blackbird.Table(
-        name: "SchemaChangeAddIndex",
-        columns: [
-            Blackbird.Column(name: "id",    type: .integer),
-            Blackbird.Column(name: "title", type: .text),
-        ],
-        indexes: [
-            Blackbird.Index(columnNames: ["title"])
-        ]
-    )
+    static var tableName = "SchemaChangeAddIndex"
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ]
+    ]
 
-    let id: Int64
-    var title: String
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
 }

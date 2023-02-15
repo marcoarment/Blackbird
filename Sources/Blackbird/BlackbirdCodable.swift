@@ -28,144 +28,6 @@ import Foundation
 
 // with significant thanks to (and borrowing from) https://shareup.app/blog/encoding-and-decoding-sqlite-in-swift/
 
-internal class BlackbirdSQLiteEncoder: Encoder {
-    fileprivate class Storage {
-        private var elements = Blackbird.Arguments()
-        var arguments: Blackbird.Arguments { elements }
-
-        func reset() { elements.removeAll(keepingCapacity: true) }
-
-        subscript(key: String) -> Blackbird.Value? {
-            get { elements[key] }
-            set { elements[key] = newValue }
-        }
-    }
-
-    public var codingPath: [CodingKey] = []
-    private let storage = Storage()
-    public var userInfo: [CodingUserInfoKey: Any] = [:]
-    
-    func sqliteArguments() -> Blackbird.Arguments { return storage.arguments }
-    
-    public func container<Key>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> where Key : CodingKey {
-        storage.reset()
-        return KeyedEncodingContainer(BlackbirdSQLiteKeyedEncodingContainer<Key>(storage))
-    }
-    
-    public func unkeyedContainer() -> UnkeyedEncodingContainer { fatalError("unsupported") }
-    public func singleValueContainer() -> SingleValueEncodingContainer { fatalError("unsupported") }
-}
-
-internal struct BlackbirdSQLiteKeyedEncodingContainer<K: CodingKey>: KeyedEncodingContainerProtocol {
-    public typealias Key = K
-    public var codingPath: [CodingKey] = []
-    private var storage: BlackbirdSQLiteEncoder.Storage
-
-    public enum Error: Swift.Error {
-        case invalidValue(String, value: String)
-    }
-
-    fileprivate init(_ storage: BlackbirdSQLiteEncoder.Storage) {
-        self.storage = storage
-    }
-    
-    mutating public func encodeNil(forKey key: K) throws {
-        storage[key.stringValue] = .null
-    }
-
-    mutating public func encode(_ value: Bool, forKey key: K) throws {
-        storage[key.stringValue] = .integer(value ? 1 : 0)
-    }
-
-    mutating public func encode(_ value: Int, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: Int8, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: Int16, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: Int32, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: Int64, forKey key: K) throws {
-        storage[key.stringValue] = .integer(value)
-    }
-
-    mutating public func encode(_ value: UInt, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: UInt8, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: UInt16, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: UInt32, forKey key: K) throws {
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: UInt64, forKey key: K) throws {
-        guard value <= Int64.max else { throw Error.invalidValue(key.stringValue, value: key.stringValue) }
-        storage[key.stringValue] = .integer(Int64(value))
-    }
-
-    mutating public func encode(_ value: Float, forKey key: K) throws {
-        storage[key.stringValue] = .double(Double(value))
-    }
-
-    mutating public func encode(_ value: Double, forKey key: K) throws {
-        storage[key.stringValue] = .double(value)
-    }
-
-    mutating public func encode(_ value: String, forKey key: K) throws {
-        storage[key.stringValue] = .text(value)
-    }
-
-    mutating public func encode(_ value: Data, forKey key: K) throws {
-        storage[key.stringValue] = .data(value)
-    }
-
-    mutating public func encode(_ value: Date, forKey key: K) throws {
-        storage[key.stringValue] = .double(value.timeIntervalSince1970)
-    }
-
-    mutating public func encode(_ value: URL, forKey key: K) throws {
-        storage[key.stringValue] = .text(value.absoluteString)
-    }
-
-    mutating public func encode(_ value: some Encodable, forKey key: K) throws {
-        if let data = value as? Data { try encode(data, forKey: key) }
-        else if let date = value as? Date { try encode(date, forKey: key) }
-        else if let url = value as? URL { try encode(url, forKey: key) }
-        else { throw Error.invalidValue(key.stringValue, value: key.stringValue) }
-    }
-
-    mutating public func nestedContainer<NestedKey>(keyedBy keyType: NestedKey.Type, forKey key: K) -> KeyedEncodingContainer<NestedKey> where NestedKey : CodingKey {
-        fatalError("unsupported")
-    }
-    
-    mutating public func nestedUnkeyedContainer(forKey key: K) -> UnkeyedEncodingContainer {
-        fatalError("unsupported")
-    }
-    
-    mutating public func superEncoder() -> Encoder {
-        fatalError("unsupported")
-    }
-    
-    mutating public func superEncoder(forKey key: K) -> Encoder {
-        fatalError("unsupported")
-    }
-}
-
 internal class BlackbirdSQLiteDecoder: Decoder {
     public enum Error: Swift.Error {
         case invalidValue(String, value: String)
@@ -175,112 +37,136 @@ internal class BlackbirdSQLiteDecoder: Decoder {
     public var codingPath: [CodingKey] = []
     public var userInfo: [CodingUserInfoKey: Any] = [:]
 
+    let database: Blackbird.Database
     let row: Blackbird.Row
-    init(_ row: Blackbird.Row) {
+    init(database: Blackbird.Database, row: Blackbird.Row, codingPath: [CodingKey] = []) {
+        self.database = database
         self.row = row
+        self.codingPath = codingPath
     }
 
     public func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey {
-        return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(row))
+        return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(codingPath: codingPath, database: database, row: row))
+    }
+    public func unkeyedContainer() throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
+    public func singleValueContainer() throws -> SingleValueDecodingContainer { BlackbirdSQLiteSingleValueDecodingContainer(codingPath: codingPath, database: database, row: row) }
+}
+
+fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecodingContainer {
+    var codingPath: [CodingKey] = []
+    let database: Blackbird.Database
+    var row: Blackbird.Row
+    
+    init(codingPath: [CodingKey], database: Blackbird.Database, row: Blackbird.Row) {
+        self.codingPath = codingPath
+        self.database = database
+        self.row = row
+    }
+    
+    private func value() throws -> Blackbird.Value {
+        guard let key = codingPath.first?.stringValue, let v = row[key] else {
+            throw BlackbirdSQLiteDecoder.Error.missingValue(codingPath.first?.stringValue ?? "(unknown key)")
+        }
+        return v
     }
 
-    public func unkeyedContainer() throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
-    public func singleValueContainer() throws -> SingleValueDecodingContainer { fatalError("unsupported") }
+    func decodeNil() -> Bool { true }
+    func decode(_ type: Bool.Type) throws -> Bool     { (try value()).boolValue ?? false }
+    func decode(_ type: String.Type) throws -> String { (try value()).stringValue ?? "" }
+    func decode(_ type: Double.Type) throws -> Double { (try value()).doubleValue ?? 0 }
+    func decode(_ type: Float.Type) throws -> Float   { Float((try value()).doubleValue ?? 0) }
+    func decode(_ type: Int.Type) throws -> Int       { (try value()).intValue ?? 0 }
+    func decode(_ type: Int8.Type) throws -> Int8     { Int8((try value()).intValue ?? 0) }
+    func decode(_ type: Int16.Type) throws -> Int16   { Int16((try value()).intValue ?? 0) }
+    func decode(_ type: Int32.Type) throws -> Int32   { Int32((try value()).intValue ?? 0) }
+    func decode(_ type: Int64.Type) throws -> Int64   { (try value()).int64Value ?? 0 }
+    func decode(_ type: UInt.Type) throws -> UInt     { UInt((try value()).int64Value ?? 0) }
+    func decode(_ type: UInt8.Type) throws -> UInt8   { UInt8((try value()).intValue ?? 0) }
+    func decode(_ type: UInt16.Type) throws -> UInt16 { UInt16((try value()).intValue ?? 0) }
+    func decode(_ type: UInt32.Type) throws -> UInt32 { UInt32((try value()).int64Value ?? 0) }
+    func decode(_ type: UInt64.Type) throws -> UInt64 { UInt64((try value()).int64Value ?? 0) }
+
+    func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
+        let value = try value()
+        if T.self == Data.self { return (value.dataValue ?? Data()) as! T }
+        if T.self == URL.self, let urlStr = value.stringValue, let url = URL(string: urlStr) { return url as! T }
+        if T.self == Date.self { return Date(timeIntervalSince1970: value.doubleValue ?? 0) as! T }
+
+        if let eT = T.self as? any BlackbirdIntegerOptionalEnum.Type, value.int64Value == nil {
+            return (try decodeNilRepresentable(eT) as? T)!
+        }
+
+        if let eT = T.self as? any BlackbirdStringOptionalEnum.Type, value.stringValue == nil {
+            return (try decodeNilRepresentable(eT) as? T)!
+        }
+
+        if let eT = T.self as? any BlackbirdIntegerEnum.Type {
+            let rawValue = value.int64Value ?? 0
+            let integerEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue)
+            return (integerEnum as? T)!
+        }
+
+        if let eT = T.self as? any BlackbirdStringEnum.Type {
+            let rawValue = value.stringValue ?? ""
+            let stringEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue)
+            return (stringEnum as? T)!
+        }
+
+        return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: codingPath))
+    }
+
+    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: Int64) throws -> T where T: BlackbirdIntegerEnum {
+        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))!
+    }
+
+    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: String) throws -> T where T: BlackbirdStringEnum {
+        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))!
+    }
+
+    func decodeNilRepresentable<T>(_ type: T.Type) throws -> T where T: BlackbirdIntegerOptionalEnum {
+        T.nilInstance()
+    }
+
+    func decodeNilRepresentable<T>(_ type: T.Type) throws -> T where T: BlackbirdStringOptionalEnum {
+        T.nilInstance()
+    }
 }
 
 fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDecodingContainerProtocol {
     typealias Key = K
-    let codingPath: [CodingKey] = []
-    
+    let codingPath: [CodingKey]
+    let database: Blackbird.Database
     var row: Blackbird.Row
     
-    init(_ row: Blackbird.Row) {
+    init(codingPath: [CodingKey] = [], database: Blackbird.Database, row: Blackbird.Row) {
+        self.database = database
         self.row = row
+        self.codingPath = codingPath
     }
     
     var allKeys: [K] { row.keys.compactMap { K(stringValue: $0) } }
-    
     func contains(_ key: K) -> Bool { row[key.stringValue] != nil }
     
     func decodeNil(forKey key: K) throws -> Bool {
-        guard let value = row[key.stringValue] else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        if case .null = value { return true } else { return false }
+        if let value = row[key.stringValue] { return value == .null }
+        return true
     }
     
-    func decode(_ type: Bool.Type, forKey key: K) throws -> Bool {
-        guard let value = row[key.stringValue]?.boolValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return value
-    }
-    
-    func decode(_ type: String.Type, forKey key: K) throws -> String {
-        guard let value = row[key.stringValue]?.stringValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return value
-    }
-    
-    func decode(_ type: Double.Type, forKey key: K) throws -> Double {
-        guard let value = row[key.stringValue]?.doubleValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return value
-    }
-    
-    func decode(_ type: Float.Type, forKey key: K) throws -> Float {
-        guard let value = row[key.stringValue]?.doubleValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return Float(value)
-    }
-    
-    func decode(_ type: Int.Type, forKey key: K) throws -> Int {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return value
-    }
-    
-    func decode(_ type: Int8.Type, forKey key: K) throws -> Int8 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return Int8(value)
-    }
-    
-    func decode(_ type: Int16.Type, forKey key: K) throws -> Int16 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return Int16(value)
-    }
-    
-    func decode(_ type: Int32.Type, forKey key: K) throws -> Int32 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return Int32(value)
-    }
-    
-    func decode(_ type: Int64.Type, forKey key: K) throws -> Int64 {
-        guard let value = row[key.stringValue]?.int64Value else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return Int64(value)
-    }
-    
-    func decode(_ type: UInt.Type, forKey key: K) throws -> UInt {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return UInt(value)
-    }
-    
-    func decode(_ type: UInt8.Type, forKey key: K) throws -> UInt8 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return UInt8(value)
-    }
-    
-    func decode(_ type: UInt16.Type, forKey key: K) throws -> UInt16 {
-        guard let value = row[key.stringValue]?.intValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return UInt16(value)
-    }
-    
-    func decode(_ type: UInt32.Type, forKey key: K) throws -> UInt32 {
-        guard let value = row[key.stringValue]?.int64Value else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return UInt32(value)
-    }
-    
-    func decode(_ type: UInt64.Type, forKey key: K) throws -> UInt64 {
-        guard let value = row[key.stringValue]?.int64Value else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return UInt64(value)
-    }
-
-    func decode(_: Data.Type, forKey key: K) throws -> Data {
-        guard let value = row[key.stringValue]?.dataValue else { throw BlackbirdSQLiteDecoder.Error.missingValue(key.stringValue) }
-        return value
-    }
+    func decode(_ type: Bool.Type, forKey key: K) throws -> Bool      { row[key.stringValue]?.boolValue ?? false }
+    func decode(_ type: String.Type, forKey key: K) throws -> String  { row[key.stringValue]?.stringValue ?? "" }
+    func decode(_ type: Double.Type, forKey key: K) throws -> Double  { row[key.stringValue]?.doubleValue ?? 0 }
+    func decode(_ type: Float.Type, forKey key: K) throws -> Float    { Float(row[key.stringValue]?.doubleValue ?? 0) }
+    func decode(_ type: Int.Type, forKey key: K) throws -> Int        { row[key.stringValue]?.intValue ?? 0 }
+    func decode(_ type: Int8.Type, forKey key: K) throws -> Int8      { Int8(row[key.stringValue]?.intValue ?? 0) }
+    func decode(_ type: Int16.Type, forKey key: K) throws -> Int16    { Int16(row[key.stringValue]?.intValue ?? 0) }
+    func decode(_ type: Int32.Type, forKey key: K) throws -> Int32    { Int32(row[key.stringValue]?.intValue ?? 0) }
+    func decode(_ type: Int64.Type, forKey key: K) throws -> Int64    { row[key.stringValue]?.int64Value ?? 0 }
+    func decode(_ type: UInt.Type, forKey key: K) throws -> UInt      { UInt(row[key.stringValue]?.int64Value ?? 0) }
+    func decode(_ type: UInt8.Type, forKey key: K) throws -> UInt8    { UInt8(row[key.stringValue]?.intValue ?? 0) }
+    func decode(_ type: UInt16.Type, forKey key: K) throws -> UInt16  { UInt16(row[key.stringValue]?.intValue ?? 0) }
+    func decode(_ type: UInt32.Type, forKey key: K) throws -> UInt32  { UInt32(row[key.stringValue]?.int64Value ?? 0) }
+    func decode(_ type: UInt64.Type, forKey key: K) throws -> UInt64  { UInt64(row[key.stringValue]?.int64Value ?? 0) }
+    func decode(_: Data.Type, forKey key: K) throws -> Data           { row[key.stringValue]?.dataValue ?? Data() }
 
     func decode(_: Date.Type, forKey key: K) throws -> Date {
         let timeInterval = try decode(Double.self, forKey: key)
@@ -297,22 +183,14 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
         if Data.self == T.self { return try decode(Data.self, forKey: key) as! T }
         if Date.self == T.self { return try decode(Date.self, forKey: key) as! T }
         if URL.self == T.self  { return try decode(URL.self,  forKey: key) as! T }
-        throw BlackbirdSQLiteDecoder.Error.invalidValue(key.stringValue, value: key.stringValue)
+        
+        var newPath = codingPath
+        newPath.append(key)
+        return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: newPath))
     }
     
-    func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: K) throws -> KeyedDecodingContainer<NestedKey> where NestedKey : CodingKey {
-        fatalError("unsupported")
-    }
-    
-    func nestedUnkeyedContainer(forKey key: K) throws -> UnkeyedDecodingContainer {
-        fatalError("unsupported")
-    }
-    
-    func superDecoder() throws -> Decoder {
-        fatalError("unsupported")
-    }
-    
-    func superDecoder(forKey key: K) throws -> Decoder {
-        fatalError("unsupported")
-    }
+    func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: K) throws -> KeyedDecodingContainer<NestedKey> where NestedKey : CodingKey { fatalError("unsupported") }
+    func nestedUnkeyedContainer(forKey key: K) throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
+    func superDecoder() throws -> Decoder { fatalError("unsupported") }
+    func superDecoder(forKey key: K) throws -> Decoder { fatalError("unsupported") }
 }

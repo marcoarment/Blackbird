@@ -34,19 +34,23 @@ struct ContentViewEnvironmentDB: View {
 
     @BlackbirdLiveModels({ try await Post.read(from: $0, where: "1 ORDER BY id") }) var posts
 
-    @BlackbirdLiveQuery(tableName: "Post", { try await $0.query("SELECT COUNT(*) FROM Post") }) var countResults
+    @BlackbirdLiveQuery(tableName: "Post", { try await $0.query("SELECT COUNT(*) FROM Post") }) var count
 
     var body: some View {
         VStack {
-            List {
-                ForEach(posts) { post in
-                    NavigationLink(destination: PostViewEnvironmentDB(post: post.liveModel)) {
-                        Text(post.title)
+            if posts.didLoad {
+                List {
+                    ForEach(posts.results) { post in
+                        NavigationLink(destination: PostViewEnvironmentDB(post: post.liveModel)) {
+                            Text(post.title)
+                        }
+                        .transition(.move(edge: .leading))
                     }
-                    .transition(.move(edge: .leading))
                 }
+                .animation(.default, value: posts)
+            } else {
+                ProgressView()
             }
-            .animation(.default, value: posts)
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -57,7 +61,7 @@ struct ContentViewEnvironmentDB: View {
                 }
             }
         }
-        .navigationTitle("\(countResults.first?["COUNT(*)"]?.stringValue ?? "?") posts, db: \(database?.id ?? 0)")
+        .navigationTitle(count.didLoad ? "\(count.results.first?["COUNT(*)"]?.stringValue ?? "?") posts, db: \(database?.id ?? 0)" : "Loading…")
     }
 }
 
@@ -124,20 +128,18 @@ struct PostViewEnvironmentDB: View {
 }
 
 
-// MARK: - Locally bound database with .QueryUpdater and a $didLoad binding
+// MARK: - Locally bound database with .QueryUpdater
 
 struct ContentViewBoundDB: View {
     @State var database: Blackbird.Database
-    @State var didLoad = false
-
-    @State var posts: [Post] = []
+    @State var posts = Post.LiveResults()
     var postsUpdater = Post.ArrayUpdater()
 
     var body: some View {
         VStack {
-            if didLoad {
+            if posts.didLoad {
                 List {
-                    ForEach(posts) { post in
+                    ForEach(posts.results) { post in
                         NavigationLink(destination: PostViewBoundDB(database: $database, post: post)) {
                             Text(post.title)
                         }
@@ -157,7 +159,7 @@ struct ContentViewBoundDB: View {
             }
         }
         .onAppear {
-            postsUpdater.bind(from: database, to: $posts, didLoad: $didLoad) { try await Post.read(from: $0, where: "1 ORDER BY id") }
+            postsUpdater.bind(from: database, to: $posts) { try await Post.read(from: $0, where: "1 ORDER BY id") }
         }
     }
 }

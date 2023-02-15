@@ -28,6 +28,12 @@ import Foundation
 @preconcurrency import Combine
 
 public extension Blackbird {
+    struct Change: Sendable {
+        let table: String
+        let primaryKeys: PrimaryKeyValues?
+        let columnNames: Blackbird.ColumnNames?
+    }
+
     /// A Publisher that emits when data in a Blackbird table has changed.
     ///
     /// The ``PrimaryKeyValues`` value passed indicates which rows in the table have changed:
@@ -44,7 +50,7 @@ public extension Blackbird {
     /// }
     /// ```
     ///
-    typealias ChangePublisher = PassthroughSubject<PrimaryKeyValues?, Never>
+    typealias ChangePublisher = PassthroughSubject<Change, Never>
 
     internal static func isRelevantPrimaryKeyChange(watchedPrimaryKeys: Blackbird.PrimaryKeyValues?, changedPrimaryKeys: Blackbird.PrimaryKeyValues?) -> Bool {
         guard let watchedPrimaryKeys else {
@@ -91,6 +97,9 @@ public extension Blackbird {
     ///
     /// The affected primary-key values are provided as an array of arrays of Objective-C values, where each value in the top-level array contains the array of a single row's primary-key values (to support multi-column primary keys).
     static let legacyChangeNotificationPrimaryKeyValuesKey = "BlackbirdChangedPrimaryKeyValues"
+
+    /// Column names, as a Set of Strings, affected by a table change. May be present in a ``legacyChangeNotification``'s `userInfo` dictionary.
+    static let legacyChangeNotificationColumnNamesKey = "BlackbirdChangedColumnNames"
 }
 
 // MARK: - Change publisher
@@ -98,12 +107,22 @@ public extension Blackbird {
 extension Blackbird.Database {
 
     internal final class ChangeReporter: @unchecked Sendable /* unchecked due to use of internal locking */ {
+        internal final class AccumulatedChanges {
+            var primaryKeys: Blackbird.PrimaryKeyValues? = Blackbird.PrimaryKeyValues()
+            var columnNames: Blackbird.ColumnNames? = Blackbird.ColumnNames()
+            static func entireTableChange() -> Self {
+                let s = Self.init()
+                s.primaryKeys = nil
+                s.columnNames = nil
+                return s
+            }
+        }
+    
         private let lock = Blackbird.Lock()
         private var flushIsEnqueued = false
         private var activeTransactions = Set<Int64>()
         private var ignoreWritesToTableName: String? = nil
-        private var accumulatedChangesPerKey: [String: Blackbird.PrimaryKeyValues] = [:]
-        private var accumulatedChangesForEntireTables = Set<String>()
+        private var accumulatedChangesByTable: [String: AccumulatedChanges] = [:]
         private var tableChangePublishers: [String: Blackbird.ChangePublisher] = [:]
         
         private var sendLegacyChangeNotifications = false
@@ -144,21 +163,35 @@ extension Blackbird.Database {
         public func endTransaction(_ transactionID: Int64) {
             lock.lock()
             activeTransactions.remove(transactionID)
-            if !flushIsEnqueued && activeTransactions.isEmpty && (!accumulatedChangesPerKey.isEmpty || !accumulatedChangesForEntireTables.isEmpty) {
+            if !flushIsEnqueued && activeTransactions.isEmpty && !accumulatedChangesByTable.isEmpty {
+                flushIsEnqueued = true
+                DispatchQueue.main.async { [weak self] in self?.flush() }
+            }
+            lock.unlock()
+        }
+        
+        public func reportEntireDatabaseChange() {
+            if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] ⚠️ database changed externally, reporting changes to all tables!") }
+
+            lock.lock()
+            for tableName in tableChangePublishers.keys { accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange() }
+
+            if !flushIsEnqueued, activeTransactions.isEmpty {
                 flushIsEnqueued = true
                 DispatchQueue.main.async { [weak self] in self?.flush() }
             }
             lock.unlock()
         }
 
-        public func reportChange(tableName: String, primaryKey: [Blackbird.Value]? = nil) {
+        public func reportChange(tableName: String, primaryKey: [Blackbird.Value]? = nil, changedColumns: Blackbird.ColumnNames?) {
             lock.lock()
             if tableName != ignoreWritesToTableName {
-                if let primaryKey, !primaryKey.isEmpty {
-                    if accumulatedChangesPerKey[tableName] == nil { accumulatedChangesPerKey[tableName] = Blackbird.PrimaryKeyValues() }
-                    accumulatedChangesPerKey[tableName]!.insert(primaryKey)
+                if let primaryKey, !primaryKey.isEmpty, let changedColumns {
+                    if accumulatedChangesByTable[tableName] == nil { accumulatedChangesByTable[tableName] = AccumulatedChanges() }
+                    accumulatedChangesByTable[tableName]!.primaryKeys?.insert(primaryKey)
+                    accumulatedChangesByTable[tableName]!.columnNames?.formUnion(changedColumns)
                 } else {
-                    accumulatedChangesForEntireTables.insert(tableName)
+                    accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange()
                 }
 
                 if !flushIsEnqueued, activeTransactions.isEmpty {
@@ -173,28 +206,28 @@ extension Blackbird.Database {
             lock.lock()
             flushIsEnqueued = false
             let publishers = tableChangePublishers
-            let byEntireTable = accumulatedChangesForEntireTables
-            var byTableAndKeys = accumulatedChangesPerKey
-            accumulatedChangesPerKey.removeAll()
-            accumulatedChangesForEntireTables.removeAll()
+            let changesByTable = accumulatedChangesByTable
+            accumulatedChangesByTable.removeAll()
             lock.unlock()
-
-            for tableName in byEntireTable {
-                if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (all/unknown)") }
-                byTableAndKeys.removeValue(forKey: tableName)
-                if let publisher = publishers[tableName] { publisher.send(nil) }
-                if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: nil) }
-            }
             
-            for (tableName, keys) in byTableAndKeys {
-                if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (\(keys.count) keys)") }
-                if let publisher = publishers[tableName] { publisher.send(keys) }
-                if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: keys) }
+            for (tableName, accumulatedChanges) in changesByTable {
+                if let keys = accumulatedChanges.primaryKeys {
+                    if debugPrintEveryReportedChange {
+                        print("[Blackbird.ChangeReporter] changed \(tableName) (\(keys.count) keys, fields: \(accumulatedChanges.columnNames?.joined(separator: ",") ?? "(all/unknown)"))")
+                    }
+                    if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: keys, columnNames: accumulatedChanges.columnNames)) }
+                    if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: keys, changedColumnNames: accumulatedChanges.columnNames) }
+                } else {
+                    if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (all/unknown)") }
+                    if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: nil, columnNames: nil)) }
+                    if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: nil, changedColumnNames: nil) }
+                }
             }
         }
         
-        private func sendLegacyNotification(tableName: String, changedKeys: Blackbird.PrimaryKeyValues?) {
+        private func sendLegacyNotification(tableName: String, changedKeys: Blackbird.PrimaryKeyValues?, changedColumnNames: Blackbird.ColumnNames?) {
             var userInfo: [AnyHashable: Any] = [Blackbird.legacyChangeNotificationTableKey: tableName]
+            if let changedColumnNames { userInfo[Blackbird.legacyChangeNotificationColumnNamesKey] = changedColumnNames }
             if let changedKeys {
                 userInfo[Blackbird.legacyChangeNotificationPrimaryKeyValuesKey] = changedKeys.map { primaryKey in
                     primaryKey.map { $0.objcValue() }
@@ -224,7 +257,7 @@ extension Blackbird {
     public typealias CachedResultGenerator<T: Sendable> = (@Sendable (_ db: Blackbird.Database) async throws -> T)
 
     public final class CachedResultPublisher<T: Sendable>: Sendable {
-        public let valuePublisher = CurrentValueSubject<T?, Never>(nil)
+        public let valuePublisher: CurrentValueSubject<T?, Never>
 
         private struct State: Sendable {
             fileprivate var cachedResults: T? = nil
@@ -235,6 +268,10 @@ extension Blackbird {
         }
         
         private let config = Locked(State())
+        
+        public init(initialValue: T? = nil) {
+            valuePublisher = CurrentValueSubject<T?, Never>(initialValue)
+        }
 
         public func subscribe(to tableName: String, in database: Blackbird.Database?, generator: CachedResultGenerator<T>?) {
             config.withLock {
