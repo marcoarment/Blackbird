@@ -13,10 +13,3 @@ A small, fast, lightweight SQLite database wrapper and model layer, based on mod
 - ``Blackbird/Database``
 - ``BlackbirdModel``
 
-### Optional Objective-C compatibility
-
-- ``BlackbirdDatabaseObjC``
-- ``BlackbirdTableObjC``
-- ``BlackbirdColumnObjC``
-- ``BlackbirdColumnTypeObjC``
-- ``BlackbirdIndexObjC``

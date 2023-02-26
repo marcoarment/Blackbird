@@ -172,7 +172,17 @@ public class Blackbird {
                 case let .data(b):    return String(data: b, encoding: .utf8)
             }
         }
-        
+
+        internal func objcValue() -> NSObject {
+            switch self {
+                case .null:           return NSNull()
+                case let .integer(i): return NSNumber(value: i)
+                case let .double(d):  return NSNumber(value: d)
+                case let .text(s):    return NSString(string: s)
+                case let .data(d):    return NSData(data: d)
+            }
+        }
+
         private static let copyValue = unsafeBitCast(-1, to: sqlite3_destructor_type.self) // a.k.a. SQLITE_TRANSIENT
         
         internal func bind(database: isolated Blackbird.Database.Core, statement: OpaquePointer, index: Int32, for query: String) throws {
