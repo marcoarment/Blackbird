@@ -36,6 +36,13 @@ extension String.StringInterpolation {
     }
 }
 
+extension Blackbird.Row {
+    subscript<T: BlackbirdModel>(_ keyPath: T.BlackbirdColumnKeyPath) -> Value? {
+        let table = SchemaGenerator.shared.table(for: T.self)
+        return self[table.keyPathToColumnName(keyPath: keyPath)]
+    }
+}
+
 /// A model protocol based on `Codable` and SQLite.
 ///
 /// **Example:** A simple model:

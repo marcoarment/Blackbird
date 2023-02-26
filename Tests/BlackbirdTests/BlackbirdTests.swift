@@ -172,6 +172,10 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let matches = try await TestModelWithDescription.read(from: db, matching: [ \.$title : "Omnibus" ])
         XCTAssert(matches.count == 1)
         XCTAssert(matches.first!.title == "Omnibus")
+        
+        let rows = try await TestModelWithDescription.query(in: db, "SELECT \(\TestModelWithDescription.$id), \(\TestModelWithDescription.$title) FROM $T WHERE \(\TestModelWithDescription.$title) = ?", "Omnibus")
+        XCTAssert(rows.count == 1)
+        XCTAssert(rows.first![\TestModelWithDescription.$title] == "Omnibus")
     }
 
     func testColumnTypes() async throws {
