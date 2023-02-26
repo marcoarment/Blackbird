@@ -108,6 +108,12 @@ extension String.StringInterpolation {
 /// // Or with a WHERE query, parameterized with SQLite data types
 /// let theSportsPost = try await Post.read(from: db, where: "title = ?", "Sports")
 ///
+/// // Or with a WHERE query, using checked key paths as column names
+/// let theSportsPost = try await Post.read(from: db, where: "\(\Post.$title) = ?", "Sports")
+///
+/// // Or entirely with checked key paths
+/// let theSportsPost = try await Post.read(from: db, matching: [ \.$title : "Sports" ])
+///
 /// // Modify an instance and re-save it to the database
 /// if let firstPost = try await Post.read(from: db, id: 1) {
 ///    var modifiedPost = firstPost
@@ -117,6 +123,9 @@ extension String.StringInterpolation {
 ///
 /// // Or use an SQL query to modify the database directly
 /// try await Post.query("UPDATE $T SET title = ? WHERE id = ?", "New title", 1)
+///
+/// // Or use checked key paths for the column names
+/// try await Post.query("UPDATE $T SET \(\Post.$title) = ? WHERE \(\Post.$id) = ?", "New title", 1)
 /// ```
 ///
 /// Synchronous access is provided in ``Blackbird/Database/transaction(_:)``.
@@ -292,6 +301,26 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
 
     /// Synchronous version of ``read(from:where:arguments:)-31y52`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [String: Sendable]) throws -> [Self]
+
+    /// Reads instances from a database using key-path equality tests.
+    ///
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to read from.
+    ///   - matching: A dictionary of column key-paths of this BlackbirdModel type and the value that each corresponding column must equal.
+    /// - Returns: An array of decoded instances matching the query.
+    ///
+    /// ## Example
+    /// ```swift
+    /// let posts = try await Post.read(
+    ///     from: db,
+    ///     matching: [ \.$id : 123, \.$title : "Hi" ]
+    /// )
+    /// // Equivalent to "WHERE id = 123 AND title = 'Hi'"
+    /// ```
+    static func read(from database: Blackbird.Database, matching: [BlackbirdColumnKeyPath : Sendable]) async throws -> [Self]
+
+    /// Synchronous version of ``read(from:matching:)-5okei``  for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: [BlackbirdColumnKeyPath : Sendable]) throws -> [Self]
 
     /// Write this instance to a database.
     /// - Parameter database: The ``Blackbird/Database`` instance to write to.
@@ -508,6 +537,28 @@ extension BlackbirdModel {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
             return try Self(from: decoder)
         }
+    }
+
+    public static func read(from database: Blackbird.Database, matching: [BlackbirdColumnKeyPath : Sendable]) async throws -> [Self] {
+        let table = SchemaGenerator.shared.table(for: Self.self)
+        var whereClauses: [String] = []
+        var values: [any Sendable] = []
+        for (keyPath, value) in matching {
+            whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
+            values.append(value)
+        }
+        return try await read(from: database, where: whereClauses.joined(separator: " AND "), arguments: values)
+    }
+
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: [BlackbirdColumnKeyPath : Sendable]) throws -> [Self] {
+        let table = SchemaGenerator.shared.table(for: Self.self)
+        var whereClauses: [String] = []
+        var values: [any Sendable] = []
+        for (keyPath, value) in matching {
+            whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
+            values.append(value)
+        }
+        return try readIsolated(from: database, core: core, where: whereClauses.joined(separator: " AND "), arguments: values)
     }
 
     @discardableResult

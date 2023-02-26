@@ -168,6 +168,10 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await id42!.delete(from: db)
         let id42AfterDelete = try await TestModelWithDescription.read(from: db, id: 42)
         XCTAssertNil(id42AfterDelete)
+        
+        let matches = try await TestModelWithDescription.read(from: db, matching: [ \.$title : "Omnibus" ])
+        XCTAssert(matches.count == 1)
+        XCTAssert(matches.first!.title == "Omnibus")
     }
 
     func testColumnTypes() async throws {
