@@ -166,6 +166,10 @@ extension Blackbird {
     }
 
     internal struct Table: Hashable, Sendable {
+        static func == (lhs: Blackbird.Table, rhs: Blackbird.Table) -> Bool {
+            lhs.name == rhs.name && lhs.columns == rhs.columns && lhs.indexes == rhs.indexes && lhs.primaryKeys == rhs.primaryKeys
+        }
+        
         enum Error: Swift.Error {
             case invalidTableDefinition(table: String, description: String)
         }
@@ -183,12 +187,15 @@ extension Blackbird {
         internal let primaryKeys: [Column]
         internal let indexes: [Index]
         
+        internal let emptyInstance: (any BlackbirdModel)?
+        
         private static let resolvedTablesWithDatabases = Locked([Table: Set<Database.InstanceID>]())
         private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID : Set<String>]())
         
-        public init(name: String = "bogus", columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = []) {
+        public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = [], emptyInstance: any BlackbirdModel) {
             if columns.isEmpty { fatalError("No columns specified") }
             
+            self.emptyInstance = emptyInstance
             self.name = name
             self.columns = columns
             self.indexes = indexes
@@ -213,6 +220,7 @@ extension Blackbird {
             if columns.isEmpty { return nil }
             primaryKeyColumns.sort { $0.primaryKeyIndex < $1.primaryKeyIndex }
             
+            self.emptyInstance = nil
             self.name = tableName
             self.columns = columns
             self.primaryKeys = primaryKeyColumns
@@ -223,22 +231,29 @@ extension Blackbird {
             }
         }
         
-        internal func createTableStatement<T>(type: T.Type, overrideTableName: String? = nil) -> String {
+        internal func keyPathToColumnName(keyPath: AnyKeyPath) -> String {
+            guard let emptyInstance else { fatalError("Cannot call keyPathToColumnName on a Blackbird.Table initialized directly from a database") }
+            guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else { fatalError("Key path is not a @BlackbirdColumn on \(name)") }
+            guard let name = column.internalNameInSchemaGenerator.value else { fatalError("Failed to look up key-path name on \(name)") }
+            return name
+        }
+        
+        internal func createTableStatement<T: BlackbirdModel>(type: T.Type, overrideTableName: String? = nil) -> String {
             let columnDefs = columns.map { $0.definition() }.joined(separator: ",")
             let pkDef = primaryKeys.isEmpty ? "" : ",PRIMARY KEY (`\(primaryKeys.map { $0.name }.joined(separator: "`,`"))`)"
             return "CREATE TABLE \(overrideTableName ?? name) (\(columnDefs)\(pkDef))"
         }
         
-        internal func createIndexStatements<T>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
+        internal func createIndexStatements<T: BlackbirdModel>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
         
-        internal func resolveWithDatabase<T>(type: T.Type, database: Database, core: Database.Core, validator: (@Sendable () throws -> Void)?) async throws {
+        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, validator: (@Sendable () throws -> Void)?) async throws {
             if _isAlreadyResolved(type: type, in: database) { return }
             try await core.transaction {
                 try _resolveWithDatabaseIsolated(type: type, database: database, core: $0, validator: validator)
             }
         }
 
-        internal func resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
+        internal func resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
             if _isAlreadyResolved(type: type, in: database) { return }
             try _resolveWithDatabaseIsolated(type: type, database: database, core: core, validator: validator)
         }
@@ -251,7 +266,7 @@ extension Blackbird {
             return alreadyResolved
         }
 
-        private func _resolveWithDatabaseIsolated<T>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
+        private func _resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
             // Table not created yet
             let schemaInDB: Table
             do {
@@ -484,7 +499,7 @@ internal final class SchemaGenerator: Sendable {
         var indexes = T.indexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "index") }, unique: false) }
         indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "unique index") }, unique: true) })
 
-        return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes)
+        return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes, emptyInstance: emptyInstance)
     }
 }
 

@@ -43,7 +43,7 @@ func AssertThrowsErrorAsync(_ action: @autoclosure (() async throws -> Void)) as
     } catch { }
 }
 
-final class BlackbirdTestTests: XCTestCase {
+final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     enum Error: Swift.Error {
         case testError
     }
@@ -632,6 +632,10 @@ final class BlackbirdTestTests: XCTestCase {
         }
         await MainActor.run { }
         XCTAssert(_testChangeNotificationsCallCount == 7)
+    }
 
+    func testKeyPathInterpolation() async throws {
+        let str = "SELECT \(\TestModel.$title)"
+        XCTAssert(str == "SELECT title")
     }
 }
