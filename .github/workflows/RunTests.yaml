@@ -1,0 +1,27 @@
+name: RunTests
+
+# only trigger on main or PR
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  run-tests:
+
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: swift-actions/setup-swift@v1
+        with:
+          swift-version: "5.7.0"
+      - name: Verify swift version
+        run: swift --version
+      - name: Build
+        run: swift build
+      - name: Run tests
+        run: swift test
