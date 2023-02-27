@@ -173,9 +173,22 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(matches.count == 1)
         XCTAssert(matches.first!.title == "Omnibus")
         
-        let rows = try await TestModelWithDescription.query(in: db, "SELECT \(\TestModelWithDescription.$id), \(\TestModelWithDescription.$title) FROM $T WHERE \(\TestModelWithDescription.$title) = ?", "Omnibus")
+        let rows = try await TestModelWithDescription.query(in: db, selectColumns: [\.$id, \.$title, \.$url], matching: [\.$title : "Omnibus"])
         XCTAssert(rows.count == 1)
-        XCTAssert(rows.first![\TestModelWithDescription.$title] == "Omnibus")
+        
+        let omnibusID = rows.first![\.$id]
+        let title = rows.first![\.$title]
+        let url = rows.first![\.$url]
+        XCTAssert(title == "Omnibus")
+        XCTAssert(url != nil)
+        
+        try await TestModelWithDescription.query(in: db, "UPDATE $T SET \(\TestModelWithDescription.$url) = NULL WHERE \(\TestModelWithDescription.$id) = ?", omnibusID)
+        
+        let rowsWithNilURL = try await TestModelWithDescription.query(in: db, selectColumns: [\.$id, \.$url], matching: [\.$id : omnibusID])
+        let id = rowsWithNilURL.first![\.$id]
+        let nilURL = rowsWithNilURL.first![\.$url]
+        XCTAssert(id == omnibusID)
+        XCTAssert(nilURL == nil)
     }
 
     func testColumnTypes() async throws {

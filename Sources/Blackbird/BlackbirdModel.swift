@@ -36,13 +36,6 @@ extension String.StringInterpolation {
     }
 }
 
-extension Blackbird.Row {
-    subscript<T: BlackbirdModel>(_ keyPath: T.BlackbirdColumnKeyPath) -> Value? {
-        let table = SchemaGenerator.shared.table(for: T.self)
-        return self[table.keyPathToColumnName(keyPath: keyPath)]
-    }
-}
-
 /// A model protocol based on `Codable` and SQLite.
 ///
 /// **Example:** A simple model:
@@ -313,7 +306,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     ///
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.
-    ///   - matching: A dictionary of column key-paths of this BlackbirdModel type and the value that each corresponding column must equal.
+    ///   - matching: A dictionary of column key-paths of this BlackbirdModel type and the value that each corresponding column must equal. If the dictionary is empty, all instances in the table are returned.
     /// - Returns: An array of decoded instances matching the query.
     ///
     /// ## Example
@@ -353,6 +346,16 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     /// For use only when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws
 
+    /// Selects a subset of the table's columns matching the given column values, using column key-paths for this model type.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to query.
+    ///   - selectColumns: An array of column key-paths of this BlackbirdModel type. The returned rows will contain only these columns.
+    ///   - matching: A dictionary of column key-paths of this BlackbirdModel type and the value that each corresponding column must equal. If the dictionary is empty, all rows in the table are returned.
+    /// - Returns: An array of matching rows, each containing only the columns specified.
+    static func query(in database: Blackbird.Database, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) async throws -> [Blackbird.ModelRow<Self>]
+
+    /// Synchronous version of ``query(in:selectColumns:matching:)-84z4q`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) throws -> [Blackbird.ModelRow<Self>]
 
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
     /// - Parameters:
@@ -362,11 +365,10 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     ///       - Question-mark placeholders (`?`) for any argument values to be passed to the query.
     ///   - arguments: Values corresponding to any placeholders in the query.
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
-    @discardableResult static func query(in database: Blackbird.Database, _ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row]
+    @discardableResult static func query(in database: Blackbird.Database, _ query: String, _ arguments: Sendable...) async throws -> [Blackbird.ModelRow<Self>]
 
     /// Synchronous version of ``query(in:_:_:)-3n1pp`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, _ arguments: Sendable...) throws -> [Blackbird.Row]
-    
+    @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, _ arguments: Sendable...) throws -> [Blackbird.ModelRow<Self>]
 
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
     /// - Parameters:
@@ -376,10 +378,10 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     ///       - Question-mark placeholders (`?`) for any argument values to be passed to the query.
     ///   - arguments: An array of values corresponding to any placeholders in the query.
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
-    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row]
+    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>]
 
     /// Synchronous version of ``query(in:_:arguments:)-7qfll`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.Row]
+    @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>]
 
 
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
@@ -390,10 +392,10 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
     ///       - Named placeholders prefixed by a colon (`:`), at-sign (`@`), or dollar sign (`$`) as described in the [SQLite documentation](https://www.sqlite.org/c3ref/bind_blob.html).
     ///   - arguments: A dictionary of placeholder names used in the query and their corresponding values. Names must include the prefix character used.
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
-    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row]
+    @discardableResult static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>]
 
     /// Synchronous version of ``query(in:_:arguments:)-6eh8j`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row]
+    @discardableResult static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>]
 
     /// Creates a new instance of the called model type with all values set to their SQLite defaults: nil for optionals, 0 for numeric types, empty string for string values, and empty data for data values.
     static func instanceFromDefaults() throws -> Self
@@ -516,14 +518,14 @@ extension BlackbirdModel {
 
     public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
     }
 
     public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
     }
@@ -534,14 +536,14 @@ extension BlackbirdModel {
 
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [Sendable]) throws -> [Self] {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
     }
 
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [String: Sendable]) throws -> [Self] {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0)
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
     }
@@ -554,6 +556,7 @@ extension BlackbirdModel {
             whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
             values.append(value)
         }
+        if whereClauses.isEmpty { whereClauses.append("1") }
         return try await read(from: database, where: whereClauses.joined(separator: " AND "), arguments: values)
     }
 
@@ -565,42 +568,69 @@ extension BlackbirdModel {
             whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
             values.append(value)
         }
+        if whereClauses.isEmpty { whereClauses.append("1") }
         return try readIsolated(from: database, core: core, where: whereClauses.joined(separator: " AND "), arguments: values)
     }
 
+    public static func query(in database: Blackbird.Database, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
+        let table = Self.table
+        var whereClauses: [String] = []
+        var values: [any Sendable] = []
+        for (keyPath, value) in matching {
+            whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
+            values.append(value)
+        }
+        if whereClauses.isEmpty { whereClauses.append("1") }
+        let columnList = selectColumns.map { table.keyPathToColumnName(keyPath: $0) }.joined(separator: ",")
+        return try await query(in: database, "SELECT \(columnList) FROM $T WHERE \(whereClauses.joined(separator: " AND "))", arguments: values)
+    }
+
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+        let table = Self.table
+        var whereClauses: [String] = []
+        var values: [any Sendable] = []
+        for (keyPath, value) in matching {
+            whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
+            values.append(value)
+        }
+        if whereClauses.isEmpty { whereClauses.append("1") }
+        let columnList = selectColumns.map { table.keyPathToColumnName(keyPath: $0) }.joined(separator: ",")
+        return try queryIsolated(in: database, core: core, "SELECT \(columnList) FROM $T WHERE \(whereClauses.joined(separator: " AND "))", values)
+    }
+
     @discardableResult
-    public static func query(in database: Blackbird.Database, _ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row] {
+    public static func query(in database: Blackbird.Database, _ query: String, _ arguments: Sendable...) async throws -> [Blackbird.ModelRow<Self>] {
         return try await self.query(in: database, query, arguments: arguments)
     }
 
     @discardableResult
-    public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] {
+    public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
     }
 
     @discardableResult
-    public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] {
+    public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
     }
 
     @discardableResult
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, _ arguments: Sendable...) throws -> [Blackbird.Row] {
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, _ arguments: Sendable...) throws -> [Blackbird.ModelRow<Self>] {
         return try self.queryIsolated(in: database, core: core, query, arguments: arguments)
     }
 
     @discardableResult
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.Row] {
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
-        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
+        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
     }
 
     @discardableResult
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.Row] {
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: database) }
-        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments)
+        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
     }
 
     private static func validateSchema(database: Blackbird.Database) throws -> Void {

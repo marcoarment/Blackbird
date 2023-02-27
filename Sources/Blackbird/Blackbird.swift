@@ -29,9 +29,6 @@ import SQLite3
 
 /// A small, fast, lightweight SQLite database wrapper and model layer.
 public class Blackbird {
-    /// A dictionary of a single table row's values, keyed by their column names.
-    public typealias Row = Dictionary<String, Blackbird.Value>
-    
     /// A dictionary of argument values for a database query, keyed by column names.
     public typealias Arguments = Dictionary<String, Blackbird.Value>
     

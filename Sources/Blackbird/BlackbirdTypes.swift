@@ -27,7 +27,9 @@
 import Foundation
 
 /// A wrapped data type supported by ``BlackbirdColumn``.
-public protocol BlackbirdColumnWrappable: Hashable, Codable, Sendable { }
+public protocol BlackbirdColumnWrappable: Hashable, Codable, Sendable {
+    static func fromValue(_ value: Blackbird.Value) -> Self?
+}
 
 
 // MARK: - Column storage-type protocols
@@ -57,82 +59,99 @@ public protocol BlackbirdStorableAsData: Codable {
 extension Double: BlackbirdColumnWrappable, BlackbirdStorableAsDouble {
     public func unifiedRepresentation() -> Double { self }
     public static func from(unifiedRepresentation: Double) -> Self { unifiedRepresentation }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { value.doubleValue }
 }
 
 extension Float: BlackbirdColumnWrappable, BlackbirdStorableAsDouble {
     public func unifiedRepresentation() -> Double { Double(self) }
     public static func from(unifiedRepresentation: Double) -> Self { Float(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let d = value.doubleValue { return Float(d) } else { return nil } }
 }
 
 extension Date: BlackbirdColumnWrappable, BlackbirdStorableAsDouble {
     public func unifiedRepresentation() -> Double { self.timeIntervalSince1970 }
     public static func from(unifiedRepresentation: Double) -> Self { Date(timeIntervalSince1970: unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let d = value.doubleValue { return Date(timeIntervalSince1970: d) } else { return nil } }
 }
 
 extension Data: BlackbirdColumnWrappable, BlackbirdStorableAsData {
     public func unifiedRepresentation() -> Data { self }
     public static func from(unifiedRepresentation: Data) -> Self { unifiedRepresentation }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { value.dataValue }
 }
 
 extension String: BlackbirdColumnWrappable, BlackbirdStorableAsText {
     public func unifiedRepresentation() -> String { self }
     public static func from(unifiedRepresentation: String) -> Self { unifiedRepresentation }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { value.stringValue }
 }
 
 extension URL: BlackbirdColumnWrappable, BlackbirdStorableAsText {
     public func unifiedRepresentation() -> String { self.absoluteString }
     public static func from(unifiedRepresentation: String) -> Self { URL(string: unifiedRepresentation)! }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let s = value.stringValue { return URL(string: s) } else { return nil } }
 }
 
 extension Bool: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self ? 1 : 0) }
     public static func from(unifiedRepresentation: Int64) -> Self { unifiedRepresentation == 0 ? false : true }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { value.boolValue }
 }
 
 extension Int: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { Int(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { value.intValue }
 }
 
 extension Int8: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { Int8(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.intValue { return Int8(i) } else { return nil } }
 }
 
 extension Int16: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { Int16(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.intValue { return Int16(i) } else { return nil } }
 }
 
 extension Int32: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { Int32(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.intValue { return Int32(i) } else { return nil } }
 }
 
 extension Int64: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { self }
     public static func from(unifiedRepresentation: Int64) -> Self { unifiedRepresentation }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.int64Value { return Int64(i) } else { return nil } }
 }
 
 extension UInt8: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { UInt8(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.intValue { return UInt8(i) } else { return nil } }
 }
 
 extension UInt16: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { UInt16(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.intValue { return UInt16(i) } else { return nil } }
 }
 
 extension UInt32: BlackbirdColumnWrappable, BlackbirdStorableAsInteger {
     public func unifiedRepresentation() -> Int64 { Int64(self) }
     public static func from(unifiedRepresentation: Int64) -> Self { UInt32(unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.int64Value { return UInt32(i) } else { return nil } }
 }
 
 // MARK: - Enums, hacks for optionals
 
 /// Declares an enum as compatible with Blackbird column storage, with a raw type of `String` or `URL`.
-public protocol BlackbirdStringEnum: RawRepresentable, CaseIterable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsText { }
+public protocol BlackbirdStringEnum: RawRepresentable, CaseIterable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsText {
+    associatedtype RawValue
+}
 
 /// Declares an enum as compatible with Blackbird column storage, with a Blackbird-compatible raw integer type such as `Int`.
 public protocol BlackbirdIntegerEnum: RawRepresentable, CaseIterable, BlackbirdColumnWrappable where RawValue: BlackbirdStorableAsInteger {
@@ -140,11 +159,18 @@ public protocol BlackbirdIntegerEnum: RawRepresentable, CaseIterable, BlackbirdC
     static func unifiedRawValue(from unifiedRepresentation: Int64) -> RawValue
 }
 
-extension BlackbirdIntegerEnum {
-    public static func unifiedRawValue(from unifiedRepresentation: Int64) -> RawValue { RawValue.from(unifiedRepresentation: unifiedRepresentation) }
+extension BlackbirdStringEnum {
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let s = value.stringValue { return Self(rawValue: RawValue.from(unifiedRepresentation: s)) } else { return nil } }
 }
 
-extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrappable { }
+extension BlackbirdIntegerEnum {
+    public static func unifiedRawValue(from unifiedRepresentation: Int64) -> RawValue { RawValue.from(unifiedRepresentation: unifiedRepresentation) }
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.int64Value { return Self(rawValue: Self.unifiedRawValue(from: i)) } else { return nil } }
+}
+
+extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrappable {
+    public static func fromValue(_ value: Blackbird.Value) -> Self? { return Wrapped.fromValue(value) }
+}
 
 // Bad hack to make Optional<BlackbirdIntegerEnum> conform to BlackbirdStorableAsInteger
 extension Optional: RawRepresentable where Wrapped: RawRepresentable {
