@@ -75,7 +75,7 @@ extension Blackbird {
             let table = SchemaGenerator.shared.table(for: T.self)
             let columnName = table.keyPathToColumnName(keyPath: keyPath)
             
-            guard let value = self[columnName], value != .null else { return nil }
+            guard let value = dictionary[columnName], value != .null else { return nil }
             guard let typedValue = V.fromValue(value) else { fatalError("\(String(describing: T.self)).\(columnName) value in Blackbird.Row dictionary not convertible to \(String(describing: V.self))") }
             return typedValue
         }
@@ -84,7 +84,7 @@ extension Blackbird {
             let table = SchemaGenerator.shared.table(for: T.self)
             let columnName = table.keyPathToColumnName(keyPath: keyPath)
             
-            guard let value = self[columnName] else { fatalError("\(String(describing: T.self)).\(columnName) value not present in Blackbird.Row dictionary") }
+            guard let value = dictionary[columnName] else { fatalError("\(String(describing: T.self)).\(columnName) value not present in Blackbird.Row dictionary") }
             guard let typedValue = V.fromValue(value) else { fatalError("\(String(describing: T.self)).\(columnName) value in Blackbird.Row dictionary not convertible to \(String(describing: V.self))") }
             return typedValue
         }

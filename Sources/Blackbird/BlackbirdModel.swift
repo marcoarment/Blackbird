@@ -572,7 +572,7 @@ extension BlackbirdModel {
         return try readIsolated(from: database, core: core, where: whereClauses.joined(separator: " AND "), arguments: values)
     }
 
-    public static func query(in database: Blackbird.Database, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
+    public static func query(in database: Blackbird.Database, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable] = [:]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         var whereClauses: [String] = []
         var values: [any Sendable] = []
@@ -585,7 +585,7 @@ extension BlackbirdModel {
         return try await query(in: database, "SELECT \(columnList) FROM $T WHERE \(whereClauses.joined(separator: " AND "))", arguments: values)
     }
 
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable] = [:]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         var whereClauses: [String] = []
         var values: [any Sendable] = []
