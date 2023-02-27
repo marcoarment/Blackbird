@@ -29,7 +29,7 @@ import Combine
 
 extension PartialKeyPath: @unchecked Sendable { }
 
-extension String.StringInterpolation {
+public extension String.StringInterpolation {
     mutating func appendInterpolation<T: BlackbirdModel>(_ keyPath: T.BlackbirdColumnKeyPath) {
         let table = SchemaGenerator.shared.table(for: T.self)
         appendLiteral(table.keyPathToColumnName(keyPath: keyPath))
