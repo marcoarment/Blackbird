@@ -1,5 +1,5 @@
 //
-//  BlackbirdTypes.swift
+//  BlackbirdColumnTypes.swift
 //  Created by Marco Arment on 1/14/23.
 //  Copyright (c) 2023 Marco Arment
 //
@@ -30,7 +30,6 @@ import Foundation
 public protocol BlackbirdColumnWrappable: Hashable, Codable, Sendable {
     static func fromValue(_ value: Blackbird.Value) -> Self?
 }
-
 
 // MARK: - Column storage-type protocols
 
