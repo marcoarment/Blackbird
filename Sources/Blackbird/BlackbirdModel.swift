@@ -606,13 +606,15 @@ extension BlackbirdModel {
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        let table = Self.table
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        let table = Self.table
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     @discardableResult
@@ -624,13 +626,14 @@ extension BlackbirdModel {
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
-        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: database) }
-        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        let table = Self.table
+        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     private static func validateSchema(database: Blackbird.Database) throws -> Void {

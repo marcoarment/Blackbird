@@ -66,13 +66,17 @@ extension Blackbird.Row {
 extension Blackbird {
     /// A specialized version of ``Row`` associated with its source ``BlackbirdModel`` type for convenient access to its values with column key-paths.
     public struct ModelRow<T: BlackbirdModel>: Collection, Equatable {
-        internal init(_ row: Blackbird.Row) { dictionary = row }
+        private let table: Blackbird.Table
+    
+        internal init(_ row: Blackbird.Row, table: Blackbird.Table) {
+            self.table = table
+            dictionary = row
+        }
         public var row: Blackbird.Row {
             get { dictionary }
         }
     
         public subscript<V: BlackbirdColumnWrappable>(_ keyPath: KeyPath<T, BlackbirdColumn<Optional<V>>>) -> V? {
-            let table = SchemaGenerator.shared.table(for: T.self)
             let columnName = table.keyPathToColumnName(keyPath: keyPath)
             
             guard let value = dictionary[columnName], value != .null else { return nil }
@@ -81,7 +85,6 @@ extension Blackbird {
         }
 
         public subscript<V: BlackbirdColumnWrappable>(_ keyPath: KeyPath<T, BlackbirdColumn<V>>) -> V {
-            let table = SchemaGenerator.shared.table(for: T.self)
             let columnName = table.keyPathToColumnName(keyPath: keyPath)
             
             guard let value = dictionary[columnName] else { fatalError("\(String(describing: T.self)).\(columnName) value not present in Blackbird.Row dictionary") }
@@ -89,6 +92,11 @@ extension Blackbird {
             return typedValue
         }
 
+        public func value(keyPath: PartialKeyPath<T>) -> Blackbird.Value? {
+            let columnName = table.keyPathToColumnName(keyPath: keyPath)
+            guard let value = dictionary[columnName] else { fatalError("\(String(describing: T.self)).\(columnName) value not present in Blackbird.Row dictionary") }
+            return value
+        }
 
         // Collection conformance
         public typealias DictionaryType = Dictionary<String, Blackbird.Value>
