@@ -38,6 +38,12 @@ public class Blackbird {
     /// A set of column names.
     public typealias ColumnNames = Set<String>
 
+    public struct ColumnInfo {
+        public let name: String
+        public let type: any BlackbirdColumnWrappable.Type
+    }
+    
+
     /// A wrapper for SQLite's column data types.
     public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
         case null

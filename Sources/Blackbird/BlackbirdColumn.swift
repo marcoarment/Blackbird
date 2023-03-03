@@ -29,12 +29,15 @@ import Foundation
 internal protocol ColumnWrapper: WrappedType {
     associatedtype ValueType: BlackbirdColumnWrappable
     var value: ValueType { get }
+    var valueType: any BlackbirdColumnWrappable.Type { get }
     func hasChanged(in database: Blackbird.Database) -> Bool
     func clearHasChanged(in database: Blackbird.Database)
     var internalNameInSchemaGenerator: Blackbird.Locked<String?> { get }
 }
 
 @propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, Sendable, Codable where T: BlackbirdColumnWrappable {
+    internal var valueType: any BlackbirdColumnWrappable.Type { T.self }
+    
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
     
     private var _value: T
