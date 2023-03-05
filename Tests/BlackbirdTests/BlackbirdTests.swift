@@ -339,7 +339,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             let title = try core.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
             XCTAssert(title == "new title")
             
-            return false // rollback
+            return Blackbird.TransactionResult<Void>.rolledBack
         }
         
         let title = try await db.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue

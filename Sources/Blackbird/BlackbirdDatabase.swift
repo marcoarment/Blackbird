@@ -27,6 +27,13 @@
 import Foundation
 import SQLite3
 
+extension Blackbird {
+    public enum TransactionResult<R: Sendable>: Sendable {
+        case rolledBack
+        case committed(R)
+    }
+}
+
 internal protocol BlackbirdQueryable {
     /// Executes arbitrary SQL queries without returning a value.
     ///
@@ -68,7 +75,8 @@ internal protocol BlackbirdQueryable {
     ///
     /// ## See also
     /// ``cancellableTransaction(_:)``
-    func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Void) ) async throws
+    @discardableResult
+    func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> R
 
     /// Equivalent to ``transaction(_:)``, but with the ability to cancel without throwing an error.
     /// - Parameter action: The actions to perform in the transaction. Return `true` to commit the transaction or `false` to roll it back. If an error is thrown, the transaction is rolled back and the error is rethrown to the caller.
@@ -87,7 +95,8 @@ internal protocol BlackbirdQueryable {
     ///     return areWeReadyForCommitment
     /// }
     /// ```
-    func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Bool) ) async throws
+    @discardableResult
+    func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R>
     
     /// Queries the database.
     /// - Parameter query: An SQL query.
@@ -377,9 +386,11 @@ extension Blackbird {
         
         public func execute(_ query: String) async throws { try await core.execute(query) }
 
-        public func transaction(_ action: (@Sendable (_ core: isolated Core) async throws -> Void) ) async throws { try await core.transaction(action) }
+        @discardableResult
+        public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> R) ) async throws -> R { try await core.transaction(action) }
 
-        public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Core) async throws -> Bool) ) async throws { try await core.cancellableTransaction(action) }
+        @discardableResult
+        public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R> { try await core.cancellableTransaction(action) }
 
         @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, [Sendable]()) }
 
@@ -466,23 +477,33 @@ extension Blackbird {
             }
 
             // Exactly like the function below, but accepts an async action
-            public func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Void) ) throws {
-                try cancellableTransaction { core in
-                    try action(core)
-                    return true
+            public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> R {
+                let result = try await cancellableTransaction { core in
+                    let r: R = try await action(core)
+                    return Blackbird.TransactionResult.committed(r)
+                }
+
+                switch result {
+                    case .committed(let r): return r
+                    case .rolledBack: fatalError("should never get here")
                 }
             }
 
             // Exactly like the function above, but requires action to be synchronous
-            public func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Void) ) async throws {
-                try await cancellableTransaction { core in
-                    try await action(core)
-                    return true
+            public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> R) ) throws -> R {
+                let result = try cancellableTransaction { core in
+                    let r: R = try action(core)
+                    return Blackbird.TransactionResult.committed(r)
+                }
+
+                switch result {
+                    case .committed(let r): return r
+                    case .rolledBack: fatalError("should never get here")
                 }
             }
 
             // Exactly like the function below, but accepts an async action
-            public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Bool) ) async throws {
+            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R> {
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -498,19 +519,24 @@ extension Blackbird {
                 defer { perfLog.end(state: spState) }
 
                 try execute("SAVEPOINT \"\(transactionID)\"")
-                var commit = false
-                do { commit = try await action(self) }
-                catch {
+                var result: Blackbird.TransactionResult<R>
+                do {
+                    result = try await action(self)
+                } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
                     throw error
                 }
 
-                if commit { try execute("RELEASE SAVEPOINT \"\(transactionID)\"") }
-                else { try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"") }
+                switch result {
+                    case .rolledBack:   try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    case .committed(_): try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
+                }
+                
+                return result
             }
             
             // Exactly like the function above, but requires action to be synchronous
-            public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Bool) ) throws {
+            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Blackbird.TransactionResult<R>) ) throws -> Blackbird.TransactionResult<R> {
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -526,15 +552,20 @@ extension Blackbird {
                 defer { perfLog.end(state: spState) }
 
                 try execute("SAVEPOINT \"\(transactionID)\"")
-                var commit = false
-                do { commit = try action(self) }
-                catch {
+                var result: Blackbird.TransactionResult<R>
+                do {
+                    result = try action(self)
+                } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
                     throw error
                 }
 
-                if commit { try execute("RELEASE SAVEPOINT \"\(transactionID)\"") }
-                else { try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"") }
+                switch result {
+                    case .rolledBack:   try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    case .committed(_): try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
+                }
+
+                return result
             }
             
             public func execute(_ query: String) throws {
