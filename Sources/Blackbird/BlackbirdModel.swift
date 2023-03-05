@@ -575,7 +575,7 @@ extension BlackbirdModel {
         return try readIsolated(from: database, core: core, where: whereClauses.joined(separator: " AND "), arguments: values)
     }
 
-    public static func query(in database: Blackbird.Database, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable] = [:]) async throws -> [Blackbird.ModelRow<Self>] {
+    private static func _structuredQueryString(selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable]) -> (String, [any Sendable]) {
         let table = Self.table
         var whereClauses: [String] = []
         var values: [any Sendable] = []
@@ -584,21 +584,22 @@ extension BlackbirdModel {
             values.append(value)
         }
         if whereClauses.isEmpty { whereClauses.append("1") }
-        let columnList = selectColumns.map { table.keyPathToColumnName(keyPath: $0) }.joined(separator: ",")
-        return try await query(in: database, "SELECT \(columnList) FROM $T WHERE \(whereClauses.joined(separator: " AND "))", arguments: values)
+
+        // Sort WHEREs and SELECT columns by name so the resulting prepared statement will always be the same (and can be reused)
+        whereClauses.sort { $0 < $1 }
+        let columnList = selectColumns.map { table.keyPathToColumnName(keyPath: $0) }.sorted { $0 < $1 }.joined(separator: ",")
+
+        return ("SELECT \(columnList) FROM $T WHERE \(whereClauses.joined(separator: " AND "))", values)
+    }
+
+    public static func query(in database: Blackbird.Database, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable] = [:]) async throws -> [Blackbird.ModelRow<Self>] {
+        let (queryStr, values) = _structuredQueryString(selectColumns: selectColumns, matching: matching)
+        return try await query(in: database, queryStr, arguments: values)
     }
 
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, selectColumns: [BlackbirdColumnKeyPath], matching: [BlackbirdColumnKeyPath : Sendable] = [:]) throws -> [Blackbird.ModelRow<Self>] {
-        let table = Self.table
-        var whereClauses: [String] = []
-        var values: [any Sendable] = []
-        for (keyPath, value) in matching {
-            whereClauses.append("\(table.keyPathToColumnName(keyPath: keyPath)) = ?")
-            values.append(value)
-        }
-        if whereClauses.isEmpty { whereClauses.append("1") }
-        let columnList = selectColumns.map { table.keyPathToColumnName(keyPath: $0) }.joined(separator: ",")
-        return try queryIsolated(in: database, core: core, "SELECT \(columnList) FROM $T WHERE \(whereClauses.joined(separator: " AND "))", values)
+        let (queryStr, values) = _structuredQueryString(selectColumns: selectColumns, matching: matching)
+        return try queryIsolated(in: database, core: core, queryStr, arguments: values)
     }
 
     @discardableResult
