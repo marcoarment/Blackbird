@@ -265,7 +265,7 @@ extension Blackbird {
         private let lock = Lock()
         private var _value: T
         
-        init(_ initialValue: T) {
+        public init(_ initialValue: T) {
             _value = initialValue
         }
         
