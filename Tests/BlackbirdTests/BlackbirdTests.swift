@@ -659,4 +659,68 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let str = "SELECT \(\TestModel.$title)"
         XCTAssert(str == "SELECT title")
     }
+    
+    func testOptionalColumn() async throws {
+        let db = try Blackbird.Database.inMemoryDatabase(options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
+        
+        let testDate = Date()
+        let testURL = URL(string: "https://github.com/marcoarment/Blackbird")!
+        let testData = "Hi".data(using: .utf8)
+        try await TestModelWithOptionalColumns(id: 1, date: Date(), name: "a").write(to: db)
+        try await TestModelWithOptionalColumns(id: 2, date: Date(), name: "b", value: "2").write(to: db)
+        try await TestModelWithOptionalColumns(id: 3, date: Date(), name: "c", value: "3", otherValue: 30).write(to: db)
+        try await TestModelWithOptionalColumns(id: 4, date: Date(), name: "d", value: "4", optionalDate: testDate).write(to: db)
+        try await TestModelWithOptionalColumns(id: 5, date: Date(), name: "e", value: "5", optionalURL: testURL).write(to: db)
+        try await TestModelWithOptionalColumns(id: 6, date: Date(), name: "f", value: "6", optionalData: testData).write(to: db)
+        
+        let t1 = try await TestModelWithOptionalColumns.read(from: db, id: 1)!
+        let t2 = try await TestModelWithOptionalColumns.read(from: db, id: 2)!
+        let t3 = try await TestModelWithOptionalColumns.read(from: db, id: 3)!
+        let t4 = try await TestModelWithOptionalColumns.read(from: db, id: 4)!
+        let t5 = try await TestModelWithOptionalColumns.read(from: db, id: 5)!
+        let t6 = try await TestModelWithOptionalColumns.read(from: db, id: 6)!
+
+        XCTAssert(t1.name == "a")
+        XCTAssert(t2.name == "b")
+        XCTAssert(t3.name == "c")
+        XCTAssert(t4.name == "d")
+        XCTAssert(t5.name == "e")
+        XCTAssert(t6.name == "f")
+
+        XCTAssert(t1.value == nil)
+        XCTAssert(t2.value == "2")
+        XCTAssert(t3.value == "3")
+        XCTAssert(t4.value == "4")
+        XCTAssert(t5.value == "5")
+        XCTAssert(t6.value == "6")
+
+        XCTAssert(t1.otherValue == nil)
+        XCTAssert(t2.otherValue == nil)
+        XCTAssert(t3.otherValue == 30)
+        XCTAssert(t4.otherValue == nil)
+        XCTAssert(t5.otherValue == nil)
+        XCTAssert(t6.otherValue == nil)
+
+        XCTAssert(t1.optionalDate == nil)
+        XCTAssert(t2.optionalDate == nil)
+        XCTAssert(t3.optionalDate == nil)
+        XCTAssert(abs(t4.optionalDate!.timeIntervalSince(testDate)) < 0.001)
+        XCTAssert(t5.optionalDate == nil)
+        XCTAssert(t6.optionalDate == nil)
+
+        XCTAssert(t1.optionalURL == nil)
+        XCTAssert(t2.optionalURL == nil)
+        XCTAssert(t3.optionalURL == nil)
+        XCTAssert(t4.optionalURL == nil)
+        XCTAssert(t5.optionalURL == testURL)
+        XCTAssert(t6.optionalURL == nil)
+
+        XCTAssert(t1.optionalData == nil)
+        XCTAssert(t2.optionalData == nil)
+        XCTAssert(t3.optionalData == nil)
+        XCTAssert(t4.optionalData == nil)
+        XCTAssert(t5.optionalData == nil)
+        XCTAssert(t6.optionalData == testData)
+    }
 }
+

@@ -112,6 +112,15 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
             return (stringEnum as? T)!
         }
 
+        if let eT = T.self as? any OptionalCreatable.Type, let wrappedType = eT.creatableWrappedType() as? any Decodable.Type {
+            if value == .null {
+                return eT.createFromNilValue() as! T
+            } else {
+                let wrappedValue = try decode(wrappedType)
+                return eT.createFromValue(wrappedValue) as! T
+            }
+        }
+
         return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: codingPath))
     }
 

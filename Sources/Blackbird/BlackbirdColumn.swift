@@ -124,6 +124,19 @@ extension Optional: OptionalProtocol {
     }
 }
 
+internal protocol OptionalCreatable {
+    associatedtype Wrapped
+    static func createFromNilValue() -> Self
+    static func createFromValue(_ wrapped: Any) -> Self
+    static func creatableWrappedType() -> Any.Type
+}
+
+extension Optional: OptionalCreatable {
+    static func createFromNilValue() -> Self { .none }
+    static func createFromValue(_ wrapped: Any) -> Self { .some(wrapped as! Wrapped) }
+    static func creatableWrappedType() -> Any.Type { Wrapped.self }
+}
+
 internal protocol WrappedType {
     static func schemaGeneratorWrappedType() -> Any.Type
 }
