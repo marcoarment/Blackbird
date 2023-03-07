@@ -290,10 +290,6 @@ extension Blackbird {
         ///
         /// An error will be thrown if another instance exists with the same filename, the database cannot be created, or the linked version of SQLite lacks the required capabilities.
         public init(path: String, options: Options = []) throws {
-            let isUniqueInstanceForPath = options.contains(.inMemoryDatabase) || InstancePool.addInstance(path: path)
-            if !isUniqueInstanceForPath { throw Error.anotherInstanceExistsWithPath(path: path) }
-            id = InstancePool.nextInstanceID()
-
             // Use a local because we can't use self until everything has been initalized
             let performanceLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database")
             let spState = performanceLog.begin(signpost: .openDatabase)
@@ -304,6 +300,10 @@ extension Blackbird {
                 normalizedOptions.insert(.inMemoryDatabase)
                 normalizedOptions.remove(.monitorForExternalChanges)
             }
+
+            let isUniqueInstanceForPath = normalizedOptions.contains(.inMemoryDatabase) || InstancePool.addInstance(path: path)
+            if !isUniqueInstanceForPath { throw Error.anotherInstanceExistsWithPath(path: path) }
+            id = InstancePool.nextInstanceID()
 
             self.options = normalizedOptions
             self.path = normalizedOptions.contains(.inMemoryDatabase) ? nil : path
