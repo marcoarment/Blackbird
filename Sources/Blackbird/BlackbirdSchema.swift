@@ -209,6 +209,7 @@ extension Blackbird {
             upsertClause = Self.generateUpsertClause(columnNames: orderedColumnNames, primaryKeyColumnNames: primaryKeyColumnNames)
         }
         
+        // Enable "upsert" (REPLACE INTO) behavior ONLY for primary-key conflicts, not any other UNIQUE constraints
         private static func generateUpsertClause(columnNames: [String], primaryKeyColumnNames: [String])-> String {
             let upsertReplacements = columnNames.filter { !primaryKeyColumnNames.contains($0) }.map { "`\($0)` = excluded.`\($0)`" }
             return upsertReplacements.isEmpty ? "" : "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"

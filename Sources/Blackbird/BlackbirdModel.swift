@@ -709,8 +709,12 @@ extension BlackbirdModel {
         }
         
         if changedColumns.isEmpty { return }
-
         let primaryKeyValues = table.primaryKeys.map { valuesByColumnName[$0.name]! }
+        
+        // Intentionally using "INSERT INTO ... ON CONFLICT (primary key) DO UPDATE..."
+        //  instead of "REPLACE INTO". This way, primary-key duplicates are treated as UPDATEs,
+        //  but conflicts in UNIQUE indexes fail and throw Error.uniqueConstraintFailed.
+        //
         let sql = "INSERT INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ","))) \(table.upsertClause)"
 
         database.changeReporter.ignoreWritesToTable(Self.tableName)
