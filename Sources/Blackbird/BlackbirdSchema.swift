@@ -186,6 +186,7 @@ extension Blackbird {
         internal let columnNames: ColumnNames
         internal let primaryKeys: [Column]
         internal let indexes: [Index]
+        internal let upsertClause: String
         
         internal let emptyInstance: (any BlackbirdModel)?
         
@@ -194,16 +195,23 @@ extension Blackbird {
         
         public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = [], emptyInstance: any BlackbirdModel) {
             if columns.isEmpty { fatalError("No columns specified") }
-            
+            let orderedColumnNames = columns.map { $0.name }
             self.emptyInstance = emptyInstance
             self.name = name
             self.columns = columns
             self.indexes = indexes
-            self.columnNames = Set(columns.map { $0.name })
+            self.columnNames = Set(orderedColumnNames)
             self.primaryKeys = primaryKeyColumnNames.map { name in
                 guard let pkColumn = columns.first(where: { $0.name == name }) else { fatalError("Primary-key column \"\(name)\" not found") }
                 return pkColumn
             }
+            
+            upsertClause = Self.generateUpsertClause(columnNames: orderedColumnNames, primaryKeyColumnNames: primaryKeyColumnNames)
+        }
+        
+        private static func generateUpsertClause(columnNames: [String], primaryKeyColumnNames: [String])-> String {
+            let upsertReplacements = columnNames.filter { !primaryKeyColumnNames.contains($0) }.map { "`\($0)` = excluded.`\($0)`" }
+            return upsertReplacements.isEmpty ? "" : "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"
         }
         
         internal init?(isolatedCore core: isolated Database.Core, tableName: String) throws {
@@ -219,16 +227,19 @@ extension Blackbird {
             }
             if columns.isEmpty { return nil }
             primaryKeyColumns.sort { $0.primaryKeyIndex < $1.primaryKeyIndex }
+            let orderedColumnNames = columns.map { $0.name }
             
             self.emptyInstance = nil
             self.name = tableName
             self.columns = columns
             self.primaryKeys = primaryKeyColumns
-            self.columnNames = Set(columns.map { $0.name })
+            self.columnNames = Set(orderedColumnNames)
             self.indexes = try core.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", tableName).compactMap { row in
                 guard let sql = row["sql"]?.stringValue else { return nil }
                 return try Index(definition: sql)
             }
+
+            upsertClause = Self.generateUpsertClause(columnNames: orderedColumnNames, primaryKeyColumnNames: primaryKeyColumns.map { $0.name })
         }
 
         internal func keyPathToColumnInfo(keyPath: AnyKeyPath) -> Blackbird.ColumnInfo {
@@ -377,6 +388,7 @@ internal final class SchemaGenerator: Sendable {
         
         let mirror = Mirror(reflecting: emptyInstance)
         var columns: [Blackbird.Column] = []
+        var nullableColumnNames = Set<String>()
         var hasColumNamedID = false
         for child in mirror.children {
             guard var label = child.label else { continue }
@@ -389,7 +401,10 @@ internal final class SchemaGenerator: Sendable {
                 var isOptional = false
                 var unwrappedType = Swift.type(of: column.value) as Any
                 while let wrappedType = unwrappedType as? WrappedType.Type {
-                    if unwrappedType is OptionalProtocol.Type { isOptional = true }
+                    if unwrappedType is OptionalProtocol.Type {
+                        isOptional = true
+                        nullableColumnNames.insert(label)
+                    }
                     unwrappedType = wrappedType.schemaGeneratorWrappedType()
                 }
 
@@ -425,7 +440,15 @@ internal final class SchemaGenerator: Sendable {
         }
 
         var indexes = T.indexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "index") }, unique: false) }
-        indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "unique index") }, unique: true) })
+        indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in
+            Blackbird.Index(columnNames: keyPaths.map {
+                let name = keyPathToColumnName($0, "unique index")
+                if nullableColumnNames.contains(name) {
+                    fatalError("\(String(describing: T.self)): Unique index cannot contain nullable column \"\(name)\". SQLite does not enforce UNIQUE constraints with NULL columns.")
+                }
+                return name
+            }, unique: true)
+        })
 
         return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes, emptyInstance: emptyInstance)
     }

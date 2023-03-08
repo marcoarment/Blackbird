@@ -661,7 +661,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testOptionalColumn() async throws {
-        let db = try Blackbird.Database.inMemoryDatabase(options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
+        let db = try Blackbird.Database.inMemoryDatabase()
         
         let testDate = Date()
         let testURL = URL(string: "https://github.com/marcoarment/Blackbird")!
@@ -721,6 +721,52 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(t4.optionalData == nil)
         XCTAssert(t5.optionalData == nil)
         XCTAssert(t6.optionalData == testData)
+    }
+
+    func testUniqueIndex() async throws {
+        let db = try Blackbird.Database.inMemoryDatabase()
+
+        let testDate = Date()
+        try await TestModelWithUniqueIndex(id: 1, a: "a1", b: 100, c: testDate).write(to: db)
+        try await TestModelWithUniqueIndex(id: 2, a: "a2", b: 200, c: testDate).write(to: db)
+        
+        var caughtExpectedError = false
+        do {
+            try await TestModelWithUniqueIndex(id: 3, a: "a2", b: 200, c: testDate).write(to: db)
+        } catch Blackbird.Database.Error.uniqueConstraintFailed {
+            caughtExpectedError = true
+        }
+        XCTAssert(caughtExpectedError)
+
+        let allBefore = try await TestModelWithUniqueIndex.read(from: db, where: "1 ORDER BY id")
+        XCTAssert(allBefore.count == 2)
+
+        XCTAssert(allBefore[0].id == 1)
+        XCTAssert(allBefore[0].a == "a1")
+        XCTAssert(allBefore[0].b == 100)
+
+        XCTAssert(allBefore[1].id == 2)
+        XCTAssert(allBefore[1].a == "a2")
+        XCTAssert(allBefore[1].b == 200)
+
+
+        try await TestModelWithUniqueIndex(id: 3, a: "a2", b: 201, c: testDate).write(to: db)
+        
+        let all = try await TestModelWithUniqueIndex.read(from: db, where: "1 ORDER BY id")
+        XCTAssert(all.count == 3)
+
+        XCTAssert(all[0].id == 1)
+        XCTAssert(all[0].a == "a1")
+        XCTAssert(all[0].b == 100)
+
+        XCTAssert(all[1].id == 2)
+        XCTAssert(all[1].a == "a2")
+        XCTAssert(all[1].b == 200)
+
+        XCTAssert(all[2].id == 3)
+        XCTAssert(all[2].a == "a2")
+        XCTAssert(all[2].b == 201)
+
     }
 }
 

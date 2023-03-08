@@ -208,6 +208,7 @@ extension Blackbird {
             case queryArgumentValueError(query: String, description: String)
             case queryExecutionError(query: String, description: String)
             case queryResultValueError(query: String, column: String)
+            case uniqueConstraintFailed
             case databaseIsClosed
         }
         
@@ -675,7 +676,14 @@ extension Blackbird {
 
                 var result = sqlite3_step(statementHandle)
                 
-                guard result == SQLITE_ROW || result == SQLITE_DONE else { throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle)) }
+                guard result == SQLITE_ROW || result == SQLITE_DONE else {
+                    sqlite3_reset(statementHandle)
+                    sqlite3_clear_bindings(statementHandle)
+                    switch result {
+                        case SQLITE_CONSTRAINT: throw Error.uniqueConstraintFailed
+                        default: throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                    }
+                }
 
                 let columnCount = sqlite3_column_count(statementHandle)
                 if columnCount == 0 {

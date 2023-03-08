@@ -136,6 +136,17 @@ public struct TestModelWithOptionalColumns: BlackbirdModel {
     @BlackbirdColumn public var optionalData: Data?
 }
 
+public struct TestModelWithUniqueIndex: BlackbirdModel {
+    public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$a, \.$b, \.$c ]
+    ]
+
+    @BlackbirdColumn public var id: Int64
+    @BlackbirdColumn public var a: String
+    @BlackbirdColumn public var b: Int
+    @BlackbirdColumn public var c: Date
+}
+
 // MARK: - Schema change: Add primary-key column
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {

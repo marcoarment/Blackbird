@@ -551,7 +551,7 @@ extension BlackbirdModel {
         }
     }
 
-    public static func read(from database: Blackbird.Database, matching: [BlackbirdColumnKeyPath : Sendable]) async throws -> [Self] {
+    public static func read(from database: Blackbird.Database, matching: [BlackbirdColumnKeyPath : Sendable] = [:]) async throws -> [Self] {
         let table = SchemaGenerator.shared.table(for: Self.self)
         var whereClauses: [String] = []
         var values: [any Sendable] = []
@@ -563,7 +563,7 @@ extension BlackbirdModel {
         return try await read(from: database, where: whereClauses.joined(separator: " AND "), arguments: values)
     }
 
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: [BlackbirdColumnKeyPath : Sendable]) throws -> [Self] {
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: [BlackbirdColumnKeyPath : Sendable] = [:]) throws -> [Self] {
         let table = SchemaGenerator.shared.table(for: Self.self)
         var whereClauses: [String] = []
         var values: [any Sendable] = []
@@ -711,7 +711,7 @@ extension BlackbirdModel {
         if changedColumns.isEmpty { return }
 
         let primaryKeyValues = table.primaryKeys.map { valuesByColumnName[$0.name]! }
-        let sql = "REPLACE INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
+        let sql = "INSERT INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ","))) \(table.upsertClause)"
 
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
