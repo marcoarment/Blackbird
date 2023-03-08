@@ -435,7 +435,7 @@ internal final class SchemaGenerator: Sendable {
         
         let keyPathToColumnName = { (keyPath: AnyKeyPath, messageLabel: String) in
             guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else {
-                fatalError("\(String(describing: T.self)): \(messageLabel) includes a key path that is not a @BlackbirdColumn")
+                fatalError("\(String(describing: T.self)): \(messageLabel) includes a key path that is not a @BlackbirdColumn. (Use the \"$\" wrapper for a column.)")
             }
             
             guard let name = column.internalNameInSchemaGenerator.value else { fatalError("\(String(describing: T.self)): Failed to look up \(messageLabel) key-path name") }
@@ -452,8 +452,27 @@ internal final class SchemaGenerator: Sendable {
         indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in
             Blackbird.Index(columnNames: keyPaths.map {
                 let name = keyPathToColumnName($0, "unique index")
-                if nullableColumnNames.contains(name) {
-                    fatalError("\(String(describing: T.self)): Unique index cannot contain nullable column \"\(name)\". SQLite does not enforce UNIQUE constraints with NULL columns.")
+                if nullableColumnNames.contains(name), keyPaths.count > 1 {
+                    /*
+                        I've decided not to support multi-column UNIQUE indexes containing NULLable columns because
+                        they behave in a way that most people wouldn't expect: a NULL value anywhere in a multi-column
+                        index makes it pass any UNIQUE checks, even if the other column values would otherwise be
+                        non-unique.
+                        
+                        E.g. CREATE TABLE t (a NOT NULL, b NULL) with UNIQUE (a, b) would allow these rows to coexist:
+
+                           (a=1, b=NULL)
+                           (a=1, b=NULL)
+                           
+                        ...even though they would not be considered unique values by Swift or most people's assumptions.
+                        
+                        Since Blackbird tries to abstract away most really weird SQL behaviors that would differ
+                        significantly from what Swift programmers expect, this is intentionally not permitted.
+                     */
+                    fatalError(
+                        "\(String(describing: T.self)): Blackbird does not support multi-column UNIQUE indexes containing NULL columns. " +
+                        "Change column \"\(name)\" to non-optional, or create a separate UNIQUE index for it."
+                    )
                 }
                 return name
             }, unique: true)

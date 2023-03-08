@@ -138,7 +138,7 @@ public struct TestModelWithOptionalColumns: BlackbirdModel {
 
 public struct TestModelWithUniqueIndex: BlackbirdModel {
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
-        [ \.$a, \.$b, \.$c ]
+        [ \.$a, \.$b, \.$c ],
     ]
 
     @BlackbirdColumn public var id: Int64
