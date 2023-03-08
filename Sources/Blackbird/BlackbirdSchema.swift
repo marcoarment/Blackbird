@@ -129,7 +129,7 @@ extension Blackbird {
         
         internal func definition(tableName: String) -> String {
             if columnNames.isEmpty { fatalError("Indexes require at least one column") }
-            return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
+            return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(tableName)__\(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
         }
         
         public init(columnNames: [String], unique: Bool = false) {
@@ -147,10 +147,18 @@ extension Blackbird {
             unique = scanner.scanString("UNIQUE") != nil
             guard scanner.scanString("INDEX") != nil else { throw Error.cannotParseIndexDefinition(definition: definition, description: "Expected 'INDEX'") }
 
-            guard let indexName = scanner.scanUpToString("ON")?.trimmingCharacters(in: Self.parserIgnoredCharacters), !indexName.isEmpty else {
+            guard let indexName = scanner.scanUpToString(" ON")?.trimmingCharacters(in: Self.parserIgnoredCharacters), !indexName.isEmpty else {
                 throw Error.cannotParseIndexDefinition(definition: definition, description: "Expected index name")
             }
-            self.name = indexName
+
+            let nameScanner = Scanner(string: indexName)
+            _ = nameScanner.scanUpToString("__")
+            if nameScanner.scanString("__") == "__" {
+                self.name = String(indexName.suffix(from: nameScanner.currentIndex))
+            } else {
+                throw Error.cannotParseIndexDefinition(definition: definition, description: "Index name does not match expected format")
+            }
+            
             guard scanner.scanString("ON") != nil else { throw Error.cannotParseIndexDefinition(definition: definition, description: "Expected 'ON'") }
 
             guard let tableName = scanner.scanUpToString("(")?.trimmingCharacters(in: Self.parserIgnoredCharacters), !tableName.isEmpty else {
@@ -310,7 +318,7 @@ extension Blackbird {
                 try core.transaction { core in
                     // drop indexes and columns
                     var schemaInDB = schemaInDB
-                    for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(indexToDrop.name)`") }
+                    for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(name)__\(indexToDrop.name)`") }
                     for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(name)` DROP COLUMN `\(columnNameToDrop)`") }
                     schemaInDB = try Table(isolatedCore: core, tableName: name)!
                     
