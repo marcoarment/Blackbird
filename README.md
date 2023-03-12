@@ -117,6 +117,8 @@ Immediate to-do list:
 
 * __Cleaner protocol name (`Blackbird.Model`):__ Swift protocols can't contain dots or be nested within another type.
 
+* __Nested struct definitions inside protocols:__ Sure would make a lot of my "BlackbirdModel…" names shorter.
+
 ## FAQ
 
 ### why is it called blackbird
@@ -135,7 +137,7 @@ This is a database engine that'll be used by, at most, a handful of nerds. It do
 
 I like unique names (rather than generic or descriptive names, like `Model` or `SwiftSQLite`) because they're easier to search for and harder to confuse with other types. So I wanted something memorable. I suppose I could've called it something like `ButtDB` — memorable! — but as I use it over the coming years, I wanted to type something cooler after all of my `struct` definitions.
 
-### why didn't you just use [other SQLite-based Swift library]
+### why didn't you just use [other SQLite library]
 
 I like to write my own libraries.
 
@@ -145,10 +147,14 @@ I also learn a great deal when writing them, exercising and improving my skills 
 
 And when I write the libraries, I understand how everything works as I'm using them, therefore creating fewer bugs and writing more efficient software.
 
-### why doesn't it abstract more of SQLite with more compile-time restrictions or query builders or dot-chaining or
+### you know [other SQLite library] is faster
 
-I didn't want to get too far from using SQLite.
+I know. Ironic, considering that I named this one after the fastest plane.
 
-This is for people who want the CRUD basics taken care of, but might sometimes want to write their own custom `SELECT` or `UPDATE` queries or control their own indexes without fighting the library or incurring unnecessary overhead.
+Other Swift SQLite libraries can be faster by omitting much of Blackbird's reflection, abstraction, and key-path usage. Some use code-generation methods, which can be very fast but complicate the build and tooling. Others take less-abstracted approaches that make usage more complicated and error-prone.
 
-Also, dot-chaining sucks.
+I've never written an app that was too slow to read its database, but I've frequently struggled with maintenance of large, complex codebases.
+
+Blackbird's goal is to achieve my ideal balance of ease-of-use and bug-avoidance, even though it's therefore not the fastest Swift SQLite library.
+
+Phones keep getting faster, but a bug is a bug forever.
