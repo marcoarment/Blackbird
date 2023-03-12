@@ -247,7 +247,7 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``delete(from:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>? = nil) async throws {
+    public static func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>? = nil) throws {
         let decoded = _decodeStructuredQuery(operation: "DELETE FROM", matching: matching)
         try queryIsolated(in: database, core: core, decoded.query, arguments: decoded.arguments)
     }

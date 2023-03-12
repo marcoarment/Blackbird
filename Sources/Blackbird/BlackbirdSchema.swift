@@ -251,6 +251,13 @@ extension Blackbird {
             upsertClause = Self.generateUpsertClause(columnNames: orderedColumnNames, primaryKeyColumnNames: primaryKeyColumns.map { $0.name })
         }
 
+        internal func keyPathToColumnInfo(keyPath: AnyKeyPath) -> Blackbird.ColumnInfo {
+            guard let emptyInstance else { fatalError("Cannot call keyPathToColumnName on a Blackbird.Table initialized directly from a database") }
+            guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else { fatalError("Key path is not a @BlackbirdColumn on \(name)") }
+            guard let name = column.internalNameInSchemaGenerator.value else { fatalError("Failed to look up key-path name on \(name)") }
+            return Blackbird.ColumnInfo(name: name, type: column.valueType.self)
+        }
+
         internal func keyPathToColumnName(keyPath: AnyKeyPath) -> String {
             guard let emptyInstance else { fatalError("Cannot call keyPathToColumnName on a Blackbird.Table initialized directly from a database") }
             guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else { fatalError("Key path is not a @BlackbirdColumn on \(name). Make sure to use the $-prefixed wrapper, e.g. \\.$id.") }

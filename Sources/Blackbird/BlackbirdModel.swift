@@ -205,6 +205,16 @@ extension BlackbirdModel {
         }
     }
 
+    /// Look up ``Blackbird/ColumnInfo`` instances from key-paths to `@BlackbirdColumn` variables.
+    public static func columnInfoFromKeyPaths(_ keyPaths: [PartialKeyPath<Self>]) -> [PartialKeyPath<Self>: Blackbird.ColumnInfo] {
+        let table = Self.table
+        var infos: [PartialKeyPath<Self>: Blackbird.ColumnInfo] = [:]
+        for keyPath in keyPaths {
+            infos[keyPath] = table.keyPathToColumnInfo(keyPath: keyPath)
+        }
+        return infos
+    }
+
     /// The set of column names, as strings, that have changed since its last save to the specified database.
     ///
     /// This function errs toward over-reporting. If the instance was created by other means and was not read from a database, or it was read from a different database, it will return the names of all columns.
