@@ -195,13 +195,17 @@ extension Blackbird {
 }
 
 extension BlackbirdModel {
+    /// A convenience accessor to this instance's ``BlackbirdLiveModel``. Useful for SwiftUI.
     public var liveModel: BlackbirdLiveModel<Self> { get { BlackbirdLiveModel(self) } }
+
+    /// Shorthand for this model's ``Blackbird/LiveResults`` type.
     public typealias LiveResults = Blackbird.LiveResults<Self>
 }
 
 // MARK: - Multi-row query updaters
 
 extension Blackbird {
+    /// Used in Blackbird's SwiftUI primitives.
     public final class QueryUpdater: @unchecked Sendable { // unchecked due to internal locking
         @Binding public var results: Blackbird.LiveResults<Blackbird.Row>
 
@@ -237,6 +241,7 @@ extension Blackbird {
         }
     }
 
+    /// Used in Blackbird's SwiftUI primitives.
     public final class ModelArrayUpdater<T: BlackbirdModel>: @unchecked Sendable { // unchecked due to internal locking
         @Binding public var results: Blackbird.LiveResults<T>
 
@@ -270,6 +275,7 @@ extension Blackbird {
         }
     }
 
+    /// Used in Blackbird's SwiftUI primitives.
     public class ModelUpdater<T: BlackbirdModel>: @unchecked Sendable  { // unchecked due to internal locking
         @Binding public var instance: T?
 
@@ -304,6 +310,7 @@ extension Blackbird {
 // MARK: - Single-instance updater
 
 extension Blackbird {
+    /// Used in Blackbird's SwiftUI primitives.
     public final class ModelInstanceUpdater<T: BlackbirdModel>: @unchecked Sendable { // unchecked due to internal locking
         @Binding public var instance: T?
         @Binding public var didLoad: Bool

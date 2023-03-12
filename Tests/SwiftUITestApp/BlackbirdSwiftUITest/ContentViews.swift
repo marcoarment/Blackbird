@@ -32,7 +32,7 @@ import Blackbird
 struct ContentViewEnvironmentDB: View {
     @Environment(\.blackbirdDatabase) var database
 
-    @BlackbirdLiveModels({ try await Post.read(from: $0, where: "1 ORDER BY id") }) var posts
+    @BlackbirdLiveModels({ try await Post.read(from: $0, orderBy: .ascending(\.$id)) }) var posts
 
     @BlackbirdLiveQuery(tableName: "Post", { try await $0.query("SELECT COUNT(*) FROM Post") }) var count
 
@@ -159,7 +159,7 @@ struct ContentViewBoundDB: View {
             }
         }
         .onAppear {
-            postsUpdater.bind(from: database, to: $posts) { try await Post.read(from: $0, where: "1 ORDER BY id") }
+            postsUpdater.bind(from: database, to: $posts) { try await Post.read(from: $0, orderBy: .ascending(\.$id)) }
         }
     }
 }

@@ -34,6 +34,7 @@ internal protocol ColumnWrapper: WrappedType {
     var internalNameInSchemaGenerator: Blackbird.Locked<String?> { get }
 }
 
+/// Property wrapper for column variables in ``BlackbirdModel`` `struct` definitions.
 @propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, Sendable, Codable where T: BlackbirdColumnWrappable {
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
     
@@ -70,6 +71,7 @@ internal protocol ColumnWrapper: WrappedType {
         }
     }
     
+    /// Whether this value has changed since last being saved or read. This errs on the side of over-reporting changes, and may return `true` if the value has not actually changed.
     public func hasChanged(in database: Blackbird.Database) -> Bool {
         state.withLock { state in
             if state.lastUsedDatabase != database { return true }

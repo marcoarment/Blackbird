@@ -33,23 +33,27 @@ public protocol BlackbirdColumnWrappable: Hashable, Codable, Sendable {
 
 // MARK: - Column storage-type protocols
 
-// UInt, UInt64 intentionally omitted from BlackbirdStorableAsInteger since SQLite integers max out at 64-bit signed
-
+/// Internally represents data types compatible with SQLite's `INTEGER` type.
+///
+/// `UInt` and `UInt64` are intentionally omitted since SQLite integers max out at 64-bit signed.
 public protocol BlackbirdStorableAsInteger: Codable {
     func unifiedRepresentation() -> Int64
     static func from(unifiedRepresentation: Int64) -> Self
 }
 
+/// Internally represents data types compatible with SQLite's `DOUBLE` type.
 public protocol BlackbirdStorableAsDouble: Codable {
     func unifiedRepresentation() -> Double
     static func from(unifiedRepresentation: Double) -> Self
 }
 
+/// Internally represents data types compatible with SQLite's `TEXT` type.
 public protocol BlackbirdStorableAsText: Codable {
     func unifiedRepresentation() -> String
     static func from(unifiedRepresentation: String) -> Self
 }
 
+/// Internally represents data types compatible with SQLite's `BLOB` type.
 public protocol BlackbirdStorableAsData: Codable {
     func unifiedRepresentation() -> Data
     static func from(unifiedRepresentation: Data) -> Self

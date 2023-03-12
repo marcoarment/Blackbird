@@ -136,7 +136,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testQueries() async throws {
-        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
         let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
         
         try await db.transaction { core in
@@ -145,6 +145,12 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
                 try m.writeIsolated(to: db, core: core)
             }
         }
+        
+        let countReturned = try await TestModelWithDescription.count(in: db)
+        XCTAssert(countReturned == 1000)
+
+        let countReturnedMatching = try await TestModelWithDescription.count(in: db, matching: \.$id >= 500)
+        XCTAssert(countReturnedMatching == 500)
 
         let the = try await TestModelWithDescription.read(from: db, where: "title LIKE 'the%'")
         XCTAssert(the.count == 231)
@@ -158,6 +164,23 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let paramFormat3Results = try await TestModelWithDescription.read(from: db, where: "title LIKE :title", arguments: [":title" : "the%"])
         XCTAssert(paramFormat3Results.count == 231)
 
+        let paramFormat4Results = try await TestModelWithDescription.read(from: db, where: "\(\TestModelWithDescription.$title) LIKE :title", arguments: [":title" : "the%"])
+        XCTAssert(paramFormat4Results.count == 231)
+
+        // Structured queries
+        let first100 =  try await TestModelWithDescription.read(from: db, orderBy: .ascending(\.$id), limit: 100)
+        let matches0a = try await TestModelWithDescription.read(from: db, matching: \.$id == 123)
+        let matches0b = try await TestModelWithDescription.read(from: db, matching: \.$id == 123 && \.$title == "Hi" || \.$id > 2)
+        let matches0c = try await TestModelWithDescription.read(from: db, matching: \.$url != nil)
+
+        XCTAssert(first100.count == 100)
+        XCTAssert(first100.first!.id == 0)
+        XCTAssert(first100.last!.id == 99)
+        XCTAssert(matches0a.count == 1)
+        XCTAssert(matches0a.first!.id == 123)
+        XCTAssert(matches0b.count == 997)
+        XCTAssert(matches0c.count == 1000)
+
         var id42 = try await TestModelWithDescription.read(from: db, id: 42)
         XCTAssertNotNil(id42)
         XCTAssert(id42!.id == 42)
@@ -169,26 +192,44 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let id42AfterDelete = try await TestModelWithDescription.read(from: db, id: 42)
         XCTAssertNil(id42AfterDelete)
         
-        let matches = try await TestModelWithDescription.read(from: db, matching: [ \.$title : "Omnibus" ])
+        let id43 = try await TestModelWithDescription.read(from: db, matching: \.$id == 43).first
+        XCTAssertNotNil(id43)
+        XCTAssertNotNil(id43!.id == 43)
+        try await TestModelWithDescription.delete(from: db, matching: \.$id == 43)
+        let id43AfterDelete = try await TestModelWithDescription.read(from: db, matching: \.$id == 43).first
+        XCTAssertNil(id43AfterDelete)
+        
+        let matches1 = try await TestModelWithDescription.read(from: db, orderBy: .descending(\.$title), .ascending(\.$id), limit: 1)
+        print("\(matches1.map { $0.title })")
+
+
+        let matches = try await TestModelWithDescription.read(from: db, matching: \.$title == "Omnibus")
         XCTAssert(matches.count == 1)
         XCTAssert(matches.first!.title == "Omnibus")
         
-        let rows = try await TestModelWithDescription.query(in: db, selectColumns: [\.$id, \.$title, \.$url], matching: [\.$title : "Omnibus"])
+        let rows = try await TestModelWithDescription.query(in: db, columns: [\.$id, \.$title, \.$url], matching: \.$title == "Omnibus")
         XCTAssert(rows.count == 1)
-        
+        XCTAssert(rows.first!.count == 3)
+
         let omnibusID = rows.first![\.$id]
         let title = rows.first![\.$title]
         let url = rows.first![\.$url]
         XCTAssert(title == "Omnibus")
         XCTAssert(url != nil)
-        
-        try await TestModelWithDescription.query(in: db, "UPDATE $T SET \(\TestModelWithDescription.$url) = NULL WHERE \(\TestModelWithDescription.$id) = ?", omnibusID)
-        
-        let rowsWithNilURL = try await TestModelWithDescription.query(in: db, selectColumns: [\.$id, \.$url], matching: [\.$id : omnibusID])
+
+        try await TestModelWithDescription.update(in: db,set: [ \.$url: nil ], matching: \.$id == omnibusID)
+
+        let rowsWithNilURL = try await TestModelWithDescription.query(in: db, columns: [\.$id, \.$url], matching: \.$url == nil)
         let id = rowsWithNilURL.first![\.$id]
         let nilURL = rowsWithNilURL.first![\.$url]
         XCTAssert(id == omnibusID)
         XCTAssert(nilURL == nil)
+        
+        try await TestModelWithDescription.delete(from: db, matching: \.$url == nil)
+        let leftovers1 = try await TestModelWithDescription.read(from: db, matching: \.$url == nil)
+        let leftovers2 = try await TestModelWithDescription.read(from: db, matching: \.$id == omnibusID)
+        XCTAssert(leftovers1.isEmpty)
+        XCTAssert(leftovers2.isEmpty)
     }
 
     func testColumnTypes() async throws {

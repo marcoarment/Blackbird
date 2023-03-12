@@ -55,7 +55,16 @@ public class Blackbird {
         }
         
         public static func fromAny(_ value: Any?) throws -> Value {
-            guard let value else { return .null }
+            guard var value else { return .null }
+            
+            if let optional = value as? any OptionalProtocol {
+                if let wrapped = optional.wrappedOptionalValue {
+                    value = wrapped
+                } else {
+                    return .null
+                }
+            }
+            
             switch value {
                 case _ as NSNull: return .null
                 case let v as Value: return v
@@ -204,6 +213,7 @@ public class Blackbird {
 
 // MARK: - Utilities
 
+/// A basic locking utility.
 public protocol BlackbirdLock: Sendable {
     func lock()
     func unlock()
@@ -219,6 +229,7 @@ extension BlackbirdLock {
 
 import os
 extension Blackbird {
+    /// Blackbird's lock primitive, offered for public use.
     public static func Lock() -> BlackbirdLock {
         if #available(macOS 13.0, iOS 16.0, tvOS 16.0, watchOS 9.0, *) {
             return UnfairLock()
@@ -246,6 +257,7 @@ extension Blackbird {
         deinit { _lock.deallocate() }
     }
 
+    /// Blackbird's locked-value utility, offered for public use. Useful when conforming to `Sendable`.
     public final class Locked<T>: @unchecked Sendable /* unchecked due to use of internal locking */ {
         public var value: T {
             get {
@@ -269,7 +281,7 @@ extension Blackbird {
         }
     }
 
-    public final class FileChangeMonitor: @unchecked Sendable /* unchecked due to use of internal locking */ {
+    internal final class FileChangeMonitor: @unchecked Sendable /* unchecked due to use of internal locking */ {
         private var sources: [DispatchSourceFileSystemObject] = []
 
         private var changeHandler: (() -> Void)?

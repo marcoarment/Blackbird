@@ -233,7 +233,7 @@ extension Blackbird {
         
         internal func keyPathToColumnName(keyPath: AnyKeyPath) -> String {
             guard let emptyInstance else { fatalError("Cannot call keyPathToColumnName on a Blackbird.Table initialized directly from a database") }
-            guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else { fatalError("Key path is not a @BlackbirdColumn on \(name)") }
+            guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else { fatalError("Key path is not a @BlackbirdColumn on \(name). Make sure to use the $-prefixed wrapper, e.g. \\.$id.") }
             guard let name = column.internalNameInSchemaGenerator.value else { fatalError("Failed to look up key-path name on \(name)") }
             return name
         }

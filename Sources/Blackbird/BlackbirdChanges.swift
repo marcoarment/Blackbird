@@ -28,28 +28,21 @@ import Foundation
 @preconcurrency import Combine
 
 public extension Blackbird {
+    /// A change to a table in a Blackbird database, as published by a ``ChangePublisher``.
     struct Change: Sendable {
-        let table: String
-        let primaryKeys: PrimaryKeyValues?
-        let columnNames: Blackbird.ColumnNames?
+        /// The changed table's name.
+        public let table: String
+        
+        /// The primary keys of the changed rows. If `nil`, assume any rows in the table may have changed.
+        public let primaryKeys: PrimaryKeyValues?
+        
+        /// The changed column names. If `nil`, assume any columns may have changed.
+        public let columnNames: Blackbird.ColumnNames?
     }
 
     /// A Publisher that emits when data in a Blackbird table has changed.
     ///
-    /// The ``PrimaryKeyValues`` value passed indicates which rows in the table have changed:
-    /// * If the value is non-`nil`, only the rows with the given primary-key values may have changed.
-    /// * If the value is `nil`, any rows in the table may have changed.
-    ///
-    /// ## Example
-    /// ```swift
-    /// let db = try Blackbird.Database.inMemoryDatabase()
-    /// // ...
-    ///
-    /// let listener = MyModel.changePublisher(in: db).sink { keys in
-    ///     print("These primary keys may have changed: \(keys ?? "all")")
-    /// }
-    /// ```
-    ///
+    /// The ``Blackbird/Change`` passed indicates which rows and columns in the table have changed.
     typealias ChangePublisher = PassthroughSubject<Change, Never>
 
     internal static func isRelevantPrimaryKeyChange(watchedPrimaryKeys: Blackbird.PrimaryKeyValues?, changedPrimaryKeys: Blackbird.PrimaryKeyValues?) -> Bool {
@@ -244,7 +237,7 @@ extension Blackbird {
 
     /// A function to generate arbitrary results from a database, called from an async throwing context and passed the ``Blackbird/Database`` as its sole argument.
     ///
-    /// Used by ``CachedResultPublisher`` and Blackbird's SwiftUI property wrappers.
+    /// Used by Blackbird's SwiftUI property wrappers.
     ///
     /// ## Examples
     ///
@@ -256,7 +249,7 @@ extension Blackbird {
     /// ```
     public typealias CachedResultGenerator<T: Sendable> = (@Sendable (_ db: Blackbird.Database) async throws -> T)
 
-    public final class CachedResultPublisher<T: Sendable>: Sendable {
+    internal final class CachedResultPublisher<T: Sendable>: Sendable {
         public let valuePublisher: CurrentValueSubject<T?, Never>
 
         private struct State: Sendable {

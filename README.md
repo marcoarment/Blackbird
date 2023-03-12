@@ -4,32 +4,9 @@ A small, fast, lightweight SQLite database wrapper and model layer, based on mod
 
 __See [Project Status](#project-status) before using this for anything!__
 
-## Database
-
-A lightweight async wrapper around [SQLite](https://www.sqlite.org/).
-
-```swift
-let db = try Blackbird.Database(path: "/tmp/whatever.sqlite")
-
-// SELECT with structure
-for row in try await db.query("SELECT id FROM posts WHERE state = ?", 1) {
-    let id = row["id"]
-    // ...
-}
-
-// Run direct queries
-try await db.execute("UPDATE posts SET comments = NULL")
-
-// Transactions with the actor isolated
-try await db.transaction { core in
-    try core.query("INSERT INTO posts VALUES (?, ?)", 16, "Sports!")
-    try core.query("INSERT INTO posts VALUES (?, ?)", 17, "Dewey Defeats Truman")
-}
-```
-
 ## BlackbirdModel
 
-A protocol to store `Codable` structs in a `Database`.
+A protocol to store structs in an [SQLite](https://www.sqlite.org/) database, with compiler-checked key-paths for common operations.
 
 ```swift
 struct Post: BlackbirdModel {
@@ -45,12 +22,21 @@ try await post.write(to: db)
 // Fetch by primary key
 let anotherPost = try await Post.read(from: db, id: 2)
 
-// Or with a WHERE query, parameterized with SQLite data types
-let theSportsPost = try await Post.read(from: db, where: "title = ?", "Sports")
+// Or with a WHERE condition, using compiler-checked key-paths:
+let theSportsPost = try await Post.read(from: db, matching: \.$title == "Sports")
+
+// Or use your own custom SQL:
+let posts = try await Post.read(from: db, where: "title LIKE ? ORDER BY RANDOM()", "Sports%")
+
+// Select only certain columns, with row dictionaries typed by key-path:
+for row in try await Post.query(in: db, columns: [\.$id, \.$image], matching: \.$url != nil) {
+    let postID = row[\.$id]       // returns Int
+    let imageData = row[\.$image] // returns Data?
+}
 
 // Monitor for changes
-let listener = Post.changePublisher(in: db).sink { changedPrimaryKeys in
-    print("Post IDs changed: \(changedPrimaryKeys ?? "all of them")")
+let listener = Post.changePublisher(in: db).sink { change in
+    print("Post IDs changed: \(change.primaryKeys ?? "all of them")")
 }
 
 // A model with a custom primary-key column:
@@ -83,10 +69,33 @@ struct Post: BlackbirdModel {
 }
 ```
 
+## Database
+
+A lightweight async wrapper around [SQLite](https://www.sqlite.org/).
+
+```swift
+let db = try Blackbird.Database(path: "/tmp/whatever.sqlite")
+
+// SELECT with structure
+for row in try await db.query("SELECT id FROM posts WHERE state = ?", 1) {
+    let id = row["id"]
+    // ...
+}
+
+// Run direct queries
+try await db.execute("UPDATE posts SET comments = NULL")
+
+// Transactions with the actor isolated
+try await db.transaction { core in
+    try core.query("INSERT INTO posts VALUES (?, ?)", 16, "Sports!")
+    try core.query("INSERT INTO posts VALUES (?, ?)", 17, "Dewey Defeats Truman")
+}
+```
+
 
 ## Project status
 
-Blackbird is an __alpha at best__. It's brand new.
+Blackbird is an __alpha__. It's brand new.
 
 Nobody should be using it more than I do, and I've barely used it.
 
