@@ -421,8 +421,9 @@ extension BlackbirdModel {
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
+        let table = Self.table
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
@@ -435,8 +436,9 @@ extension BlackbirdModel {
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
+        let table = Self.table
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Synchronous version of ``query(in:_:_:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -450,14 +452,15 @@ extension BlackbirdModel {
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
-        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Synchronous version of ``query(in:_:arguments:)-3dwoy`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+        let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: database) }
-        return try core.query(query.replacingOccurrences(of: "$T", with: tableName), arguments: arguments).map { Blackbird.ModelRow<Self>($0) }
+        return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     private static func validateSchema(database: Blackbird.Database) throws -> Void {
@@ -548,7 +551,12 @@ extension BlackbirdModel {
         if changedColumns.isEmpty { return }
 
         let primaryKeyValues = table.primaryKeys.map { valuesByColumnName[$0.name]! }
-        let sql = "REPLACE INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ",")))"
+      
+        // Intentionally using "INSERT INTO ... ON CONFLICT (primary key) DO UPDATE..."
+        //  instead of "REPLACE INTO". This way, primary-key duplicates are treated as UPDATEs,
+        //  but conflicts in UNIQUE indexes fail and throw Error.uniqueConstraintFailed.
+        //
+        let sql = "INSERT INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ","))) \(table.upsertClause)"
 
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {

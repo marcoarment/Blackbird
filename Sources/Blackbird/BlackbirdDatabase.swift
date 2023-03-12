@@ -27,6 +27,13 @@
 import Foundation
 import SQLite3
 
+extension Blackbird {
+    public enum TransactionResult<R: Sendable>: Sendable {
+        case rolledBack
+        case committed(R)
+    }
+}
+
 internal protocol BlackbirdQueryable {
     /// Executes arbitrary SQL queries without returning a value.
     ///
@@ -68,7 +75,8 @@ internal protocol BlackbirdQueryable {
     ///
     /// ## See also
     /// ``cancellableTransaction(_:)``
-    func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Void) ) async throws
+    @discardableResult
+    func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> R
 
     /// Equivalent to ``transaction(_:)``, but with the ability to cancel without throwing an error.
     /// - Parameter action: The actions to perform in the transaction. Return `true` to commit the transaction or `false` to roll it back. If an error is thrown, the transaction is rolled back and the error is rethrown to the caller.
@@ -87,8 +95,8 @@ internal protocol BlackbirdQueryable {
     ///     return areWeReadyForCommitment
     /// }
     /// ```
-    func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Bool) ) async throws
-
+    @discardableResult
+    func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R>
     
     /// Queries the database.
     /// - Parameter query: An SQL query.
@@ -200,6 +208,7 @@ extension Blackbird {
             case queryArgumentValueError(query: String, description: String)
             case queryExecutionError(query: String, description: String)
             case queryResultValueError(query: String, column: String)
+            case uniqueConstraintFailed
             case databaseIsClosed
         }
         
@@ -282,10 +291,6 @@ extension Blackbird {
         ///
         /// An error will be thrown if another instance exists with the same filename, the database cannot be created, or the linked version of SQLite lacks the required capabilities.
         public init(path: String, options: Options = []) throws {
-            let isUniqueInstanceForPath = options.contains(.inMemoryDatabase) || InstancePool.addInstance(path: path)
-            if !isUniqueInstanceForPath { throw Error.anotherInstanceExistsWithPath(path: path) }
-            id = InstancePool.nextInstanceID()
-
             // Use a local because we can't use self until everything has been initalized
             let performanceLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database")
             let spState = performanceLog.begin(signpost: .openDatabase)
@@ -296,6 +301,10 @@ extension Blackbird {
                 normalizedOptions.insert(.inMemoryDatabase)
                 normalizedOptions.remove(.monitorForExternalChanges)
             }
+
+            let isUniqueInstanceForPath = normalizedOptions.contains(.inMemoryDatabase) || InstancePool.addInstance(path: path)
+            if !isUniqueInstanceForPath { throw Error.anotherInstanceExistsWithPath(path: path) }
+            id = InstancePool.nextInstanceID()
 
             self.options = normalizedOptions
             self.path = normalizedOptions.contains(.inMemoryDatabase) ? nil : path
@@ -378,9 +387,11 @@ extension Blackbird {
         
         public func execute(_ query: String) async throws { try await core.execute(query) }
 
-        public func transaction(_ action: (@Sendable (_ core: isolated Core) throws -> Void) ) async throws { try await core.transaction(action) }
-        
-        public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Core) throws -> Bool) ) async throws { try await core.cancellableTransaction(action) }
+        @discardableResult
+        public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> R) ) async throws -> R { try await core.transaction(action) }
+
+        @discardableResult
+        public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R> { try await core.cancellableTransaction(action) }
 
         @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, [Sendable]()) }
 
@@ -466,14 +477,34 @@ extension Blackbird {
                 }
             }
 
-            public func transaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Void) ) throws {
-                try cancellableTransaction { core in
-                    try action(core)
-                    return true
+            // Exactly like the function below, but accepts an async action
+            public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> R {
+                let result = try await cancellableTransaction { core in
+                    let r: R = try await action(core)
+                    return Blackbird.TransactionResult.committed(r)
+                }
+
+                switch result {
+                    case .committed(let r): return r
+                    case .rolledBack: fatalError("should never get here")
                 }
             }
 
-            public func cancellableTransaction(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Bool) ) throws {
+            // Exactly like the function above, but requires action to be synchronous
+            public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> R) ) throws -> R {
+                let result = try cancellableTransaction { core in
+                    let r: R = try action(core)
+                    return Blackbird.TransactionResult.committed(r)
+                }
+
+                switch result {
+                    case .committed(let r): return r
+                    case .rolledBack: fatalError("should never get here")
+                }
+            }
+
+            // Exactly like the function below, but accepts an async action
+            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R> {
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -489,15 +520,53 @@ extension Blackbird {
                 defer { perfLog.end(state: spState) }
 
                 try execute("SAVEPOINT \"\(transactionID)\"")
-                var commit = false
-                do { commit = try action(self) }
-                catch {
+                var result: Blackbird.TransactionResult<R>
+                do {
+                    result = try await action(self)
+                } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
                     throw error
                 }
 
-                if commit { try execute("RELEASE SAVEPOINT \"\(transactionID)\"") }
-                else { try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"") }
+                switch result {
+                    case .rolledBack:   try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    case .committed(_): try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
+                }
+                
+                return result
+            }
+            
+            // Exactly like the function above, but requires action to be synchronous
+            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Blackbird.TransactionResult<R>) ) throws -> Blackbird.TransactionResult<R> {
+                if isClosed { throw Error.databaseIsClosed }
+                let transactionID = nextTransactionID
+                nextTransactionID += 1
+                changeReporter?.beginTransaction(transactionID)
+                fileChangeMonitor?.beginExpectedChange(transactionID)
+                defer {
+                    changeReporter?.endTransaction(transactionID)
+                    fileChangeMonitor?.endExpectedChange(transactionID)
+                    checkForExternalDatabaseChange()
+                }
+
+                let spState = perfLog.begin(signpost: .cancellableTransaction, message: "Transaction ID: \(transactionID)")
+                defer { perfLog.end(state: spState) }
+
+                try execute("SAVEPOINT \"\(transactionID)\"")
+                var result: Blackbird.TransactionResult<R>
+                do {
+                    result = try action(self)
+                } catch {
+                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    throw error
+                }
+
+                switch result {
+                    case .rolledBack:   try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    case .committed(_): try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
+                }
+
+                return result
             }
             
             public func execute(_ query: String) throws {
@@ -607,7 +676,14 @@ extension Blackbird {
 
                 var result = sqlite3_step(statementHandle)
                 
-                guard result == SQLITE_ROW || result == SQLITE_DONE else { throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle)) }
+                guard result == SQLITE_ROW || result == SQLITE_DONE else {
+                    sqlite3_reset(statementHandle)
+                    sqlite3_clear_bindings(statementHandle)
+                    switch result {
+                        case SQLITE_CONSTRAINT: throw Error.uniqueConstraintFailed
+                        default: throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                    }
+                }
 
                 let columnCount = sqlite3_column_count(statementHandle)
                 if columnCount == 0 {

@@ -125,6 +125,28 @@ struct MulticolumnPrimaryKeyTest: BlackbirdModel {
     @BlackbirdColumn var episodeID: Int64
 }
 
+public struct TestModelWithOptionalColumns: BlackbirdModel {
+    @BlackbirdColumn public var id: Int64
+    @BlackbirdColumn public var date: Date
+    @BlackbirdColumn public var name: String
+    @BlackbirdColumn public var value: String?
+    @BlackbirdColumn public var otherValue: Int?
+    @BlackbirdColumn public var optionalDate: Date?
+    @BlackbirdColumn public var optionalURL: URL?
+    @BlackbirdColumn public var optionalData: Data?
+}
+
+public struct TestModelWithUniqueIndex: BlackbirdModel {
+    public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$a, \.$b, \.$c ],
+    ]
+
+    @BlackbirdColumn public var id: Int64
+    @BlackbirdColumn public var a: String
+    @BlackbirdColumn public var b: Int
+    @BlackbirdColumn public var c: Date
+}
+
 // MARK: - Schema change: Add primary-key column
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {

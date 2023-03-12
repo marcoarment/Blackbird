@@ -129,7 +129,7 @@ extension Blackbird {
         
         internal func definition(tableName: String) -> String {
             if columnNames.isEmpty { fatalError("Indexes require at least one column") }
-            return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
+            return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(tableName)__\(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
         }
         
         public init(columnNames: [String], unique: Bool = false) {
@@ -147,10 +147,18 @@ extension Blackbird {
             unique = scanner.scanString("UNIQUE") != nil
             guard scanner.scanString("INDEX") != nil else { throw Error.cannotParseIndexDefinition(definition: definition, description: "Expected 'INDEX'") }
 
-            guard let indexName = scanner.scanUpToString("ON")?.trimmingCharacters(in: Self.parserIgnoredCharacters), !indexName.isEmpty else {
+            guard let indexName = scanner.scanUpToString(" ON")?.trimmingCharacters(in: Self.parserIgnoredCharacters), !indexName.isEmpty else {
                 throw Error.cannotParseIndexDefinition(definition: definition, description: "Expected index name")
             }
-            self.name = indexName
+
+            let nameScanner = Scanner(string: indexName)
+            _ = nameScanner.scanUpToString("__")
+            if nameScanner.scanString("__") == "__" {
+                self.name = String(indexName.suffix(from: nameScanner.currentIndex))
+            } else {
+                throw Error.cannotParseIndexDefinition(definition: definition, description: "Index name does not match expected format")
+            }
+            
             guard scanner.scanString("ON") != nil else { throw Error.cannotParseIndexDefinition(definition: definition, description: "Expected 'ON'") }
 
             guard let tableName = scanner.scanUpToString("(")?.trimmingCharacters(in: Self.parserIgnoredCharacters), !tableName.isEmpty else {
@@ -186,6 +194,7 @@ extension Blackbird {
         internal let columnNames: ColumnNames
         internal let primaryKeys: [Column]
         internal let indexes: [Index]
+        internal let upsertClause: String
         
         internal let emptyInstance: (any BlackbirdModel)?
         
@@ -194,16 +203,24 @@ extension Blackbird {
         
         public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = [], emptyInstance: any BlackbirdModel) {
             if columns.isEmpty { fatalError("No columns specified") }
-            
+            let orderedColumnNames = columns.map { $0.name }
             self.emptyInstance = emptyInstance
             self.name = name
             self.columns = columns
             self.indexes = indexes
-            self.columnNames = Set(columns.map { $0.name })
+            self.columnNames = Set(orderedColumnNames)
             self.primaryKeys = primaryKeyColumnNames.map { name in
                 guard let pkColumn = columns.first(where: { $0.name == name }) else { fatalError("Primary-key column \"\(name)\" not found") }
                 return pkColumn
             }
+            
+            upsertClause = Self.generateUpsertClause(columnNames: orderedColumnNames, primaryKeyColumnNames: primaryKeyColumnNames)
+        }
+        
+        // Enable "upsert" (REPLACE INTO) behavior ONLY for primary-key conflicts, not any other UNIQUE constraints
+        private static func generateUpsertClause(columnNames: [String], primaryKeyColumnNames: [String])-> String {
+            let upsertReplacements = columnNames.filter { !primaryKeyColumnNames.contains($0) }.map { "`\($0)` = excluded.`\($0)`" }
+            return upsertReplacements.isEmpty ? "" : "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"
         }
         
         internal init?(isolatedCore core: isolated Database.Core, tableName: String) throws {
@@ -219,25 +236,28 @@ extension Blackbird {
             }
             if columns.isEmpty { return nil }
             primaryKeyColumns.sort { $0.primaryKeyIndex < $1.primaryKeyIndex }
+            let orderedColumnNames = columns.map { $0.name }
             
             self.emptyInstance = nil
             self.name = tableName
             self.columns = columns
             self.primaryKeys = primaryKeyColumns
-            self.columnNames = Set(columns.map { $0.name })
+            self.columnNames = Set(orderedColumnNames)
             self.indexes = try core.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", tableName).compactMap { row in
                 guard let sql = row["sql"]?.stringValue else { return nil }
                 return try Index(definition: sql)
             }
+
+            upsertClause = Self.generateUpsertClause(columnNames: orderedColumnNames, primaryKeyColumnNames: primaryKeyColumns.map { $0.name })
         }
-        
+
         internal func keyPathToColumnName(keyPath: AnyKeyPath) -> String {
             guard let emptyInstance else { fatalError("Cannot call keyPathToColumnName on a Blackbird.Table initialized directly from a database") }
             guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else { fatalError("Key path is not a @BlackbirdColumn on \(name). Make sure to use the $-prefixed wrapper, e.g. \\.$id.") }
             guard let name = column.internalNameInSchemaGenerator.value else { fatalError("Failed to look up key-path name on \(name)") }
             return name
         }
-        
+
         internal func createTableStatement<T: BlackbirdModel>(type: T.Type, overrideTableName: String? = nil) -> String {
             let columnDefs = columns.map { $0.definition() }.joined(separator: ",")
             let pkDef = primaryKeys.isEmpty ? "" : ",PRIMARY KEY (`\(primaryKeys.map { $0.name }.joined(separator: "`,`"))`)"
@@ -291,7 +311,7 @@ extension Blackbird {
                 try core.transaction { core in
                     // drop indexes and columns
                     var schemaInDB = schemaInDB
-                    for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(indexToDrop.name)`") }
+                    for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(name)__\(indexToDrop.name)`") }
                     for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(name)` DROP COLUMN `\(columnNameToDrop)`") }
                     schemaInDB = try Table(isolatedCore: core, tableName: name)!
                     
@@ -370,6 +390,7 @@ internal final class SchemaGenerator: Sendable {
         
         let mirror = Mirror(reflecting: emptyInstance)
         var columns: [Blackbird.Column] = []
+        var nullableColumnNames = Set<String>()
         var hasColumNamedID = false
         for child in mirror.children {
             guard var label = child.label else { continue }
@@ -382,7 +403,10 @@ internal final class SchemaGenerator: Sendable {
                 var isOptional = false
                 var unwrappedType = Swift.type(of: column.value) as Any
                 while let wrappedType = unwrappedType as? WrappedType.Type {
-                    if unwrappedType is OptionalProtocol.Type { isOptional = true }
+                    if unwrappedType is OptionalProtocol.Type {
+                        isOptional = true
+                        nullableColumnNames.insert(label)
+                    }
                     unwrappedType = wrappedType.schemaGeneratorWrappedType()
                 }
 
@@ -404,7 +428,7 @@ internal final class SchemaGenerator: Sendable {
         
         let keyPathToColumnName = { (keyPath: AnyKeyPath, messageLabel: String) in
             guard let column = emptyInstance[keyPath: keyPath] as? any ColumnWrapper else {
-                fatalError("\(String(describing: T.self)): \(messageLabel) includes a key path that is not a @BlackbirdColumn")
+                fatalError("\(String(describing: T.self)): \(messageLabel) includes a key path that is not a @BlackbirdColumn. (Use the \"$\" wrapper for a column.)")
             }
             
             guard let name = column.internalNameInSchemaGenerator.value else { fatalError("\(String(describing: T.self)): Failed to look up \(messageLabel) key-path name") }
@@ -418,7 +442,34 @@ internal final class SchemaGenerator: Sendable {
         }
 
         var indexes = T.indexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "index") }, unique: false) }
-        indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in Blackbird.Index(columnNames: keyPaths.map { keyPathToColumnName($0, "unique index") }, unique: true) })
+        indexes.append(contentsOf: T.uniqueIndexes.map { keyPaths in
+            Blackbird.Index(columnNames: keyPaths.map {
+                let name = keyPathToColumnName($0, "unique index")
+                if nullableColumnNames.contains(name), keyPaths.count > 1 {
+                    /*
+                        I've decided not to support multi-column UNIQUE indexes containing NULLable columns because
+                        they behave in a way that most people wouldn't expect: a NULL value anywhere in a multi-column
+                        index makes it pass any UNIQUE checks, even if the other column values would otherwise be
+                        non-unique.
+                        
+                        E.g. CREATE TABLE t (a NOT NULL, b NULL) with UNIQUE (a, b) would allow these rows to coexist:
+
+                           (a=1, b=NULL)
+                           (a=1, b=NULL)
+                           
+                        ...even though they would not be considered unique values by Swift or most people's assumptions.
+                        
+                        Since Blackbird tries to abstract away most really weird SQL behaviors that would differ
+                        significantly from what Swift programmers expect, this is intentionally not permitted.
+                     */
+                    fatalError(
+                        "\(String(describing: T.self)): Blackbird does not support multi-column UNIQUE indexes containing NULL columns. " +
+                        "Change column \"\(name)\" to non-optional, or create a separate UNIQUE index for it."
+                    )
+                }
+                return name
+            }, unique: true)
+        })
 
         return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes, emptyInstance: emptyInstance)
     }

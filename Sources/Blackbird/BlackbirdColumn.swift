@@ -29,6 +29,7 @@ import Foundation
 internal protocol ColumnWrapper: WrappedType {
     associatedtype ValueType: BlackbirdColumnWrappable
     var value: ValueType { get }
+    var valueType: any BlackbirdColumnWrappable.Type { get }
     func hasChanged(in database: Blackbird.Database) -> Bool
     func clearHasChanged(in database: Blackbird.Database)
     var internalNameInSchemaGenerator: Blackbird.Locked<String?> { get }
@@ -36,6 +37,8 @@ internal protocol ColumnWrapper: WrappedType {
 
 /// Property wrapper for column variables in ``BlackbirdModel`` `struct` definitions.
 @propertyWrapper public struct BlackbirdColumn<T>: ColumnWrapper, WrappedType, Equatable, Sendable, Codable where T: BlackbirdColumnWrappable {
+    internal var valueType: any BlackbirdColumnWrappable.Type { T.self }
+    
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
     
     private var _value: T
@@ -121,6 +124,19 @@ extension Optional: OptionalProtocol {
             }
         }
     }
+}
+
+internal protocol OptionalCreatable {
+    associatedtype Wrapped
+    static func createFromNilValue() -> Self
+    static func createFromValue(_ wrapped: Any) -> Self
+    static func creatableWrappedType() -> Any.Type
+}
+
+extension Optional: OptionalCreatable {
+    static func createFromNilValue() -> Self { .none }
+    static func createFromValue(_ wrapped: Any) -> Self { .some(wrapped as! Wrapped) }
+    static func creatableWrappedType() -> Any.Type { Wrapped.self }
 }
 
 internal protocol WrappedType {
