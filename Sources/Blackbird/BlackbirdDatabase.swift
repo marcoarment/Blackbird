@@ -96,7 +96,7 @@ internal protocol BlackbirdQueryable {
     /// }
     /// ```
     @discardableResult
-    func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R>
+    func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> Blackbird.TransactionResult<R>
     
     /// Queries the database.
     /// - Parameter query: An SQL query.
@@ -391,7 +391,7 @@ extension Blackbird {
         public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> R) ) async throws -> R { try await core.transaction(action) }
 
         @discardableResult
-        public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R> { try await core.cancellableTransaction(action) }
+        public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> R) ) async throws -> Blackbird.TransactionResult<R> { try await core.cancellableTransaction(action) }
 
         @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, [Sendable]()) }
 
@@ -480,8 +480,7 @@ extension Blackbird {
             // Exactly like the function below, but accepts an async action
             public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> R {
                 let result = try await cancellableTransaction { core in
-                    let r: R = try await action(core)
-                    return Blackbird.TransactionResult.committed(r)
+                    return try await action(core)
                 }
 
                 switch result {
@@ -493,8 +492,7 @@ extension Blackbird {
             // Exactly like the function above, but requires action to be synchronous
             public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> R) ) throws -> R {
                 let result = try cancellableTransaction { core in
-                    let r: R = try action(core)
-                    return Blackbird.TransactionResult.committed(r)
+                    return try action(core)
                 }
 
                 switch result {
@@ -504,7 +502,7 @@ extension Blackbird {
             }
 
             // Exactly like the function below, but accepts an async action
-            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> Blackbird.TransactionResult<R>) ) async throws -> Blackbird.TransactionResult<R> {
+            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> Blackbird.TransactionResult<R> {
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -520,24 +518,21 @@ extension Blackbird {
                 defer { perfLog.end(state: spState) }
 
                 try execute("SAVEPOINT \"\(transactionID)\"")
-                var result: Blackbird.TransactionResult<R>
                 do {
-                    result = try await action(self)
+                    let result: R = try await action(self)
+                    try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
+                    return .committed(result)
+                } catch Blackbird.Error.cancelTransaction {
+                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    return .rolledBack
                 } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
                     throw error
                 }
-
-                switch result {
-                    case .rolledBack:   try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
-                    case .committed(_): try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
-                }
-                
-                return result
             }
             
             // Exactly like the function above, but requires action to be synchronous
-            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> Blackbird.TransactionResult<R>) ) throws -> Blackbird.TransactionResult<R> {
+            public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> R) ) throws -> Blackbird.TransactionResult<R> {
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
@@ -553,20 +548,16 @@ extension Blackbird {
                 defer { perfLog.end(state: spState) }
 
                 try execute("SAVEPOINT \"\(transactionID)\"")
-                var result: Blackbird.TransactionResult<R>
                 do {
-                    result = try action(self)
+                    let result: R = try action(self)
+                    return .committed(result)
+                } catch Blackbird.Error.cancelTransaction {
+                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    return .rolledBack
                 } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
                     throw error
                 }
-
-                switch result {
-                    case .rolledBack:   try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
-                    case .committed(_): try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
-                }
-
-                return result
             }
             
             public func execute(_ query: String) throws {

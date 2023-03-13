@@ -372,7 +372,25 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let t = TestModel(id: id, title: originalTitle, url: TestData.randomURL, nonColumn: TestData.randomString(length: 32))
         try await t.write(to: db)
 
-        try await db.cancellableTransaction { core in
+        try await db.transaction { core in
+            
+        }
+
+        let retVal0 = try await db.transaction { core in
+            return "test0"
+        }
+        XCTAssert(retVal0 == "test0")
+
+        let retVal1Void = try await db.cancellableTransaction { core in
+            throw Blackbird.Error.cancelTransaction
+        }
+        switch retVal1Void {
+            case .rolledBack: XCTAssert(true)
+            case .committed(_): XCTAssert(false)
+        }
+
+        let cancelTransaction = true
+        let retVal1 = try await db.cancellableTransaction { core in
             var t = t
             t.title = "new title"
             try t.writeIsolated(to: db, core: core)
@@ -380,11 +398,39 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             let title = try core.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
             XCTAssert(title == "new title")
             
-            return Blackbird.TransactionResult<Void>.rolledBack
+            if (cancelTransaction) {
+                throw Blackbird.Error.cancelTransaction
+            } else {
+                return "Test"
+            }
         }
         
+        switch retVal1 {
+            case .rolledBack: XCTAssert(true)
+            case .committed(_): XCTAssert(false)
+        }
+
         let title = try await db.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
         XCTAssert(title == originalTitle)
+
+        let retVal2 = try await db.cancellableTransaction { core in
+            var t = t
+            t.title = "new title"
+            try t.writeIsolated(to: db, core: core)
+            
+            let title = try core.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
+            XCTAssert(title == "new title")
+            
+            return "Test"
+        }
+        
+        switch retVal2 {
+            case .rolledBack: XCTAssert(false)
+            case .committed(_): XCTAssert(true)
+        }
+
+        let title2 = try await db.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
+        XCTAssert(title2 == "new title")
     }
 
     func testConcurrentAccessToSameDBFile() async throws {

@@ -47,6 +47,11 @@ public class Blackbird {
         public let type: any BlackbirdColumnWrappable.Type
     }
 
+    public enum Error: Swift.Error {
+        /// Throw this within a `cancellableTransaction` block to cancel and roll back the transaction. It will not propagate further up the call stack.
+        case cancelTransaction
+    }
+
     /// A wrapper for SQLite's column data types.
     public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
         case null
