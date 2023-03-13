@@ -97,10 +97,10 @@ import Combine
 /// let p = try await Post.read(from: db, id: 2)
 ///
 /// // Or with a WHERE query, parameterized with SQLite data types
-/// let p = try await Post.read(from: db, where: "title = ?", "Sports")
+/// let p = try await Post.read(from: db, sqlWhere: "title = ?", "Sports")
 ///
 /// // Or with a WHERE query, using checked key paths as column names
-/// let p = try await Post.read(from: db, where: "\(\Post.$title) = ?", "Sports")
+/// let p = try await Post.read(from: db, sqlWhere: "\(\Post.$title) = ?", "Sports")
 ///
 /// // Or entirely with checked key paths
 /// let p = try await Post.read(from: db, matching \.$title == "Sports")
@@ -240,10 +240,10 @@ extension BlackbirdModel {
     /// - Returns: The decoded instance in the table with the given `id`, or `nil` if a corresponding instance doesn't exist in the table.
     ///
     /// For tables with other primary-key names, see ``read(from:primaryKey:)`` and ``read(from:multicolumnPrimaryKey:)-926f3``.
-    public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? { return try await self.read(from: database, where: "id = ?", id).first }
+    public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? { return try await self.read(from: database, sqlWhere: "id = ?", id).first }
 
     /// Synchronous version of ``read(from:id:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, id: Sendable) throws -> Self? { return try self.readIsolated(from: database, core: core, where: "id = ?", id).first }
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, id: Sendable) throws -> Self? { return try self.readIsolated(from: database, core: core, sqlWhere: "id = ?", id).first }
 
     /// Reads a single instance with the given primary-key value from a database.
     /// - Parameters:
@@ -272,7 +272,7 @@ extension BlackbirdModel {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
-        return try await self.read(from: database, where: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
+        return try await self.read(from: database, sqlWhere: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
     /// Synchronous version of ``read(from:multicolumnPrimaryKey:)-926f3`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -280,7 +280,7 @@ extension BlackbirdModel {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
-        return try self.readIsolated(from: database, core: core, where: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
+        return try self.readIsolated(from: database, core: core, sqlWhere: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
     /// Reads a single instance with the given primary key values from a database.
@@ -302,7 +302,7 @@ extension BlackbirdModel {
             values.append(value)
         }
         
-        return try await self.read(from: database, where: andClauses.joined(separator: " AND "), arguments: values).first
+        return try await self.read(from: database, sqlWhere: andClauses.joined(separator: " AND "), arguments: values).first
     }
 
     /// Synchronous version of ``read(from:multicolumnPrimaryKey:)-6pd09`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -318,14 +318,14 @@ extension BlackbirdModel {
             values.append(value)
         }
         
-        return try self.readIsolated(from: database, core: core, where: andClauses.joined(separator: " AND "), arguments: values).first
+        return try self.readIsolated(from: database, core: core, sqlWhere: andClauses.joined(separator: " AND "), arguments: values).first
     }
 
     /// Reads instances from a database using an optional list of arguments.
     ///
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.
-    ///   - queryAfterWhere: The portion of the desired SQL query after the `WHERE` keyword. May contain placeholders specified as a question mark (`?`).
+    ///   - sqlWhere: The portion of the desired SQL query after the `WHERE` keyword. May contain placeholders specified as a question mark (`?`).
     ///   - arguments: Values corresponding to any placeholders in the query.
     /// - Returns: An array of decoded instances matching the query.
     ///
@@ -333,19 +333,19 @@ extension BlackbirdModel {
     /// ```swift
     /// let posts = try await Post.read(
     ///     from: db,
-    ///     where: "state = ? OR title = ? ORDER BY time DESC",
+    ///     sqlWhere: "state = ? OR title = ? ORDER BY time DESC",
     ///     arguments: [1 /* state */, "Test Title" /* title *]
     /// )
     /// ```
-    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, _ arguments: Sendable...) async throws -> [Self] {
-        return try await self.read(from: database, where: queryAfterWhere, arguments: arguments)
+    public static func read(from database: Blackbird.Database, sqlWhere: String, _ arguments: Sendable...) async throws -> [Self] {
+        return try await self.read(from: database, sqlWhere: sqlWhere, arguments: arguments)
     }
 
     /// Reads instances from a database using an array of arguments.
     ///
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.
-    ///   - queryAfterWhere: The portion of the desired SQL query after the `WHERE` keyword. May contain placeholders specified as a question mark (`?`).
+    ///   - sqlWhere: The portion of the desired SQL query after the `WHERE` keyword. May contain placeholders specified as a question mark (`?`).
     ///   - arguments: An array of values corresponding to any placeholders in the query.
     /// - Returns: An array of decoded instances matching the query.
     ///
@@ -357,8 +357,8 @@ extension BlackbirdModel {
     ///     arguments: [1 /* state */, "Test Title" /* title *]
     /// )
     /// ```
-    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [Sendable]) async throws -> [Self] {
-        return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
+    public static func read(from database: Blackbird.Database, sqlWhere: String, arguments: [Sendable]) async throws -> [Self] {
+        return try await query(in: database, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
@@ -368,7 +368,7 @@ extension BlackbirdModel {
     ///
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.
-    ///   - queryAfterWhere: The portion of the desired SQL query after the `WHERE` keyword. May contain named placeholders prefixed by a colon (`:`), at-sign (`@`), or dollar sign (`$`) as described in the [SQLite documentation](https://www.sqlite.org/c3ref/bind_blob.html).
+    ///   - sqlWhere: The portion of the desired SQL query after the `WHERE` keyword. May contain named placeholders prefixed by a colon (`:`), at-sign (`@`), or dollar sign (`$`) as described in the [SQLite documentation](https://www.sqlite.org/c3ref/bind_blob.html).
     ///   - arguments: A dictionary of placeholder names used in the query and their corresponding values. Names must include the prefix character used.
     /// - Returns: An array of decoded instances matching the query.
     ///
@@ -376,33 +376,33 @@ extension BlackbirdModel {
     /// ```swift
     /// let posts = try await Post.read(
     ///     from: db,
-    ///     where: "state = :state OR title = :title ORDER BY time DESC",
+    ///     sqlWhere: "state = :state OR title = :title ORDER BY time DESC",
     ///     arguments: [":state": 1, ":title": "Test Title"]
     /// )
     /// ```
-    public static func read(from database: Blackbird.Database, where queryAfterWhere: String, arguments: [String: Sendable]) async throws -> [Self] {
-        return try await query(in: database, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
+    public static func read(from database: Blackbird.Database, sqlWhere: String, arguments: [String: Sendable]) async throws -> [Self] {
+        return try await query(in: database, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
     }
 
-    /// Synchronous version of ``read(from:where:_:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, _ arguments: Sendable...) throws -> [Self] {
-        return try self.readIsolated(from: database, core: core, where: queryAfterWhere, arguments: arguments)
+    /// Synchronous version of ``read(from:sqlWhere:_:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, _ arguments: Sendable...) throws -> [Self] {
+        return try self.readIsolated(from: database, core: core, sqlWhere: sqlWhere, arguments: arguments)
     }
 
-    /// Synchronous version of ``read(from:where:arguments:)-5plkh`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [Sendable]) throws -> [Self] {
-        return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
+    /// Synchronous version of ``read(from:sqlWhere:arguments:)-5plkh`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [Sendable]) throws -> [Self] {
+        return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }
     }
 
-    /// Synchronous version of ``read(from:where:arguments:)-31y52`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, where queryAfterWhere: String, arguments: [String: Sendable]) throws -> [Self] {
-        return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(queryAfterWhere)", arguments: arguments).map {
+    /// Synchronous version of ``read(from:sqlWhere:arguments:)-31y52`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [String: Sendable]) throws -> [Self] {
+        return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             return try Self(from: decoder)
         }

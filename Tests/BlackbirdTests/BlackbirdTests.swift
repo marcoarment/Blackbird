@@ -152,19 +152,19 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let countReturnedMatching = try await TestModelWithDescription.count(in: db, matching: \.$id >= 500)
         XCTAssert(countReturnedMatching == 500)
 
-        let the = try await TestModelWithDescription.read(from: db, where: "title LIKE 'the%'")
+        let the = try await TestModelWithDescription.read(from: db, sqlWhere: "title LIKE 'the%'")
         XCTAssert(the.count == 231)
 
-        let paramFormat1Results = try await TestModelWithDescription.read(from: db, where: "title LIKE ?", "the%")
+        let paramFormat1Results = try await TestModelWithDescription.read(from: db, sqlWhere: "title LIKE ?", "the%")
         XCTAssert(paramFormat1Results.count == 231)
 
-        let paramFormat2Results = try await TestModelWithDescription.read(from: db, where: "title LIKE ?", arguments: ["the%"])
+        let paramFormat2Results = try await TestModelWithDescription.read(from: db, sqlWhere: "title LIKE ?", arguments: ["the%"])
         XCTAssert(paramFormat2Results.count == 231)
 
-        let paramFormat3Results = try await TestModelWithDescription.read(from: db, where: "title LIKE :title", arguments: [":title" : "the%"])
+        let paramFormat3Results = try await TestModelWithDescription.read(from: db, sqlWhere: "title LIKE :title", arguments: [":title" : "the%"])
         XCTAssert(paramFormat3Results.count == 231)
 
-        let paramFormat4Results = try await TestModelWithDescription.read(from: db, where: "\(\TestModelWithDescription.$title) LIKE :title", arguments: [":title" : "the%"])
+        let paramFormat4Results = try await TestModelWithDescription.read(from: db, sqlWhere: "\(\TestModelWithDescription.$title) LIKE :title", arguments: [":title" : "the%"])
         XCTAssert(paramFormat4Results.count == 231)
 
         // Structured queries
@@ -271,17 +271,17 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(read!.typeDateNull == nil)
         XCTAssert(read!.typeDateNotNull.timeIntervalSince1970 == now.timeIntervalSince1970)
         
-        let results1 = try await TypeTest.read(from: db, where: "typeIntEnum = ?", TypeTest.RepresentableIntEnum.one)
+        let results1 = try await TypeTest.read(from: db, sqlWhere: "typeIntEnum = ?", TypeTest.RepresentableIntEnum.one)
         XCTAssert(results1.count == 0)
 
-        let results2 = try await TypeTest.read(from: db, where: "typeIntEnum = ?", TypeTest.RepresentableIntEnum.two)
+        let results2 = try await TypeTest.read(from: db, sqlWhere: "typeIntEnum = ?", TypeTest.RepresentableIntEnum.two)
         XCTAssert(results2.count == 1)
         XCTAssert(results2.first!.id == Int64.max)
 
-        let results3 = try await TypeTest.read(from: db, where: "typeStringEnum = ?", TypeTest.RepresentableStringEnum.two)
+        let results3 = try await TypeTest.read(from: db, sqlWhere: "typeStringEnum = ?", TypeTest.RepresentableStringEnum.two)
         XCTAssert(results3.count == 0)
 
-        let results4 = try await TypeTest.read(from: db, where: "typeStringEnum = ?", TypeTest.RepresentableStringEnum.one)
+        let results4 = try await TypeTest.read(from: db, sqlWhere: "typeStringEnum = ?", TypeTest.RepresentableStringEnum.one)
         XCTAssert(results4.count == 1)
         XCTAssert(results4.first!.id == Int64.max)
     }
@@ -296,7 +296,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             }
         }
 
-        let the = try await TestModelWithDescription.read(from: db, where: "title LIKE 'the%'")
+        let the = try await TestModelWithDescription.read(from: db, sqlWhere: "title LIKE 'the%'")
         XCTAssert(the.count == 231)
         
         let results = [
@@ -787,7 +787,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         }
         XCTAssert(caughtExpectedError)
 
-        let allBefore = try await TestModelWithUniqueIndex.read(from: db, where: "1 ORDER BY id")
+        let allBefore = try await TestModelWithUniqueIndex.read(from: db, sqlWhere: "1 ORDER BY id")
         XCTAssert(allBefore.count == 2)
 
         XCTAssert(allBefore[0].id == 1)
@@ -800,7 +800,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 
         try await TestModelWithUniqueIndex(id: 3, a: "a2", b: 201, c: testDate).write(to: db)
         
-        let all = try await TestModelWithUniqueIndex.read(from: db, where: "1 ORDER BY id")
+        let all = try await TestModelWithUniqueIndex.read(from: db, sqlWhere: "1 ORDER BY id")
         XCTAssert(all.count == 3)
 
         XCTAssert(all[0].id == 1)
