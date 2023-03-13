@@ -2,112 +2,180 @@
 
 A small, fast, lightweight SQLite database wrapper and model layer, based on modern Swift concurrency and `Codable`, with no other dependencies.
 
-__See [Project Status](#project-status) before using this for anything!__
+## Project status
+
+Blackbird is an __alpha__. The API might change dramatically at any time.
+
+You shouldn't build anything against this yet. But it's close.
 
 ## BlackbirdModel
 
-A protocol to store structs in an [SQLite](https://www.sqlite.org/) database, with compiler-checked key-paths for common operations.
+A protocol to store structs in the [SQLite](https://www.sqlite.org/)-powered [Blackbird.Database](#blackbird-database), with compiler-checked key-paths for common operations.
+
+Here's how you define a table:
 
 ```swift
+import Blackbird
+
 struct Post: BlackbirdModel {
     @BlackbirdColumn var id: Int
     @BlackbirdColumn var title: String
     @BlackbirdColumn var url: URL?
+}
+```
+
+That's it. No `CREATE TABLE`, no separate table-definition logic, no additional steps.
+
+And __automatic migrations__. Want to add or remove columns or indexes, or start using more of Blackbird's features such as custom `enum` columns, unique indexes, or custom primary keys? Just change the code:
+
+```swift
+struct Post: BlackbirdModel {
+    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$guid, \.$id ]
+
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ],
+        [ \.$publishedDate, \.$format ],
+    ]
+
+    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$guid ],
+    ]
+    
+    enum Format: Int, BlackbirdIntegerEnum {
+        case markdown
+        case html
+    }
+    
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var guid: String
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var publishedDate: Date?
+    @BlackbirdColumn var format: Format
+    @BlackbirdColumn var url: URL?
     @BlackbirdColumn var image: Data?
 }
+```
 
+…and Blackbird will automatically migrate the table to the new schema at runtime.
+
+Write instances safely and easily to a [Blackbird.Database](#blackbird-database):
+
+```swift
 let post = Post(id: 1, title: "What I had for breakfast")
 try await post.write(to: db)
+```
 
+Perform queries in many different ways, preferring structured queries using key-paths for compile-time checking, type safety, and convenience:
+
+```swift
 // Fetch by primary key
-let anotherPost = try await Post.read(from: db, id: 2)
+let post = try await Post.read(from: db, id: 2)
 
 // Or with a WHERE condition, using compiler-checked key-paths:
-let theSportsPost = try await Post.read(from: db, matching: \.$title == "Sports")
+let posts = try await Post.read(from: db, matching: \.$title == "Sports")
 
-// Or use your own custom SQL:
-let posts = try await Post.read(from: db, where: "title LIKE ? ORDER BY RANDOM()", "Sports%")
-
-// Select only certain columns, with row dictionaries typed by key-path:
+// Select custom columns, with row dictionaries typed by key-path:
 for row in try await Post.query(in: db, columns: [\.$id, \.$image], matching: \.$url != nil) {
     let postID = row[\.$id]       // returns Int
     let imageData = row[\.$image] // returns Data?
 }
+```
 
-// Monitor for changes
-let listener = Post.changePublisher(in: db).sink { change in
-    print("Post IDs changed: \(change.primaryKeys ?? "all of them")")
-}
+SQL is never required, but it's always available:
 
-// A model with a custom primary-key column:
-struct CustomPrimaryKeyModel: BlackbirdModel {
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
+```swift
+try await Post.query(in: db, "UPDATE $T SET format = ? WHERE date < ?", .html, date)
 
-    @BlackbirdColumn var pk: Int
-    @BlackbirdColumn var title: String
-}
+let posts = try await Post.read(from: db, sqlWhere: "title LIKE ? ORDER BY RANDOM()", "Sports%")
 
-// A model with indexes and a multicolumn primary key:
-struct Post: BlackbirdModel {
-    @BlackbirdColumn var id: Int
-    @BlackbirdColumn var title: String
-    @BlackbirdColumn var date: Date
-    @BlackbirdColumn var isPublished: Bool
-    @BlackbirdColumn var url: URL?
-    @BlackbirdColumn var productID: Int
-
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
-
-    static var indexes: [[BlackbirdColumnKeyPath]] = [
-        [ \.$title ],
-        [ \.$isPublished, \.$date ]
-    ]
-
-    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
-        [ \.$productID ]
-    ]
+for row in try await Post.query(in: db, "SELECT MAX(id) AS max FROM $T WHERE url = ?", url) {
+    let maxID = row["max"]?.intValue
 }
 ```
 
-## Database
-
-A lightweight async wrapper around [SQLite](https://www.sqlite.org/).
+Monitor for row- and column-level changes with Combine:
 
 ```swift
-let db = try Blackbird.Database(path: "/tmp/whatever.sqlite")
+let listener = Post.changePublisher(in: db).sink { change in
+    print("Post IDs changed: \(change.primaryKeys ?? "all")")
+    print(" Columns changed: \(change.columnNames ?? "all")")
+}
+```
 
-// SELECT with structure
+Blackbird is designed for SwiftUI, offering async-loading, automatically-updating result wrappers:
+
+```swift
+struct RootView: View {
+    // The database that all child views will automatically use
+    var database = try! Blackbird.Database.inMemoryDatabase()
+
+    var body: some View {
+        PostListView()
+        .environment(\.blackbirdDatabase, database)
+    }
+}
+
+struct PostListView: View {
+    // Async-loading, auto-updating array of matching instances
+    @BlackbirdLiveModels({ try await Post.read(from: $0, orderBy: .ascending(\.$id)) }) var posts
+    
+    // Async-loading, auto-updating rows from a custom query
+    @BlackbirdLiveQuery(tableName: "Post", { try await $0.query("SELECT MAX(id) AS max FROM Post") }) var maxID
+
+    var body: some View {
+        VStack {
+            if posts.didLoad {
+                List {
+                    ForEach(posts.results) { post in
+                        NavigationLink(destination: PostView(post: post.liveModel)) {
+                            Text(post.title)
+                        }
+                    }
+                }
+            } else {
+                ProgressView()
+            }
+        }
+        .navigationTitle(maxID.didLoad ? "\(maxID.results.first?["max"]?.intValue ?? 0) posts" : "Loading…")
+    }
+}
+
+struct PostView: View {
+    // Auto-updating instance
+    @BlackbirdLiveModel var post: Post?
+
+    var body: some View {
+        VStack {
+            if let post {
+                Text(post.title)
+            }
+        }
+    }
+}
+```
+
+## Blackbird.Database
+
+A lightweight async wrapper around [SQLite](https://www.sqlite.org/) that can be used with or without [BlackbirdModel](#BlackbirdModel).
+
+```swift
+let db = try Blackbird.Database(path: "/tmp/db.sqlite")
+
+// SELECT with parameterized queries
 for row in try await db.query("SELECT id FROM posts WHERE state = ?", 1) {
-    let id = row["id"]
+    let id = row["id"]?.intValue
     // ...
 }
 
 // Run direct queries
 try await db.execute("UPDATE posts SET comments = NULL")
 
-// Transactions with the actor isolated
+// Transactions with synchronous queries
 try await db.transaction { core in
     try core.query("INSERT INTO posts VALUES (?, ?)", 16, "Sports!")
     try core.query("INSERT INTO posts VALUES (?, ?)", 17, "Dewey Defeats Truman")
 }
 ```
-
-
-## Project status
-
-Blackbird is an __alpha__. It's brand new.
-
-Nobody should be using it more than I do, and I've barely used it.
-
-The API might change dramatically at any time.
-
-Really, don't build anything against this yet.
-
-Immediate to-do list:
-
-* More tests, especially around performance, multicolumn primary keys, legacy change notifications, and any Obj-C sync-method deadlock potential  
-* Actually start using Blackbird in [my app](https://overcast.fm/) to refine the API/conventions, find any edge-case bugs, and ensure Obj-C compatibility layer is useful enough
-* More examples in the documentation
 
 ## Wishlist for future Swift-language capabilities
 
