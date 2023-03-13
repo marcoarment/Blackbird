@@ -10,7 +10,7 @@ You shouldn't build anything against this yet. But it's close.
 
 ## BlackbirdModel
 
-A protocol to store structs in the [SQLite](https://www.sqlite.org/)-powered [Blackbird.Database](#blackbird-database), with compiler-checked key-paths for common operations.
+A protocol to store structs in the [SQLite](https://www.sqlite.org/)-powered [Blackbird.Database](#blackbirddatabase), with compiler-checked key-paths for common operations.
 
 Here's how you define a table:
 
@@ -58,6 +58,8 @@ struct Post: BlackbirdModel {
 
 …and Blackbird will automatically migrate the table to the new schema at runtime.
 
+### Queries
+
 Write instances safely and easily to a [Blackbird.Database](#blackbird-database):
 
 ```swift
@@ -101,6 +103,8 @@ let listener = Post.changePublisher(in: db).sink { change in
     print(" Columns changed: \(change.columnNames ?? "all")")
 }
 ```
+
+### SwiftUI
 
 Blackbird is designed for SwiftUI, offering async-loading, automatically-updating result wrappers:
 
