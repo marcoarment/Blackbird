@@ -88,7 +88,7 @@ extension BlackbirdModel {
 
         if let matching {
             let (whereClause, whereArguments) = matching.compile(table: table)
-            clauses.append("WHERE \(whereClause)")
+            if let whereClause { clauses.append("WHERE \(whereClause)") }
             arguments.append(contentsOf: whereArguments)
         }
 
@@ -199,9 +199,9 @@ extension BlackbirdModel {
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to query.
     ///   - changes: A dictionary of column key-paths of this BlackbirdModel type and corresponding values to set them to, e.g. `[ \.$title : "New title" ]`.
-    ///   - matching: An optional filtering expression using column key-paths, e.g. `\.$id == 1`, to be used in the resulting SQL query as a `WHERE` clause. See ``BlackbirdModelColumnExpression``.
+    ///   - matching: A filtering expression using column key-paths, e.g. `\.$id == 1`, to be used in the resulting SQL query as a `WHERE` clause. See ``BlackbirdModelColumnExpression``.
     ///
-    ///       **If omitted, all rows in the table are updated.**
+    ///       Use `.all` to delete all rows in the table (executes an SQL `UPDATE` without a `WHERE` clause).
     /// - Returns: An array of matching rows, each containing only the columns specified.
     ///
     /// ## Example
@@ -214,14 +214,14 @@ extension BlackbirdModel {
     /// // Equivalent to:
     /// // "UPDATE Post SET title = 'Hi' WHERE id = 123"
     /// ```
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath : Sendable], matching: BlackbirdModelColumnExpression<Self>? = nil) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath : Sendable], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
         let decoded = _decodeStructuredQuery(operation: "UPDATE", matching: matching, updating: changes)
         try await query(in: database, decoded.query, arguments: decoded.arguments)
     }
 
     /// Synchronous version of ``update(in:set:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath : Sendable], matching: BlackbirdModelColumnExpression<Self>? = nil) throws {
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath : Sendable], matching: BlackbirdModelColumnExpression<Self>) throws {
         if changes.isEmpty { return }
         let decoded = _decodeStructuredQuery(operation: "UPDATE", matching: matching, updating: changes)
         try queryIsolated(in: database, core: core, decoded.query, arguments: decoded.arguments)
@@ -230,9 +230,9 @@ extension BlackbirdModel {
     /// Deletes a subset of the table's columns matching the given column values, using column key-paths for this model type.
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to query.
-    ///   - matching: An optional filtering expression using column key-paths, e.g. `\.$id == 1`, to be used in the resulting SQL query as a `WHERE` clause. See ``BlackbirdModelColumnExpression``.
+    ///   - matching: A filtering expression using column key-paths, e.g. `\.$id == 1`, to be used in the resulting SQL query as a `WHERE` clause. See ``BlackbirdModelColumnExpression``.
     ///
-    ///       **If omitted, all rows in the table are deleted.**
+    ///       Use `.all` to delete all rows in the table (executes an SQL `DELETE` without a `WHERE` clause).
     /// - Returns: An array of matching rows, each containing only the columns specified.
     ///
     /// ## Example
@@ -241,13 +241,13 @@ extension BlackbirdModel {
     /// // Equivalent to:
     /// // "DELETE FROM Post WHERE id = 123"
     /// ```
-    public static func delete(from database: Blackbird.Database, matching: BlackbirdModelColumnExpression<Self>? = nil) async throws {
+    public static func delete(from database: Blackbird.Database, matching: BlackbirdModelColumnExpression<Self>) async throws {
         let decoded = _decodeStructuredQuery(operation: "DELETE FROM", matching: matching)
         try await query(in: database, decoded.query, arguments: decoded.arguments)
     }
 
     /// Synchronous version of ``delete(from:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>? = nil) throws {
+    public static func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>) throws {
         let decoded = _decodeStructuredQuery(operation: "DELETE FROM", matching: matching)
         try queryIsolated(in: database, core: core, decoded.query, arguments: decoded.arguments)
     }
@@ -289,6 +289,7 @@ public func || <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>, rhs:
 /// - `||` or `&&` to combine multiple expressions.
 ///
 /// Examples:
+/// - `.all`: equivalent to not using a `WHERE` clause
 /// - `\.$id == 1`: equivalent to `WHERE id = 1`
 /// - `\.$id > 1`: equivalent to `WHERE id > 1`
 /// - `\.$id >= 1`: equivalent to `WHERE id >= 1`
@@ -298,6 +299,7 @@ public func || <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>, rhs:
 /// - `\.$id != nil`: equivalent to `WHERE id IS NOT NULL`
 /// - `\.$id > 0 && \.$title != "a"`: equivalent to `WHERE id > 0 AND title != 'a'`
 /// - `\.$id != nil || \.$title == nil`: equivalent to `WHERE id IS NOT NULL OR title IS NULL`
+/// - `.literal("id % 3 = ?", 1)`: equivalent to `WHERE id % 3 = 1`
 ///
 /// Used as a `matching:` expression in ``BlackbirdModel`` functions such as:
 /// - ``BlackbirdModel/query(in:columns:matching:orderBy:limit:)``
@@ -305,6 +307,14 @@ public func || <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>, rhs:
 /// - ``BlackbirdModel/update(in:set:matching:)``
 /// - ``BlackbirdModel/delete(from:matching:)``
 public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, BlackbirdQueryExpression {
+
+    /// Use `.all` to operate on all rows in the table without a `WHERE` clause.
+    public static var all: Self {
+        get {
+            BlackbirdModelColumnExpression<T>()
+        }
+    }
+
     internal enum BinaryOperator: String, Sendable {
         case equal = "="
         case notEqual = "!="
@@ -338,11 +348,15 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
         expression = BlackbirdCombiningExpression(lhs: lhs, rhs: rhs, sqlOperator: sqlOperator)
     }
 
-    init(expressionLiteral: String) {
-        expression = BlackbirdColumnLiteralExpression(literal: expressionLiteral)
+    init(expressionLiteral: String, arguments: [Sendable]) {
+        expression = BlackbirdColumnLiteralExpression(literal: expressionLiteral, arguments: arguments)
     }
 
-    internal func compile(table: Blackbird.Table) -> (whereClause: String, values: [Sendable]) { expression.compile(table: table) }
+    init() {
+        expression = BlackbirdColumnNoExpression()
+    }
+
+    internal func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) { expression.compile(table: table) }
 
     static func isNull<T: BlackbirdModel>(_ columnKeyPath: T.BlackbirdColumnKeyPath) -> BlackbirdModelColumnExpression<T> {
         BlackbirdModelColumnExpression<T>(column: columnKeyPath, sqlOperator: .isNull)
@@ -383,11 +397,24 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
     static func or<T: BlackbirdModel>(_ lhs: BlackbirdModelColumnExpression<T>, _ rhs: BlackbirdModelColumnExpression<T>) -> BlackbirdModelColumnExpression<T> {
         BlackbirdModelColumnExpression<T>(lhs: lhs, sqlOperator: .or, rhs: rhs)
     }
+
+    /// Specify a literal expression to be used in a `WHERE` clause.
+    ///
+    /// Example: `.literal("id % 5 = ?", 1)`
+    public static func literal<T: BlackbirdModel>(_ expressionLiteral: String, _ arguments: Sendable...) -> BlackbirdModelColumnExpression<T> {
+        BlackbirdModelColumnExpression<T>(expressionLiteral: expressionLiteral, arguments: arguments)
+    }
 }
 
 
 internal protocol BlackbirdQueryExpression: Sendable {
-    func compile(table: Blackbird.Table) -> (whereClause: String, values: [Sendable])
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable])
+}
+
+internal struct BlackbirdColumnNoExpression: BlackbirdQueryExpression {
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) {
+        return (whereClause: nil, values: [])
+    }
 }
 
 internal struct BlackbirdColumnBinaryExpression<T: BlackbirdModel>: BlackbirdQueryExpression {
@@ -395,16 +422,17 @@ internal struct BlackbirdColumnBinaryExpression<T: BlackbirdModel>: BlackbirdQue
     let sqlOperator: BlackbirdModelColumnExpression<T>.BinaryOperator
     let value: Sendable
 
-    func compile(table: Blackbird.Table) -> (whereClause: String, values: [Sendable]) {
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) {
         return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue) ?", values: [value])
     }
 }
 
 internal struct BlackbirdColumnLiteralExpression: BlackbirdQueryExpression {
     let literal: String
+    let arguments: [Sendable]
     
-    func compile(table: Blackbird.Table) -> (whereClause: String, values: [Sendable]) {
-        return (whereClause: "\(literal)", values: [])
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) {
+        return (whereClause: "\(literal)", values: arguments)
     }
 }
 
@@ -412,7 +440,7 @@ internal struct BlackbirdColumnUnaryExpression<T: BlackbirdModel>: BlackbirdQuer
     let column: T.BlackbirdColumnKeyPath
     let sqlOperator: BlackbirdModelColumnExpression<T>.UnaryOperator
 
-    func compile(table: Blackbird.Table) -> (whereClause: String, values: [Sendable]) {
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) {
         return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue)", values: [])
     }
 }
@@ -422,13 +450,13 @@ internal struct BlackbirdCombiningExpression<T: BlackbirdModel>: BlackbirdQueryE
     let rhs: BlackbirdQueryExpression
     let sqlOperator: BlackbirdModelColumnExpression<T>.CombiningOperator
 
-    func compile(table: Blackbird.Table) -> (whereClause: String, values: [Sendable]) {
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) {
         let l = lhs.compile(table: table)
         let r = rhs.compile(table: table)
         
         var combinedValues = l.values
         combinedValues.append(contentsOf: r.values)
         
-        return (whereClause: "(\(l.whereClause) \(sqlOperator.rawValue) \(r.whereClause))", values: combinedValues)
+        return (whereClause: "(\(l.whereClause!) \(sqlOperator.rawValue) \(r.whereClause!))", values: combinedValues)
     }
 }

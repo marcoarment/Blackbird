@@ -702,7 +702,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testOptionalColumn() async throws {
-        let db = try Blackbird.Database.inMemoryDatabase()
+        let db = try Blackbird.Database.inMemoryDatabase(options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
         
         let testDate = Date()
         let testURL = URL(string: "https://github.com/marcoarment/Blackbird")!
@@ -762,6 +762,14 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(t4.optionalData == nil)
         XCTAssert(t5.optionalData == nil)
         XCTAssert(t6.optionalData == testData)
+        
+        let random = try await TestModelWithOptionalColumns.read(from: db, matching: .literal("id % 5 = ?", 3))
+        XCTAssert(random.count == 1)
+        XCTAssert(random.first!.id == 3)
+
+        try await TestModelWithOptionalColumns.delete(from: db, matching: .all)
+        let results = try await TestModelWithOptionalColumns.read(from: db, matching: .all)
+        XCTAssert(results.count == 0)
     }
 
     func testUniqueIndex() async throws {
@@ -789,7 +797,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(allBefore[1].id == 2)
         XCTAssert(allBefore[1].a == "a2")
         XCTAssert(allBefore[1].b == 200)
-
 
         try await TestModelWithUniqueIndex(id: 3, a: "a2", b: 201, c: testDate).write(to: db)
         
