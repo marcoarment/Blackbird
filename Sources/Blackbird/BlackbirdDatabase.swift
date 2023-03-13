@@ -53,7 +53,7 @@ internal protocol BlackbirdQueryable {
     /// - Parameters:
     ///     - action: The actions to perform in the transaction. If an error is thrown, the transaction is rolled back and the error is rethrown to the caller.
     ///    
-    ///         Use ``cancellableTransaction(_:)`` to roll back transactions without throwing errors.
+    ///         Use ``Blackbird/Database/cancellableTransaction(_:)`` to roll back transactions without throwing errors.
     ///
     /// While inside the transaction's `action`:
     /// * Queries against the isolated ``Blackbird/Database/Core`` can be executed synchronously (using `try` instead of `try await`).
@@ -74,14 +74,16 @@ internal protocol BlackbirdQueryable {
     /// > Performing large quantities of database writes is typically much faster inside a transaction.
     ///
     /// ## See also
-    /// ``cancellableTransaction(_:)``
+    /// ``Blackbird/Database/cancellableTransaction(_:)``
     @discardableResult
     func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> R
 
-    /// Equivalent to ``transaction(_:)``, but with the ability to cancel without throwing an error.
-    /// - Parameter action: The actions to perform in the transaction. Return `true` to commit the transaction or `false` to roll it back. If an error is thrown, the transaction is rolled back and the error is rethrown to the caller.
+    /// Equivalent to ``Blackbird/Database/transaction(_:)``, but with the ability to cancel.
+    /// - Parameter action: The actions to perform in the transaction. Throw ``Blackbird/Error/cancelTransaction`` within the action to cancel and roll back the transaction. This error will not be rethrown.
     ///
-    /// See ``transaction(_:)`` for details.
+    /// If any other error is thrown, the transaction is rolled back and the error is rethrown to the caller.
+    ///
+    /// See ``Blackbird/Database/transaction(_:)`` for details.
     ///
     /// ## Example
     /// ```swift
