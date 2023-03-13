@@ -209,6 +209,14 @@ This is a database engine that'll be used by, at most, a handful of nerds. It do
 
 I like unique names (rather than generic or descriptive names, like `Model` or `SwiftSQLite`) because they're easier to search for and harder to confuse with other types. So I wanted something memorable. I suppose I could've called it something like `ButtDB` — memorable! — but as I use it over the coming years, I wanted to type something cooler after all of my `struct` definitions.
 
+### why don't you support [SQLite feature]
+
+Blackbird is designed to make it very fast and easy to write apps that have the most common, straightforward database needs.
+
+Custom SQL is supported in many ways, but more advanced SQLite behavior like triggers, views, windows, foreign-key constraints, cascading writes, partial or expression indexes, virtual columns, etc. are not directly supported by Blackbird and may cause undefined behavior if used.
+
+By not supporting esoteric or specialized features that apps typically don't need, Blackbird is able to offer a cleaner API and more useful functionality for common cases.
+
 ### why didn't you just use [other SQLite library]
 
 I like to write my own libraries.
@@ -223,10 +231,12 @@ And when I write the libraries, I understand how everything works as I'm using t
 
 I know. Ironic, considering that I named this one after the fastest plane.
 
-Other Swift SQLite libraries can be faster by omitting much of Blackbird's reflection, abstraction, and key-path usage. Some use code-generation methods, which can be very fast but complicate the build and tooling. Others take less-abstracted approaches that make usage more complicated and error-prone.
+Blackbird is optimized for speed of __development__. It's pretty fast in execution, too, but clarity, ease of use, reduced repetition, and simple tooling are higher priorities.
 
-I've never written an app that was too slow to read its database, but I've frequently struggled with maintenance of large, complex codebases.
+Other Swift SQLite libraries can be faster in execution by omitting much of Blackbird's reflection, abstraction, and key-path usage. Some use code-generation methods, which can execute very efficiently but complicate development more than I'd like. Others take less-abstracted approaches that enable more custom behavior but make usage more complicated.
 
-Blackbird's goal is to achieve my ideal balance of ease-of-use and bug-avoidance, even though it's therefore not the fastest Swift SQLite library.
+I've chosen different trade-offs to better fit my needs. I've never written an app that was too slow to read its database, but I've frequently struggled with maintenance of large, complex codebases.
+
+Blackbird's goal is to achieve my ideal balance of ease-of-use and bug-avoidance, even though it's therefore not the fastest SQLite library in execution.
 
 Phones keep getting faster, but a bug is a bug forever.
