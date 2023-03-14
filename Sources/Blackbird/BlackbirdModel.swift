@@ -264,6 +264,61 @@ extension BlackbirdModel {
     /// Synchronous version of ``read(from:primaryKey:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, primaryKey: Sendable) throws -> Self? { return try self.readIsolated(from: database, core: core, multicolumnPrimaryKey: [primaryKey]) }
 
+
+    // SQLite limits the number of "?" arguments in a query. This splits the given values into chunks that fit well below that limit.
+    private static func _queryVariableLimitChunks(for database: Blackbird.Database, _ values: [Sendable]) -> [[Sendable]] {
+        let chunkSize = database.maxQueryVariableCount / 2
+        let count = values.count
+        
+        // Thanks, Paul Hudson: https://www.hackingwithswift.com/example-code/language/how-to-split-an-array-into-chunks
+        return stride(from: 0, to: count, by: chunkSize).map {
+            Array(values[$0 ..< Swift.min($0 + chunkSize, count)])
+        }
+    }
+
+    private static func _sortWithPrimaryKeyValueSequence(instances: [Self], primaryKeyValues: [Sendable]) -> [Self] {
+        let pkPath = self.primaryKey.first
+        var primaryKeyValuesToInstances: [AnyHashable : Self] = [:]
+        for instance in instances {
+            let pkValue = pkPath != nil ? instance[keyPath: pkPath!] : instance.id
+            primaryKeyValuesToInstances[pkValue as! AnyHashable] = instance
+        }
+        return primaryKeyValues.compactMap { primaryKeyValuesToInstances[$0 as! AnyHashable] }
+    }
+
+    /// Reads an array of instances matching the given primary-key values from a database. Only works with single-column primary keys.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to read from.
+    ///   - primaryKeys: The values of the primary-key column.
+    ///   - preserveOrder: Sort the results to match the order of the `primaryKeys` parameter. Incurs a performance penalty on large collections. Default: `false`.
+    /// - Returns: Any decoded instances in the table matching the given set of primary keys if they exist.
+    ///
+    /// Equivalent to the SQL `IN` clause, e.g.:
+    /// 
+    /// `SELECT ... WHERE [primary key column] IN (?, ?, ?, ...)`
+    public static func read(from database: Blackbird.Database, primaryKeys: [Sendable], preserveOrder: Bool = false) async throws -> [Self] {
+        let pkName = table.primaryKeys.first!.name
+        var combinedResults: [Self] = []
+        for primaryKeyChunk in _queryVariableLimitChunks(for: database, primaryKeys) {
+            let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
+            let resultsChunk = try await self.read(from: database, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
+            combinedResults.append(contentsOf: resultsChunk)
+        }
+        return preserveOrder ? _sortWithPrimaryKeyValueSequence(instances: combinedResults, primaryKeyValues: primaryKeys) : combinedResults
+    }
+
+    /// Synchronous version of ``read(from:primaryKeys:preserveOrder:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, primaryKeys: [Sendable], preserveOrder: Bool = false) throws -> [Self] {
+        let pkName = table.primaryKeys.first!.name
+        var combinedResults: [Self] = []
+        for primaryKeyChunk in _queryVariableLimitChunks(for: database, primaryKeys) {
+            let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
+            let resultsChunk = try self.readIsolated(from: database, core: core, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
+            combinedResults.append(contentsOf: resultsChunk)
+        }
+        return preserveOrder ? _sortWithPrimaryKeyValueSequence(instances: combinedResults, primaryKeyValues: primaryKeys) : combinedResults
+    }
+
     /// Reads a single instance with the given primary key values from a database.
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.

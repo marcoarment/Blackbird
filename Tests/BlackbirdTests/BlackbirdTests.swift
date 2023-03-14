@@ -135,6 +135,36 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         await db.close()
     }
     
+    func testWhereIdIN() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename)
+        let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
+        
+        try await db.transaction { core in
+            for i in 0..<count {
+                let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
+                try m.writeIsolated(to: db, core: core)
+            }
+        }
+
+        var giantIDBatch = Array(0...(db.maxQueryVariableCount * 2))
+        giantIDBatch.shuffle()
+        let all = try await TestModelWithDescription.read(from: db, primaryKeys: giantIDBatch)
+        XCTAssert(all.count == count)
+        
+        var idSet = Set<Int>()
+        for m in all { idSet.insert(m.id) }
+        for i in 0..<count { XCTAssert(idSet.contains(i)) }
+        
+        let pkOrder = [ 999, 1, 78, 128, 63, 100000, 571 ]
+        let sorted = try await TestModelWithDescription.read(from: db, primaryKeys: pkOrder, preserveOrder: true)
+        XCTAssert(sorted[0].id == 999);
+        XCTAssert(sorted[1].id == 1);
+        XCTAssert(sorted[2].id == 78);
+        XCTAssert(sorted[3].id == 128);
+        XCTAssert(sorted[4].id == 63);
+        XCTAssert(sorted[5].id == 571);
+    }
+    
     func testQueries() async throws {
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
         let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)

@@ -263,6 +263,9 @@ extension Blackbird {
         
         /// The ``Options-swift.struct`` used to create the database.
         public let options: Options
+        
+        /// The maximum number of parameters (`?`) supported in database queries. (The value of `SQLITE_LIMIT_VARIABLE_NUMBER` of the backing SQLite instance.)
+        public let maxQueryVariableCount: Int
 
         internal let core: Core
         internal let changeReporter: ChangeReporter
@@ -326,6 +329,8 @@ extension Blackbird {
                 if let path = self.path { InstancePool.removeInstance(path: path) }
                 throw Error.cannotOpenDatabaseAtPath(path: path, description: "SQLite error code \(code): \(msg)")
             }
+            
+            self.maxQueryVariableCount = Int(sqlite3_limit(handle, SQLITE_LIMIT_VARIABLE_NUMBER, -1))
             
             if SQLITE_OK != sqlite3_exec(handle, "PRAGMA journal_mode = WAL", nil, nil, nil) || SQLITE_OK != sqlite3_exec(handle, "PRAGMA synchronous = NORMAL", nil, nil, nil) {
                 sqlite3_close(handle)
