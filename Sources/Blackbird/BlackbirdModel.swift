@@ -143,7 +143,7 @@ import Combine
 /// `BlackbirdModel` should not be used with tables or queries involving them,
 /// and their use may cause some features not to behave as expected.
 ///
-public protocol BlackbirdModel: Codable, Equatable, Identifiable, Sendable {
+public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Sendable {
     /// A key-path to any `@BlackbirdColumn`-wrapped variable of this type, e.g. `\.$id` or `\.$title`.
     typealias BlackbirdColumnKeyPath = PartialKeyPath<Self>
     
@@ -204,6 +204,9 @@ extension BlackbirdModel {
             fatalError("\(String(describing: Self.self)): Cannot detect primary-key value for Identifiable. Specify a primaryKey.")
         }
     }
+    
+    // Hashable
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     /// Look up ``Blackbird/ColumnInfo`` instances from key-paths to `@BlackbirdColumn` variables.
     public static func columnInfoFromKeyPaths(_ keyPaths: [PartialKeyPath<Self>]) -> [PartialKeyPath<Self>: Blackbird.ColumnInfo] {
