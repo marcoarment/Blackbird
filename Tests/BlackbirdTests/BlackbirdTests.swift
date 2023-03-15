@@ -145,11 +145,13 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
                 try m.writeIsolated(to: db, core: core)
             }
         }
+        db.debugPrintCachePerformanceMetrics()
 
         var giantIDBatch = Array(0...(db.maxQueryVariableCount * 2))
         giantIDBatch.shuffle()
         let all = try await TestModelWithDescription.read(from: db, primaryKeys: giantIDBatch)
         XCTAssert(all.count == count)
+        db.debugPrintCachePerformanceMetrics()
         
         var idSet = Set<Int>()
         for m in all { idSet.insert(m.id) }
@@ -163,6 +165,8 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(sorted[3].id == 128);
         XCTAssert(sorted[4].id == 63);
         XCTAssert(sorted[5].id == 571);
+        
+        db.debugPrintCachePerformanceMetrics()
     }
     
     func testQueries() async throws {
@@ -260,6 +264,8 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let leftovers2 = try await TestModelWithDescription.read(from: db, matching: \.$id == omnibusID)
         XCTAssert(leftovers1.isEmpty)
         XCTAssert(leftovers2.isEmpty)
+
+        db.debugPrintCachePerformanceMetrics()
     }
 
     func testColumnTypes() async throws {
@@ -356,7 +362,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 
 
     func testHeavyWorkload() async throws {
-        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        let db = try Blackbird.Database(path: sqliteFilename)
 
         // big block of writes to populate the DB
         try await db.transaction { core in
@@ -367,15 +373,24 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         }
 
         // random reads/writes interleaved
-        for _ in 0..<5000 {
+        for _ in 0..<500 {
+            // Attempt 10 random reads
+            for _ in 0..<10 {
+                _ = try await TestModel.read(from: db, id: Int64.random(in: 0..<1000))
+            }
+            
+            // Random UPDATE
             if var r = try await TestModel.read(from: db, id: Int64.random(in: 0..<1000)) {
                 r.title = TestData.randomTitle
                 try await r.write(to: db)
             }
-
+            
+            // Random INSERT
             let t = TestModel(id: TestData.randomInt64(), title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomDescription)
             try await t.write(to: db)
         }
+
+        db.debugPrintCachePerformanceMetrics()
 
         await db.close()
     }
@@ -891,6 +906,73 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(all[2].a == "a2")
         XCTAssert(all[2].b == 201)
 
+    }
+    
+    func testCache() async throws {
+        TestModel.enableCaching = true
+
+        let db = try Blackbird.Database(path: sqliteFilename)
+
+        // big block of writes to populate the DB
+        try await db.transaction { core in
+            for i in 0..<1000 {
+                let t = TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomDescription)
+                try t.writeIsolated(to: db, core: core)
+            }
+        }
+        
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        var t = try await TestModel.read(from: db, id: 1)!
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+        
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        t.title = "new"
+        try await t.write(to: db)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.writes == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 0)
+        
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        t = try await TestModel.read(from: db, id: 1)!
+        XCTAssert(t.title == "new")
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        try await db.query("UPDATE TestModel SET title = 'new2' WHERE id = 1")
+        t = try await TestModel.read(from: db, id: 1)!
+        db.debugPrintCachePerformanceMetrics()
+        XCTAssert(t.title == "new2")
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 1)
+    }
+    
+    func testCacheSpeed() async throws {
+        let cacheEnabled = true
+
+        TestModel.enableCaching = cacheEnabled
+        TestModelWithDescription.enableCaching = cacheEnabled
+        let startTime = Date()
+        try await testQueries()
+        try await testHeavyWorkload()
+        try await testChangeNotifications()
+        let duration = abs(startTime.timeIntervalSinceNow)
+        print("took \(duration) seconds")
+    
+//        measure {
+//            let exp = expectation(description: "Finished")
+//            Task {
+//                let startTime = Date()
+//                try await testHeavyWorkload()
+//                let duration = startTime.timeIntervalSinceNow
+//                print("took \(duration) seconds")
+//                exp.fulfill()
+//            }
+//            wait(for: [exp], timeout: 200.0)
+//        }
     }
 }
 

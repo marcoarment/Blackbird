@@ -169,6 +169,15 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     /// If unspecified, no additional unique indexes are created.
     static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { get }
 
+    /// Use basic, automatic caching for primary-key reads. Disabled by default.
+    ///
+    /// May break assumptions if cacheable data is read by another thread during a transaction.
+    ///
+    /// Only works for tables with single-column primary keys.
+    ///
+    /// > Note: The cache is not limited in size. Use caution with memory usage if enabled for large tables.
+    static var enableCaching: Bool { get }
+
     /// Shorthand for this type's `ModelArrayUpdater` interface for SwiftUI.
     typealias ArrayUpdater = Blackbird.ModelArrayUpdater<Self>
     
@@ -185,7 +194,8 @@ extension BlackbirdModel {
     public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
-        
+    public static var enableCaching: Bool { false }
+
     // Identifiable
     public var id: [AnyHashable] {
         let primaryKeyPaths = Self.primaryKey
@@ -240,13 +250,31 @@ extension BlackbirdModel {
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.
     ///   - id: The value of the `id` column.
-    /// - Returns: The decoded instance in the table with the given `id`, or `nil` if a corresponding instance doesn't exist in the table.
+    /// - Returns: The first decoded instance in the table with the given `id`, or `nil` if a corresponding instance doesn't exist in the table.
     ///
     /// For tables with other primary-key names, see ``read(from:primaryKey:)`` and ``read(from:multicolumnPrimaryKey:)-926f3``.
-    public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? { return try await self.read(from: database, sqlWhere: "id = ?", id).first }
+    public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? {
+        let primaryKeyPaths = self.primaryKey
+        if let firstKeyPath = primaryKeyPaths.first, table.keyPathToColumnName(keyPath: firstKeyPath) != "id" || primaryKeyPaths.count > 1 {
+            fatalError("read(from:id:) requires that the primary key be only \"id\"")
+        }
+        
+        let idValue = try Blackbird.Value.fromAny(id)
+        if let cached = _cachedInstance(for: database, primaryKeyValue: idValue) { return cached }
+        return try await self.read(from: database, sqlWhere: "id = ?", idValue).first
+    }
 
     /// Synchronous version of ``read(from:id:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, id: Sendable) throws -> Self? { return try self.readIsolated(from: database, core: core, sqlWhere: "id = ?", id).first }
+    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, id: Sendable) throws -> Self? {
+        let primaryKeyPaths = self.primaryKey
+        if let firstKeyPath = primaryKeyPaths.first, table.keyPathToColumnName(keyPath: firstKeyPath) != "id" || primaryKeyPaths.count > 1 {
+            fatalError("read(from:id:) requires that the primary key be only \"id\"")
+        }
+
+        let idValue = try Blackbird.Value.fromAny(id)
+        if let cached = _cachedInstance(for: database, primaryKeyValue: idValue) { return cached }
+        return try self.readIsolated(from: database, core: core, sqlWhere: "id = ?", idValue).first
+    }
 
     /// Reads a single instance with the given primary-key value from a database.
     /// - Parameters:
@@ -276,14 +304,12 @@ extension BlackbirdModel {
         }
     }
 
-    private static func _sortWithPrimaryKeyValueSequence(instances: [Self], primaryKeyValues: [Sendable]) -> [Self] {
-        let pkPath = self.primaryKey.first
-        var primaryKeyValuesToInstances: [AnyHashable : Self] = [:]
+    private static func _sortWithPrimaryKeyValueSequence(instances: [Self], primaryKeyValues: [Blackbird.Value]) -> [Self] {
+        var primaryKeyValuesToInstances: [Blackbird.Value : Self] = [:]
         for instance in instances {
-            let pkValue = pkPath != nil ? instance[keyPath: pkPath!] : instance.id
-            primaryKeyValuesToInstances[pkValue as! AnyHashable] = instance
+            primaryKeyValuesToInstances[try! Blackbird.Value.fromAny(instance.primaryKeyValues().first!)] = instance
         }
-        return primaryKeyValues.compactMap { primaryKeyValuesToInstances[$0 as! AnyHashable] }
+        return primaryKeyValues.compactMap { primaryKeyValuesToInstances[$0] }
     }
 
     /// Reads an array of instances matching the given primary-key values from a database. Only works with single-column primary keys.
@@ -298,8 +324,11 @@ extension BlackbirdModel {
     /// `SELECT ... WHERE [primary key column] IN (?, ?, ?, ...)`
     public static func read(from database: Blackbird.Database, primaryKeys: [Sendable], preserveOrder: Bool = false) async throws -> [Self] {
         let pkName = table.primaryKeys.first!.name
-        var combinedResults: [Self] = []
-        for primaryKeyChunk in _queryVariableLimitChunks(for: database, primaryKeys) {
+        let primaryKeys = try primaryKeys.map { try Blackbird.Value.fromAny($0) }
+        let cacheResult = _cachedInstances(for: database, primaryKeyValues: primaryKeys)
+        var combinedResults: [Self] = cacheResult.hits
+        
+        for primaryKeyChunk in _queryVariableLimitChunks(for: database, cacheResult.missedKeys) {
             let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
             let resultsChunk = try await self.read(from: database, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
             combinedResults.append(contentsOf: resultsChunk)
@@ -310,8 +339,11 @@ extension BlackbirdModel {
     /// Synchronous version of ``read(from:primaryKeys:preserveOrder:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, primaryKeys: [Sendable], preserveOrder: Bool = false) throws -> [Self] {
         let pkName = table.primaryKeys.first!.name
-        var combinedResults: [Self] = []
-        for primaryKeyChunk in _queryVariableLimitChunks(for: database, primaryKeys) {
+        let primaryKeys = try primaryKeys.map { try Blackbird.Value.fromAny($0) }
+        let cacheResult = _cachedInstances(for: database, primaryKeyValues: primaryKeys)
+        var combinedResults: [Self] = cacheResult.hits
+        
+        for primaryKeyChunk in _queryVariableLimitChunks(for: database, cacheResult.missedKeys) {
             let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
             let resultsChunk = try self.readIsolated(from: database, core: core, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
             combinedResults.append(contentsOf: resultsChunk)
@@ -418,7 +450,9 @@ extension BlackbirdModel {
     public static func read(from database: Blackbird.Database, sqlWhere: String, arguments: [Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
-            return try Self(from: decoder)
+            let instance = try Self(from: decoder)
+            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            return instance
         }
     }
 
@@ -441,7 +475,9 @@ extension BlackbirdModel {
     public static func read(from database: Blackbird.Database, sqlWhere: String, arguments: [String: Sendable]) async throws -> [Self] {
         return try await query(in: database, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
-            return try Self(from: decoder)
+            let instance = try Self(from: decoder)
+            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            return instance
         }
     }
 
@@ -454,7 +490,9 @@ extension BlackbirdModel {
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [Sendable]) throws -> [Self] {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
-            return try Self(from: decoder)
+            let instance = try Self(from: decoder)
+            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            return instance
         }
     }
 
@@ -462,7 +500,9 @@ extension BlackbirdModel {
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [String: Sendable]) throws -> [Self] {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
-            return try Self(from: decoder)
+            let instance = try Self(from: decoder)
+            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            return instance
         }
     }
 
@@ -555,12 +595,15 @@ extension BlackbirdModel {
     }
     
     /// The primary-key values of the current instance, as an array (to support multi-column primary keys).
-    public func primaryKeyValues() throws -> [Blackbird.Value] {
-        var valuesByColumnName: [String: Blackbird.Value] = [:]
-        try enumerateColumnValues { column, name, value in
-            valuesByColumnName[name] = value
+    public func primaryKeyValues() throws -> [Any] {
+        if Self.primaryKey.isEmpty {
+            let mirror = Mirror(reflecting: self)
+            for child in mirror.children {
+                if child.label == "_id", let column = child.value as? any ColumnWrapper { return [column.value] }
+            }
+            fatalError("id value not found, and no other primary keys specified")
         }
-        return Self.table.primaryKeys.map { valuesByColumnName[$0.name]! }
+        return Self.primaryKey.map { (self[keyPath: $0] as! any ColumnWrapper).value }
     }
     
     private func enumerateColumnValues(_ action: ((_ column: any ColumnWrapper, _ name: String, _ value: Blackbird.Value) -> Void)) throws {
@@ -630,6 +673,7 @@ extension BlackbirdModel {
         defer {
             database.changeReporter.stopIgnoringWrites()
             database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValues, changedColumns: changedColumnNames)
+            if Self.enableCaching { self._saveCachedInstance(for: database) }
         }
         try core.query(sql, arguments: values)
         for column in changedColumns { column.clearHasChanged(in: database) }
@@ -652,7 +696,7 @@ extension BlackbirdModel {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
 
-        let values = try self.primaryKeyValues()
+        let values = try self.primaryKeyValues().map { try Blackbird.Value.fromAny($0) }
         let andClauses: [String] = table.primaryKeys.map { "`\($0.name)` = ?" }
         
         database.changeReporter.ignoreWritesToTable(Self.tableName)
@@ -662,6 +706,7 @@ extension BlackbirdModel {
         }
         let sql = "DELETE FROM `\(Self.tableName)` WHERE \(andClauses.joined(separator: " AND "))"
         try core.query(sql, arguments: values)
+        if Self.enableCaching { self._deleteCachedInstance(for: database) }
     }
 
 }

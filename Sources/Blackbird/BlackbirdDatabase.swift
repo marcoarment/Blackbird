@@ -269,6 +269,7 @@ extension Blackbird {
 
         internal let core: Core
         internal let changeReporter: ChangeReporter
+        internal let cache: Cache
         internal let perfLog: PerformanceLogger
         internal let fileChangeMonitor: FileChangeMonitor?
                 
@@ -313,7 +314,8 @@ extension Blackbird {
 
             self.options = normalizedOptions
             self.path = normalizedOptions.contains(.inMemoryDatabase) ? nil : path
-            self.changeReporter = ChangeReporter(options: options)
+            self.cache = Cache()
+            self.changeReporter = ChangeReporter(options: options, cache: cache)
 
             var handle: OpaquePointer? = nil
             let flags: Int32 = (options.contains(.readOnly) ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) | SQLITE_OPEN_NOMUTEX
@@ -352,7 +354,7 @@ extension Blackbird {
                 fileChangeMonitor = nil
             }
 
-            core = Core(handle, changeReporter: changeReporter, fileChangeMonitor: fileChangeMonitor, options: options)
+            core = Core(handle, changeReporter: changeReporter, cache: cache, fileChangeMonitor: fileChangeMonitor, options: options)
             perfLog = performanceLog
             
             sqlite3_update_hook(handle, { ctx, operation, dbName, tableName, rowid in
@@ -426,6 +428,7 @@ extension Blackbird {
             internal var dbHandle: OpaquePointer
             private weak var changeReporter: ChangeReporter?
             private weak var fileChangeMonitor: FileChangeMonitor?
+            private weak var cache: Cache?
             private var cachedStatements: [String: PreparedStatement] = [:]
             private var isClosed = false
             private var nextTransactionID: Int64 = 0
@@ -435,10 +438,11 @@ extension Blackbird {
 
             private var perfLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database.Core")
 
-            internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
+            internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter?, cache: Cache?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
                 self.dbHandle = dbHandle
                 self.changeReporter = changeReporter
                 self.fileChangeMonitor = fileChangeMonitor
+                self.cache = cache
                 self.debugPrintEveryQuery = options.contains(.debugPrintEveryQuery)
                 self.debugPrintQueryParameterValues = options.contains(.debugPrintQueryParameterValues)
                 
@@ -531,9 +535,11 @@ extension Blackbird {
                     return .committed(result)
                 } catch Blackbird.Error.cancelTransaction {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    cache?.invalidate()
                     return .rolledBack
                 } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    cache?.invalidate()
                     throw error
                 }
             }
@@ -560,9 +566,11 @@ extension Blackbird {
                     return .committed(result)
                 } catch Blackbird.Error.cancelTransaction {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    cache?.invalidate()
                     return .rolledBack
                 } catch {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                    cache?.invalidate()
                     throw error
                 }
             }

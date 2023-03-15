@@ -121,9 +121,12 @@ extension Blackbird.Database {
         private var sendLegacyChangeNotifications = false
         private var debugPrintEveryReportedChange = false
         
-        init(options: Options) {
+        private var cache: Blackbird.Database.Cache
+        
+        init(options: Options, cache: Blackbird.Database.Cache) {
             debugPrintEveryReportedChange = options.contains(.debugPrintEveryReportedChange)
             sendLegacyChangeNotifications = options.contains(.sendLegacyChangeNotifications)
+            self.cache = cache
         }
 
         public func changePublisher(for tableName: String) -> Blackbird.ChangePublisher {
@@ -165,6 +168,8 @@ extension Blackbird.Database {
         
         public func reportEntireDatabaseChange() {
             if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] ⚠️ database changed externally, reporting changes to all tables!") }
+            
+            cache.invalidate()
 
             lock.lock()
             for tableName in tableChangePublishers.keys { accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange() }
@@ -183,8 +188,10 @@ extension Blackbird.Database {
                     if accumulatedChangesByTable[tableName] == nil { accumulatedChangesByTable[tableName] = AccumulatedChanges() }
                     accumulatedChangesByTable[tableName]!.primaryKeys?.insert(primaryKey)
                     accumulatedChangesByTable[tableName]!.columnNames?.formUnion(changedColumns)
+                    cache.invalidate(tableName: tableName, primaryKeyValue: primaryKey.first)
                 } else {
                     accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange()
+                    cache.invalidate(tableName: tableName)
                 }
 
                 if !flushIsEnqueued, activeTransactions.isEmpty {
