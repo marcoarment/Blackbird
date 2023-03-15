@@ -66,11 +66,12 @@ public struct BlackbirdModelOrderClause<T: BlackbirdModel>: Sendable {
 }
     
 extension BlackbirdModel {
-    fileprivate static func _decodeStructuredQuery(operation: String = "SELECT * FROM", selectColumnSubset: [BlackbirdColumnKeyPath]? = nil,  matching: BlackbirdModelColumnExpression<Self>? = nil, updating: [BlackbirdColumnKeyPath : Sendable] = [:], orderBy: [BlackbirdModelOrderClause<Self>] = [], limit: Int? = nil) -> (query: String, arguments: [Sendable]) {
+    fileprivate static func _decodeStructuredQuery(operation: String = "SELECT * FROM", selectColumnSubset: [BlackbirdColumnKeyPath]? = nil,  matching: BlackbirdModelColumnExpression<Self>? = nil, updating: [BlackbirdColumnKeyPath : Sendable] = [:], orderBy: [BlackbirdModelOrderClause<Self>] = [], limit: Int? = nil) -> (query: String, arguments: [Sendable], changedColumns: Blackbird.ColumnNames) {
         let table = SchemaGenerator.shared.table(for: Self.self)
         var clauses: [String] = []
         var arguments: [Sendable] = []
         var operation = operation
+        var matching = matching
         
         if let selectColumnSubset {
             let columnList = selectColumnSubset.map { table.keyPathToColumnName(keyPath: $0) }.joined(separator: "`,`")
@@ -78,12 +79,41 @@ extension BlackbirdModel {
         }
 
         var setClauses: [String] = []
+        var changedColumns = Blackbird.ColumnNames()
+        var updateWhereNotMatchingExpr: BlackbirdModelColumnExpression<Self>? = nil
         for (keyPath, value) in updating {
-            setClauses.append("`\(table.keyPathToColumnName(keyPath: keyPath))` = ?")
+            let columnName = table.keyPathToColumnName(keyPath: keyPath)
+            changedColumns.insert(columnName)
+            setClauses.append("`\(columnName)` = ?")
             arguments.append(value)
+            
+            // In an UPDATE query, SQLite will call the update hook and report a change on EVERY row
+            // that matches the WHERE clause (or every row in the table without a WHERE) and report it
+            // as changed, even if no rows matched and therefore no data was changed. E.g.:
+            //
+            //   UPDATE t SET a = NULL, b = 2; -- in a table with X rows, this reports X rows changed
+            //   UPDATE t SET a = NULL, b = 2; -- ALSO reports X rows changed, even though none actually were
+            //
+            // So we add automatic WHERE clauses corresponding to each SET value to make it like this:
+            //
+            //   UPDATE t SET a = NULL, b = 2 WHERE a IS NOT NULL OR b != 2;
+            //
+            // ...which makes SQLite properly report only the actually-changed rows.
+            //
+            if updateWhereNotMatchingExpr != nil {
+                updateWhereNotMatchingExpr = updateWhereNotMatchingExpr! || keyPath != value
+            } else {
+                updateWhereNotMatchingExpr = keyPath != value
+            }
         }
         if !setClauses.isEmpty {
             clauses.append("SET \(setClauses.joined(separator: ","))")
+
+            if matching != nil, let updateWhereNotMatchingExpr {
+                matching = matching! && updateWhereNotMatchingExpr
+            } else {
+                matching = updateWhereNotMatchingExpr
+            }
         }
 
         if let matching {
@@ -101,7 +131,7 @@ extension BlackbirdModel {
         
         let query = "\(operation) \(table.name)\(clauses.isEmpty ? "" : " \(clauses.joined(separator: " "))")"
 
-        return (query: query, arguments: arguments)
+        return (query: query, arguments: arguments, changedColumns: changedColumns)
     }
 
     /// Get the number of rows in this BlackbirdModel's table.
@@ -216,15 +246,26 @@ extension BlackbirdModel {
     /// ```
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath : Sendable], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
-        let decoded = _decodeStructuredQuery(operation: "UPDATE", matching: matching, updating: changes)
-        try await query(in: database, decoded.query, arguments: decoded.arguments)
+        try await updateIsolated(in: database, core: database.core, set: changes, matching: matching)
     }
 
     /// Synchronous version of ``update(in:set:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath : Sendable], matching: BlackbirdModelColumnExpression<Self>) throws {
+        if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
+        let table = Self.table
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
         let decoded = _decodeStructuredQuery(operation: "UPDATE", matching: matching, updating: changes)
-        try queryIsolated(in: database, core: core, decoded.query, arguments: decoded.arguments)
+
+        let changeCountBefore = core.changeCount
+        database.changeReporter.ignoreWritesToTable(Self.tableName)
+        defer {
+            database.changeReporter.stopIgnoringWrites()
+            if core.changeCount != changeCountBefore {
+                database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: nil, changedColumns: decoded.changedColumns)
+            }
+        }
+        try core.query(decoded.query, arguments: decoded.arguments)
     }
 
     /// Deletes a subset of the table's columns matching the given column values, using column key-paths for this model type.
@@ -242,12 +283,15 @@ extension BlackbirdModel {
     /// // "DELETE FROM Post WHERE id = 123"
     /// ```
     public static func delete(from database: Blackbird.Database, matching: BlackbirdModelColumnExpression<Self>) async throws {
-        let decoded = _decodeStructuredQuery(operation: "DELETE FROM", matching: matching)
-        try await query(in: database, decoded.query, arguments: decoded.arguments)
+        try await deleteIsolated(from: database, core: database.core, matching: matching)
     }
 
     /// Synchronous version of ``delete(from:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>) throws {
+        if database.options.contains(.readOnly) { fatalError("Cannot delete BlackbirdModels from a read-only database") }
+        let table = Self.table
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+
         let decoded = _decodeStructuredQuery(operation: "DELETE FROM", matching: matching)
         try queryIsolated(in: database, core: core, decoded.query, arguments: decoded.arguments)
     }
@@ -423,7 +467,14 @@ internal struct BlackbirdColumnBinaryExpression<T: BlackbirdModel>: BlackbirdQue
     let value: Sendable
 
     func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Sendable]) {
-        return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue) ?", values: [value])
+        var whereClause = "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue) ?"
+        let value = try! Blackbird.Value.fromAny(value)
+        var values = [value]
+        if value == .null {
+            if sqlOperator == .equal         { values = [] ; whereClause = "`\(table.keyPathToColumnName(keyPath: column))` IS NULL" }
+            else if sqlOperator == .notEqual { values = [] ; whereClause = "`\(table.keyPathToColumnName(keyPath: column))` IS NOT NULL" }
+        }
+        return (whereClause: whereClause, values: values)
     }
 }
 
@@ -457,6 +508,9 @@ internal struct BlackbirdCombiningExpression<T: BlackbirdModel>: BlackbirdQueryE
         var combinedValues = l.values
         combinedValues.append(contentsOf: r.values)
         
-        return (whereClause: "(\(l.whereClause!) \(sqlOperator.rawValue) \(r.whereClause!))", values: combinedValues)
+        var wheres: [String] = []
+        if let whereL = l.whereClause { wheres.append(whereL) }
+        if let whereR = r.whereClause { wheres.append(whereR) }
+        return (whereClause: "(\(wheres.joined(separator: " \(sqlOperator.rawValue) ")))", values: combinedValues)
     }
 }

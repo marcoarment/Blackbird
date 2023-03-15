@@ -571,7 +571,7 @@ extension BlackbirdModel {
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
-    private static func validateSchema(database: Blackbird.Database) throws -> Void {
+    internal static func validateSchema(database: Blackbird.Database) throws -> Void {
         var testRow = Blackbird.Row()
         for column in table.columns { testRow[column.name] = column.mayBeNull ? .null : column.type.defaultValue() }
         let decoder = BlackbirdSQLiteDecoder(database: database, row: testRow)

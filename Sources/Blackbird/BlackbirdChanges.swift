@@ -103,10 +103,10 @@ extension Blackbird.Database {
         internal final class AccumulatedChanges {
             var primaryKeys: Blackbird.PrimaryKeyValues? = Blackbird.PrimaryKeyValues()
             var columnNames: Blackbird.ColumnNames? = Blackbird.ColumnNames()
-            static func entireTableChange() -> Self {
+            static func entireTableChange(columnsIfKnown: Blackbird.ColumnNames? = nil) -> Self {
                 let s = Self.init()
                 s.primaryKeys = nil
-                s.columnNames = nil
+                s.columnNames = columnsIfKnown
                 return s
             }
         }
@@ -190,7 +190,7 @@ extension Blackbird.Database {
                     accumulatedChangesByTable[tableName]!.columnNames?.formUnion(changedColumns)
                     cache.invalidate(tableName: tableName, primaryKeyValue: primaryKey.first)
                 } else {
-                    accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange()
+                    accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange(columnsIfKnown: changedColumns)
                     cache.invalidate(tableName: tableName)
                 }
 
@@ -218,9 +218,9 @@ extension Blackbird.Database {
                     if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: keys, columnNames: accumulatedChanges.columnNames)) }
                     if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: keys, changedColumnNames: accumulatedChanges.columnNames) }
                 } else {
-                    if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (all/unknown)") }
-                    if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: nil, columnNames: nil)) }
-                    if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: nil, changedColumnNames: nil) }
+                    if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (unknown keys, fields: \(accumulatedChanges.columnNames?.joined(separator: ",") ?? "(all/unknown)"))") }
+                    if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: nil, columnNames: accumulatedChanges.columnNames)) }
+                    if sendLegacyChangeNotifications { sendLegacyNotification(tableName: tableName, changedKeys: nil, changedColumnNames: accumulatedChanges.columnNames) }
                 }
             }
         }

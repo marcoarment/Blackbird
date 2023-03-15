@@ -473,6 +473,16 @@ extension Blackbird {
             public func setArtificialQueryDelay(_ delay: TimeInterval?) {
                 artificialQueryDelay = delay
             }
+            
+            internal var changeCount: Int64 {
+                get {
+                    if #available(macOS 12.3, iOS 15.4, tvOS 15.4, watchOS 8.5, *) {
+                        return Int64(sqlite3_total_changes64(dbHandle))
+                    } else {
+                        return Int64(sqlite3_total_changes(dbHandle))
+                    }
+                }
+            }
                         
             internal func checkForExternalDatabaseChange() {
                 guard let dataVersionStmt else { return }
