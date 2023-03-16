@@ -938,11 +938,14 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let db = try Blackbird.Database(path: sqliteFilename)
 
         // big block of writes to populate the DB
-        try await db.transaction { core in
+        let lastURL = try await db.transaction { core in
+            var lastURL: URL?
             for i in 0..<1000 {
                 let t = TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomDescription)
                 try t.writeIsolated(to: db, core: core)
+                lastURL = t.url
             }
+            return lastURL!
         }
         
         db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
@@ -966,10 +969,43 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
         try await db.query("UPDATE TestModel SET title = 'new2' WHERE id = 1")
         t = try await TestModel.read(from: db, id: 1)!
-        db.debugPrintCachePerformanceMetrics()
         XCTAssert(t.title == "new2")
         XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
         XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 1)
+
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        try await TestModel.update(in: db, set: [ \.$title : "new2" ], matching: \.$id == 1)
+        t = try await TestModel.read(from: db, id: 1)!
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        try await TestModel.update(in: db, set: [ \.$title : "new3" ], matching: \.$id < 10)
+        t = try await TestModel.read(from: db, id: 1)!
+        XCTAssert(t.title == "new3")
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
+        
+        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        var titleMatch = try await TestModel.query(in: db, columns: [\.$title], matching: \.$url == lastURL)
+        XCTAssert(!titleMatch.isEmpty)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
+        titleMatch = try await TestModel.query(in: db, columns: [\.$title], matching: \.$url == lastURL)
+        XCTAssert(!titleMatch.isEmpty)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+        
+        t.id = 9998
+        try await t.write(to: db)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.queryInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 0)
+        
+        try await TestModel.update(in: db, set: [\.$id : 9999], matching: \.$id == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.queryInvalidations == 1)
         XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
         XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 1)
     }

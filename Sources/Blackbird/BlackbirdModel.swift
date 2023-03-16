@@ -261,7 +261,7 @@ extension BlackbirdModel {
         
         let idValue = try Blackbird.Value.fromAny(id)
         if let cached = _cachedInstance(for: database, primaryKeyValue: idValue) { return cached }
-        return try await self.read(from: database, sqlWhere: "id = ?", idValue).first
+        return try await self._readInternal(from: database, query: "SELECT * FROM $T WHERE id = ?", arguments: [idValue]).first
     }
 
     /// Synchronous version of ``read(from:id:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -273,7 +273,7 @@ extension BlackbirdModel {
 
         let idValue = try Blackbird.Value.fromAny(id)
         if let cached = _cachedInstance(for: database, primaryKeyValue: idValue) { return cached }
-        return try self.readIsolated(from: database, core: core, sqlWhere: "id = ?", idValue).first
+        return try self._readInternalIsolated(from: database, core: core, query: "SELECT * FROM $T WHERE id = ?", arguments: [idValue]).first
     }
 
     /// Reads a single instance with the given primary-key value from a database.
@@ -448,7 +448,26 @@ extension BlackbirdModel {
     /// )
     /// ```
     public static func read(from database: Blackbird.Database, sqlWhere: String, arguments: [Sendable]) async throws -> [Self] {
-        return try await query(in: database, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
+        let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
+        let query = "SELECT * FROM $T WHERE \(sqlWhere)"
+        return try await _cacheableResult(database: database, tableName: self.tableName, query: query, arguments: arguments) {
+            try await _readInternal(from: $0, query: query, arguments: arguments)
+        }
+    }
+
+    internal static func _readInternal(from database: Blackbird.Database, query: String, arguments: [Sendable]) async throws -> [Self] {
+        let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
+        return try await self._queryInternal(in: database, query, arguments: arguments).map {
+            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
+            let instance = try Self(from: decoder)
+            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            return instance
+        }
+    }
+
+    internal static func _readInternalIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, query: String, arguments: [Sendable]) throws -> [Self] {
+        let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
+        return try self._queryInternalIsolated(in: database, core: core, query, arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
             if Self.enableCaching { instance._saveCachedInstance(for: database) }
@@ -488,11 +507,15 @@ extension BlackbirdModel {
 
     /// Synchronous version of ``read(from:sqlWhere:arguments:)-1cd9m`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [Sendable]) throws -> [Self] {
-        return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
-            let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
-            let instance = try Self(from: decoder)
-            if Self.enableCaching { instance._saveCachedInstance(for: database) }
-            return instance
+        let query = "SELECT * FROM $T WHERE \(sqlWhere)"
+        let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
+        return try _cacheableResultIsolated(database: database, core: core, tableName: self.tableName, query: query, arguments: arguments) {
+            return try self._queryInternalIsolated(in: $0, core: $1, query, arguments: arguments).map {
+                let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
+                let instance = try Self(from: decoder)
+                if Self.enableCaching { instance._saveCachedInstance(for: database) }
+                return instance
+            }
         }
     }
 
@@ -529,6 +552,13 @@ extension BlackbirdModel {
     /// - Returns: An array of rows matching the query if applicable, or an empty array otherwise.
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
+        let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
+        return try await _cacheableResult(database: database, tableName: Self.tableName, query: query, arguments: arguments) {
+            try await _queryInternal(in: $0, query, arguments: arguments)
+        }
+    }
+
+    internal static func _queryInternal(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
@@ -558,6 +588,13 @@ extension BlackbirdModel {
     /// Synchronous version of ``query(in:_:arguments:)-1bv0o`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+        let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
+        return try _cacheableResultIsolated(database: database, core: core, tableName: self.tableName, query: query, arguments: arguments) {
+            try self._queryInternalIsolated(in: $0, core: $1, query, arguments: arguments)
+        }
+    }
+
+    internal static func _queryInternalIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
@@ -709,4 +746,25 @@ extension BlackbirdModel {
         if Self.enableCaching { self._deleteCachedInstance(for: database) }
     }
 
+    fileprivate static func _cacheableResult<T>(database: Blackbird.Database, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
+        guard Self.enableCaching else { return try await resultFetcher(database) }
+        var cacheKey: [Blackbird.Value] = [.text(query)]
+        cacheKey.append(contentsOf: arguments)
+        if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
+        
+        let result = try await resultFetcher(database)
+        database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result)
+        return result
+    }
+
+    fileprivate static func _cacheableResultIsolated<T>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
+        guard Self.enableCaching else { return try resultFetcher(database, core) }
+        var cacheKey: [Blackbird.Value] = [.text(query)]
+        cacheKey.append(contentsOf: arguments)
+        if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
+        
+        let result = try resultFetcher(database, core)
+        database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result)
+        return result
+    }
 }

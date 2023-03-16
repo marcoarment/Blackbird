@@ -32,6 +32,7 @@ extension Blackbird.Database {
         public let misses: Int
         public let writes: Int
         public let rowInvalidations: Int
+        public let queryInvalidations: Int
         public let tableInvalidations: Int
     }
     
@@ -46,7 +47,7 @@ extension Blackbird.Database {
                 totalRequests == 0 ? "0%" :
                 "\(Int(100.0 * Double(metrics.hits) / Double(totalRequests)))%"
                 
-            print("\(tableName): \(metrics.hits) hits (\(hitPercentStr)), \(metrics.misses) misses, \(metrics.writes) writes, \(metrics.rowInvalidations) row invalidations, \(metrics.tableInvalidations) table invalidations")
+            print("\(tableName): \(metrics.hits) hits (\(hitPercentStr)), \(metrics.misses) misses, \(metrics.writes) writes, \(metrics.rowInvalidations) row invalidations, \(metrics.queryInvalidations) query invalidations, \(metrics.tableInvalidations) table invalidations")
         }
     }
 
@@ -54,12 +55,14 @@ extension Blackbird.Database {
         private final class TableCache {
             // Cached data
             var modelsByPrimaryKey: [Blackbird.Value : any BlackbirdModel] = [:]
+            var cachedQueries: [[Blackbird.Value] : Any] = [:]
             
             // Performance counters
             var hits: Int = 0
             var misses: Int = 0
             var writes: Int = 0
             var rowInvalidations: Int = 0
+            var queryInvalidations: Int = 0
             var tableInvalidations: Int = 0
             
             func invalidate(primaryKeyValue: Blackbird.Value? = nil) {
@@ -73,6 +76,11 @@ extension Blackbird.Database {
                         tableInvalidations += 1
                     }
                 }
+                
+                if !cachedQueries.isEmpty {
+                    cachedQueries.removeAll()
+                    queryInvalidations += 1
+                }
             }
             
             func resetPerformanceMetrics() {
@@ -80,6 +88,7 @@ extension Blackbird.Database {
                 misses = 0
                 writes = 0
                 rowInvalidations = 0
+                queryInvalidations = 0
                 tableInvalidations = 0
             }
         }
@@ -89,10 +98,8 @@ extension Blackbird.Database {
         internal func invalidate(tableName: String? = nil, primaryKeyValue: Blackbird.Value? = nil) {
             entriesByTableName.withLock {
                 if let tableName {
-//                    print("[cache] invalidating \(tableName):\(primaryKeyValue ?? "all")")
                     $0[tableName]?.invalidate(primaryKeyValue: primaryKeyValue)
                 } else {
-//                    print("[cache] invalidating entire database")
                     for (_, entry) in $0 { entry.invalidate() }
                 }
             }
@@ -168,10 +175,45 @@ extension Blackbird.Database {
                 tableCache.writes += 1
             }
         }
+
+        internal func readQueryResult(tableName: String, cacheKey: [Blackbird.Value]) -> Any? {
+            entriesByTableName.withLock {
+                let tableCache: TableCache
+                if let existingCache = $0[tableName] { tableCache = existingCache }
+                else {
+                    tableCache = TableCache()
+                    $0[tableName] = tableCache
+                    tableCache.misses += 1
+                    return nil
+                }
+
+                if let hit = tableCache.cachedQueries[cacheKey] {
+                    tableCache.hits += 1
+                    return hit
+                } else {
+                    tableCache.misses += 1
+                    return nil
+                }
+            }
+        }
+
+        internal func writeQueryResult(tableName: String, cacheKey: [Blackbird.Value], result: Sendable) {
+            entriesByTableName.withLock {
+                let tableCache: TableCache
+                if let existingCache = $0[tableName] { tableCache = existingCache }
+                else {
+                    tableCache = TableCache()
+                    $0[tableName] = tableCache
+                }
+
+                tableCache.cachedQueries[cacheKey] = result
+                tableCache.writes += 1
+            }
+        }
         
         internal func performanceMetrics() -> [String : CachePerformanceMetrics] {
             entriesByTableName.withLock { tableCaches in
-                tableCaches.mapValues { CachePerformanceMetrics(hits: $0.hits, misses: $0.misses, writes: $0.writes, rowInvalidations: $0.rowInvalidations, tableInvalidations: $0.tableInvalidations) }
+                tableCaches.mapValues { CachePerformanceMetrics(hits: $0.hits, misses: $0.misses, writes: $0.writes, rowInvalidations: $0.rowInvalidations, queryInvalidations: $0.queryInvalidations, tableInvalidations: $0.tableInvalidations) }
             }
         }
 
