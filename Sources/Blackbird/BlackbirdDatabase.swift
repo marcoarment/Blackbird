@@ -360,6 +360,7 @@ extension Blackbird {
             sqlite3_update_hook(handle, { ctx, operation, dbName, tableName, rowid in
                 guard let ctx else { return }
                 let changeReporter = Unmanaged<ChangeReporter>.fromOpaque(ctx).takeUnretainedValue()
+                changeReporter.numChangesReportedByUpdateHook += 1
                 if let tableName, let tableNameStr = String(cString: tableName, encoding: .utf8) {
                     changeReporter.reportChange(tableName: tableNameStr, changedColumns: nil)
                 }
@@ -604,8 +605,10 @@ extension Blackbird {
                     checkForExternalDatabaseChange()
                 }
                 
-                let result = sqlite3_exec(dbHandle, query, nil, nil, nil)
-                if result != SQLITE_OK { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
+                try _checkForUpdateHookBypass {
+                    let result = sqlite3_exec(dbHandle, query, nil, nil, nil)
+                    if result != SQLITE_OK { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
+                }
             }
             
             nonisolated internal func errorDesc(_ dbHandle: OpaquePointer?, _ query: String? = nil) -> String {
@@ -618,6 +621,26 @@ extension Blackbird {
                 } else {
                     return "SQLite error code \(code): \(msg)"
                 }
+            }
+            
+            // Check for SQLite changes occurring during the given operation that bypass the update_hook, such as
+            // the truncate optimization: https://www.sqlite.org/lang_delete.html#the_truncate_optimization
+            //
+            // Thanks, Gwendal Roué of GRDB: https://hachyderm.io/@groue/110038488774903347
+            private func _checkForUpdateHookBypass<T>(statement: PreparedStatement? = nil, _ action: (() throws -> T)) rethrows -> T {
+                guard let changeReporter else { return try action() }
+                if let statement, statement.isReadOnly { return try action() }
+
+                let changeCountBefore = changeCount
+                let changesReportedBefore = changeReporter.numChangesReportedByUpdateHook
+                let result = try action()
+                
+                if changeCount != changeCountBefore, changesReportedBefore == changeReporter.numChangesReportedByUpdateHook {
+                    // Catch the SQLite truncate optimization
+                    changeReporter.reportEntireDatabaseChange()
+                }
+                
+                return result
             }
 
             @discardableResult
@@ -637,7 +660,10 @@ extension Blackbird {
                     try value.bind(database: self, statement: statementHandle, index: Int32(idx), for: query)
                     idx += 1
                 }
-                return try rowsByExecutingPreparedStatement(statement, from: query)
+                
+                return try _checkForUpdateHookBypass(statement: statement) {
+                    try rowsByExecutingPreparedStatement(statement, from: query)
+                }
             }
 
             @discardableResult
@@ -649,7 +675,10 @@ extension Blackbird {
                     let value = try Value.fromAny(any)
                     try value.bind(database: self, statement: statementHandle, name: name, for: query)
                 }
-                return try rowsByExecutingPreparedStatement(statement, from: query)
+
+                return try _checkForUpdateHookBypass(statement: statement) {
+                    try rowsByExecutingPreparedStatement(statement, from: query)
+                }
             }
 
             private func preparedStatement(_ query: String) throws -> PreparedStatement {

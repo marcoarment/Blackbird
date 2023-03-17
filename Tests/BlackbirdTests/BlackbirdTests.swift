@@ -669,6 +669,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(t.changedColumns(in: db).isEmpty)
     }
     
+    var _testChangeNotificationsExpectedChangedTable: String? = nil
     var _testChangeNotificationsExpectedChangedKeys: Blackbird.PrimaryKeyValues? = nil
     var _testChangeNotificationsExpectedChangedColumnNames: Blackbird.ColumnNames? = nil
     var _testChangeNotificationsListeners: [AnyCancellable] = []
@@ -679,8 +680,11 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await TestModel.resolveSchema(in: db)
         try await TestModelWithDescription.resolveSchema(in: db)
         
-        _testChangeNotificationsListeners.append(TestModel.changePublisher(in: db).sink { keys in
-            XCTAssert(false, "Change listener called for incorrect table")
+        _testChangeNotificationsListeners.append(TestModel.changePublisher(in: db).sink { change in
+            if let expectedTable = self._testChangeNotificationsExpectedChangedTable {
+                XCTAssert(expectedTable == change.table, "Change listener called for incorrect table")
+            }
+            self._testChangeNotificationsCallCount += 1
         })
 
         _testChangeNotificationsListeners.append(TestModelWithDescription.changePublisher(in: db).sink { change in
@@ -700,6 +704,8 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         })
         
         var expectedChangeNotificationsCallCount = 0
+        
+        _testChangeNotificationsExpectedChangedTable = "TestModelWithDescription"
 
         // Batched change notifications
         let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
@@ -808,6 +814,17 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         }
         await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
+        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        
+
+        // ------- Should be the last test in this func since it deletes the entire table -------
+        // The SQLite truncate optimization: https://www.sqlite.org/lang_delete.html#the_truncate_optimization
+        _testChangeNotificationsExpectedChangedTable = nil
+        _testChangeNotificationsExpectedChangedKeys = nil
+        _testChangeNotificationsExpectedChangedColumnNames = nil
+        try await TestModelWithDescription.query(in: db, "DELETE FROM $T")
+        await MainActor.run { }
+        expectedChangeNotificationsCallCount += 2 // will trigger a full-database change notification, so it'll report 2 table changes: TestModel and TestModelWithDescription
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
     }
 

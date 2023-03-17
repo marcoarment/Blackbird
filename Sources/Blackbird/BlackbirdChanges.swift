@@ -123,6 +123,8 @@ extension Blackbird.Database {
         
         private var cache: Blackbird.Database.Cache
         
+        internal var numChangesReportedByUpdateHook: UInt64 = 0
+        
         init(options: Options, cache: Blackbird.Database.Cache) {
             debugPrintEveryReportedChange = options.contains(.debugPrintEveryReportedChange)
             sendLegacyChangeNotifications = options.contains(.sendLegacyChangeNotifications)
