@@ -183,13 +183,13 @@ try await db.transaction { core in
 
 ## Wishlist for future Swift-language capabilities
 
-* __Static type reflection for cleaner schema detection:__ Swift currently has no way to reflect a type's properties without creating an instance — [Mirror](https://developer.apple.com/documentation/swift/mirror) only reflects property names and values of given instances. If the language adds static type reflection in the future, my schema detection wouldn't need to rely on a hack using a Decoder to generate empty instances.)
+* __Static type reflection for cleaner schema detection:__ Swift currently has no way to reflect a type's properties without creating an instance — [Mirror](https://developer.apple.com/documentation/swift/mirror) only reflects property names and values of given instances. If the language adds static type reflection in the future, my schema detection wouldn't need to rely on a hack using a Decoder to generate empty instances.
 
 * __KeyPath to/from String, static reflection of a type's KeyPaths:__ With the abilities to get a type's available KeyPaths (without some [crazy hacks](https://forums.swift.org/t/getting-keypaths-to-members-automatically-using-mirror/21207)) and create KeyPaths from strings at runtime, many of my hacks using Codable could be replaced with KeyPaths, which would be cleaner and probably much faster.
 
-* __Cleaner protocol name (`Blackbird.Model`):__ Swift protocols can't contain dots or be nested within another type.
+* __Cleaner protocol name (`Blackbird.Model`):__ Protocols can't contain dots or be nested within another type.
 
-* __Nested struct definitions inside protocols:__ Sure would make a lot of my "BlackbirdModel…" names shorter.
+* __Nested struct definitions inside protocols__ could make a lot of my "BlackbirdModel…" names shorter.
 
 ## FAQ
 
@@ -233,7 +233,9 @@ I know. Ironic, considering that I named this one after the fastest plane.
 
 Blackbird is optimized for speed of __development__. It's pretty fast in execution, too, but clarity, ease of use, reduced repetition, and simple tooling are higher priorities.
 
-Other Swift SQLite libraries can be faster in execution by omitting much of Blackbird's reflection, abstraction, and key-path usage. Some use code-generation methods, which can execute very efficiently but complicate development more than I'd like. Others take less-abstracted approaches that enable more custom behavior but make usage more complicated.
+Blackbird also offers automatic caching and fine-grained change reporting. This helps apps avoid many unnecessary queries, reloads, and UI refreshes, which can result in faster overall app performance.
+
+Other Swift SQLite libraries can be faster at raw database performance by omitting much of Blackbird's reflection, abstraction, and key-path usage. Some use code-generation methods, which can execute very efficiently but complicate development more than I'd like. Others take less-abstracted approaches that enable more custom behavior but make usage more complicated.
 
 I've chosen different trade-offs to better fit my needs. I've never written an app that was too slow to read its database, but I've frequently struggled with maintenance of large, complex codebases.
 
