@@ -574,6 +574,7 @@ extension Blackbird {
                 try execute("SAVEPOINT \"\(transactionID)\"")
                 do {
                     let result: R = try action(self)
+                    try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
                     return .committed(result)
                 } catch Blackbird.Error.cancelTransaction {
                     try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
