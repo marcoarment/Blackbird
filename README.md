@@ -102,6 +102,16 @@ let listener = Post.changePublisher(in: db).sink { change in
     print("Post IDs changed: \(change.primaryKeys ?? "all")")
     print(" Columns changed: \(change.columnNames ?? "all")")
 }
+
+// Or monitor a single column by key-path:
+let listener = Post.changePublisher(in: db, columns: [\.$title]).sink { _ in
+    print("A post's title changed")
+}
+
+// Or listen for changes for a specific primary key:
+let listener = Post.changePublisher(in: db, primaryKey: 3, columns: [\.$title]).sink { _ in
+    print("Post 3's title changed")
+}
 ```
 
 ### SwiftUI

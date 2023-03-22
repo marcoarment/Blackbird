@@ -43,7 +43,7 @@ public extension Blackbird {
     /// A Publisher that emits when data in a Blackbird table has changed.
     ///
     /// The ``Blackbird/Change`` passed indicates which rows and columns in the table have changed.
-    typealias ChangePublisher = PassthroughSubject<Change, Never>
+    typealias ChangePublisher = AnyPublisher<Change, Never>
 
     internal static func isRelevantPrimaryKeyChange(watchedPrimaryKeys: Blackbird.PrimaryKeyValues?, changedPrimaryKeys: Blackbird.PrimaryKeyValues?) -> Bool {
         guard let watchedPrimaryKeys else {
@@ -116,7 +116,7 @@ extension Blackbird.Database {
         private var activeTransactions = Set<Int64>()
         private var ignoreWritesToTableName: String? = nil
         private var accumulatedChangesByTable: [String: AccumulatedChanges] = [:]
-        private var tableChangePublishers: [String: Blackbird.ChangePublisher] = [:]
+        private var tableChangePublishers: [String: PassthroughSubject<Blackbird.Change, Never>] = [:]
         
         private var sendLegacyChangeNotifications = false
         private var debugPrintEveryReportedChange = false
@@ -133,10 +133,10 @@ extension Blackbird.Database {
 
         public func changePublisher(for tableName: String) -> Blackbird.ChangePublisher {
             lock.withLock {
-                if let existing = tableChangePublishers[tableName] { return existing }
-                let publisher = Blackbird.ChangePublisher()
+                if let existing = tableChangePublishers[tableName] { return existing.eraseToAnyPublisher() }
+                let publisher = PassthroughSubject<Blackbird.Change, Never>()
                 tableChangePublishers[tableName] = publisher
-                return publisher
+                return publisher.eraseToAnyPublisher()
             }
         }
 

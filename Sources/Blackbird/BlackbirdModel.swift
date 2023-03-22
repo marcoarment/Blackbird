@@ -132,6 +132,14 @@ import Combine
 /// }
 /// ```
 ///
+/// These can be automatically filtered with ``BlackbirdModel/changePublisher(in:primaryKey:columns:)`` to specific primary-key values and/or columns that may have changed:
+///
+/// ```swift
+/// let listener = Post.changePublisher(in: db, primaryKey: 3, columns: [\.$title]).sink { _ in
+///     print("Post 3 changed its title")
+/// }
+/// ```
+///
 /// ## Unsupported SQLite features
 ///
 /// `BlackbirdModel` assumes simple and straightforward SQLite usage.
@@ -244,8 +252,62 @@ extension BlackbirdModel {
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
     /// - Returns: The ``Blackbird/ChangePublisher`` for this model's table.
+    ///
+    /// See ``BlackbirdModel/changePublisher(in:primaryKey:columns:)`` for built-in filtering by primary-key and/or changed columns.
+    ///
+    /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
     public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.tableName) }
-    
+
+    /// The change publisher for this model's table, filtered by single-column primary key and/or changed columns.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to monitor.
+    ///   - primaryKey: The single-column primary-key value set to monitor. If `nil`, changes to any keys are reported.
+    ///   - columns: Specific columns to monitor. If empty, changes to any column(s) are reported.
+    /// - Returns: The filtered ``Blackbird/ChangePublisher``.
+    ///
+    /// Use ``BlackbirdModel/changePublisher(in:multicolumnPrimaryKey:columns:)`` for models with multi-column primary keys.
+    ///
+    /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
+    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ChangePublisher {
+        if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
+        
+        return database.changeReporter.changePublisher(for: self.tableName).filter { change in
+            if let primaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains([primaryKey]) { return false }
+            
+            if !columns.isEmpty, let changedColumns = change.columnNames {
+                let columnNames = Blackbird.ColumnNames(columns.map { table.keyPathToColumnName(keyPath: $0) })
+                if columnNames.isDisjoint(with: changedColumns) { return false }
+            }
+
+            return true
+        }
+        .eraseToAnyPublisher()
+    }
+
+    /// The change publisher for this model's table, filtered by multi-column primary key and/or changed columns.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to monitor.
+    ///   - multicolumnPrimaryKey: The multi-column primary-key value set to monitor. If `nil`, changes to any keys are reported.
+    ///   - columns: Specific columns to monitor. If empty, changes to any column(s) are reported.
+    /// - Returns: The filtered ``Blackbird/ChangePublisher``.
+    ///
+    /// Use ``BlackbirdModel/changePublisher(in:primaryKey:columns:)`` for models with single-column primary keys.
+    ///
+    /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
+    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ChangePublisher {
+        database.changeReporter.changePublisher(for: self.tableName).filter { change in
+            if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
+            
+            if !columns.isEmpty, let changedColumns = change.columnNames {
+                let columnNames = Blackbird.ColumnNames(columns.map { table.keyPathToColumnName(keyPath: $0) })
+                if columnNames.isDisjoint(with: changedColumns) { return false }
+            }
+
+            return true
+        }
+        .eraseToAnyPublisher()
+    }
+
     /// Reads a single instance with the given primary-key value from a database if the primary key is a single column named `id`.
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to read from.
