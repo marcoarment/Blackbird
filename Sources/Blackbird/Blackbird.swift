@@ -145,7 +145,7 @@ public class Blackbird {
 
         public var dataValue: Data? {
             switch self {
-                case .null:           return nil;
+                case .null:           return nil
                 case let .data(b):    return b
                 case let .integer(i): return String(i).data(using: .utf8)
                 case let .double(d):  return String(d).data(using: .utf8)
@@ -155,7 +155,7 @@ public class Blackbird {
 
         public var doubleValue: Double? {
             switch self {
-                case .null:           return nil;
+                case .null:           return nil
                 case let .double(d):  return d
                 case let .integer(i): return Double(i)
                 case let .text(s):    return Double(s)
@@ -165,7 +165,7 @@ public class Blackbird {
 
         public var intValue: Int? {
             switch self {
-                case .null:           return nil;
+                case .null:           return nil
                 case let .integer(i): return Int(i)
                 case let .double(d):  return Int(d)
                 case let .text(s):    return Int(s)
@@ -175,7 +175,7 @@ public class Blackbird {
 
         public var int64Value: Int64? {
             switch self {
-                case .null:           return nil;
+                case .null:           return nil
                 case let .integer(i): return Int64(i)
                 case let .double(d):  return Int64(d)
                 case let .text(s):    return Int64(s)
@@ -185,7 +185,7 @@ public class Blackbird {
 
         public var stringValue: String? {
             switch self {
-                case .null:           return nil;
+                case .null:           return nil
                 case let .text(s):    return s
                 case let .integer(i): return String(i)
                 case let .double(d):  return String(d)
@@ -231,10 +231,10 @@ public class Blackbird {
 public protocol BlackbirdLock: Sendable {
     func lock()
     func unlock()
-    @discardableResult func withLock<R>(_ body: () throws -> R) rethrows -> R where R : Sendable
+    @discardableResult func withLock<R>(_ body: () throws -> R) rethrows -> R where R: Sendable
 }
 extension BlackbirdLock {
-    @discardableResult public func withLock<R>(_ body: () throws -> R) rethrows -> R where R : Sendable {
+    @discardableResult public func withLock<R>(_ body: () throws -> R) rethrows -> R where R: Sendable {
         lock()
         defer { unlock() }
         return try body()

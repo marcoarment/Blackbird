@@ -45,7 +45,7 @@ internal class BlackbirdSQLiteDecoder: Decoder {
         self.codingPath = codingPath
     }
 
-    public func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey {
+    public func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key: CodingKey {
         return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(codingPath: codingPath, database: database, row: row))
     }
     public func unkeyedContainer() throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
@@ -188,7 +188,7 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
         return url
     }
 
-    func decode<T>(_ type: T.Type, forKey key: K) throws -> T where T : Decodable {
+    func decode<T>(_ type: T.Type, forKey key: K) throws -> T where T: Decodable {
         if Data.self == T.self { return try decode(Data.self, forKey: key) as! T }
         if Date.self == T.self { return try decode(Date.self, forKey: key) as! T }
         if URL.self == T.self  { return try decode(URL.self,  forKey: key) as! T }
@@ -198,7 +198,7 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
         return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: newPath))
     }
     
-    func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: K) throws -> KeyedDecodingContainer<NestedKey> where NestedKey : CodingKey { fatalError("unsupported") }
+    func nestedContainer<NestedKey>(keyedBy type: NestedKey.Type, forKey key: K) throws -> KeyedDecodingContainer<NestedKey> where NestedKey: CodingKey { fatalError("unsupported") }
     func nestedUnkeyedContainer(forKey key: K) throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
     func superDecoder() throws -> Decoder { fatalError("unsupported") }
     func superDecoder(forKey key: K) throws -> Decoder { fatalError("unsupported") }
