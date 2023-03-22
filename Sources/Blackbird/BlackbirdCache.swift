@@ -36,7 +36,7 @@ extension Blackbird.Database {
         public let tableInvalidations: Int
     }
     
-    public func cachePerformanceMetricsByTableName() -> [String : CachePerformanceMetrics] { cache.performanceMetrics() }
+    public func cachePerformanceMetricsByTableName() -> [String: CachePerformanceMetrics] { cache.performanceMetrics() }
     public func resetCachePerformanceMetrics(tableName: String) { cache.resetPerformanceMetrics(tableName: tableName) }
     
     public func debugPrintCachePerformanceMetrics() {
@@ -54,8 +54,8 @@ extension Blackbird.Database {
     internal final class Cache: Sendable {
         private final class TableCache {
             // Cached data
-            var modelsByPrimaryKey: [Blackbird.Value : any BlackbirdModel] = [:]
-            var cachedQueries: [[Blackbird.Value] : Any] = [:]
+            var modelsByPrimaryKey: [Blackbird.Value: any BlackbirdModel] = [:]
+            var cachedQueries: [[Blackbird.Value]: Any] = [:]
             
             // Performance counters
             var hits: Int = 0
@@ -93,7 +93,7 @@ extension Blackbird.Database {
             }
         }
     
-        private let entriesByTableName = Blackbird.Locked<[String : TableCache]>([:])
+        private let entriesByTableName = Blackbird.Locked<[String: TableCache]>([:])
     
         internal func invalidate(tableName: String? = nil, primaryKeyValue: Blackbird.Value? = nil) {
             entriesByTableName.withLock {
@@ -211,7 +211,7 @@ extension Blackbird.Database {
             }
         }
         
-        internal func performanceMetrics() -> [String : CachePerformanceMetrics] {
+        internal func performanceMetrics() -> [String: CachePerformanceMetrics] {
             entriesByTableName.withLock { tableCaches in
                 tableCaches.mapValues { CachePerformanceMetrics(hits: $0.hits, misses: $0.misses, writes: $0.writes, rowInvalidations: $0.rowInvalidations, queryInvalidations: $0.queryInvalidations, tableInvalidations: $0.tableInvalidations) }
             }

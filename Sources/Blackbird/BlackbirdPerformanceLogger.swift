@@ -130,7 +130,7 @@ extension Blackbird {
         /// ```swift
         /// let spid = perLogger.signpostId(for: .execute)
         /// ```
-        func signpostId(for sp:Signpost) -> OSSignpostID {
+        func signpostId(for sp: Signpost) -> OSSignpostID {
             // Force unwrap because if we don't have a match we're in big trouble and should crash.
             return spidMap[sp]!
         }

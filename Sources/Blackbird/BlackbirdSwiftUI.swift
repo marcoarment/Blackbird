@@ -276,7 +276,7 @@ extension Blackbird {
     }
 
     /// Used in Blackbird's SwiftUI primitives.
-    public class ModelUpdater<T: BlackbirdModel>: @unchecked Sendable  { // unchecked due to internal locking
+    public class ModelUpdater<T: BlackbirdModel>: @unchecked Sendable { // unchecked due to internal locking
         @Binding public var instance: T?
 
         private let resultPublisher: CachedResultPublisher<T?>

@@ -367,7 +367,7 @@ extension BlackbirdModel {
     }
 
     private static func _sortWithPrimaryKeyValueSequence(instances: [Self], primaryKeyValues: [Blackbird.Value]) -> [Self] {
-        var primaryKeyValuesToInstances: [Blackbird.Value : Self] = [:]
+        var primaryKeyValuesToInstances: [Blackbird.Value: Self] = [:]
         for instance in instances {
             primaryKeyValuesToInstances[try! Blackbird.Value.fromAny(instance.primaryKeyValues().first!)] = instance
         }
@@ -670,7 +670,7 @@ extension BlackbirdModel {
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
-    internal static func validateSchema(database: Blackbird.Database) throws -> Void {
+    internal static func validateSchema(database: Blackbird.Database) throws {
         var testRow = Blackbird.Row()
         for column in table.columns { testRow[column.name] = column.mayBeNull ? .null : column.type.defaultValue() }
         let decoder = BlackbirdSQLiteDecoder(database: database, row: testRow)

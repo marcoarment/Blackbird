@@ -199,7 +199,7 @@ extension Blackbird {
         internal let emptyInstance: (any BlackbirdModel)?
         
         private static let resolvedTablesWithDatabases = Locked([Table: Set<Database.InstanceID>]())
-        private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID : Set<String>]())
+        private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID: Set<String>]())
         
         public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = [], emptyInstance: any BlackbirdModel) {
             if columns.isEmpty { fatalError("No columns specified") }
@@ -218,7 +218,7 @@ extension Blackbird {
         }
         
         // Enable "upsert" (REPLACE INTO) behavior ONLY for primary-key conflicts, not any other UNIQUE constraints
-        private static func generateUpsertClause(columnNames: [String], primaryKeyColumnNames: [String])-> String {
+        private static func generateUpsertClause(columnNames: [String], primaryKeyColumnNames: [String]) -> String {
             let upsertReplacements = columnNames.filter { !primaryKeyColumnNames.contains($0) }.map { "`\($0)` = excluded.`\($0)`" }
             return upsertReplacements.isEmpty ? "" : "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"
         }
@@ -371,7 +371,7 @@ internal extension String {
 internal final class SchemaGenerator: Sendable {
     internal static let shared = SchemaGenerator()
     
-    let tableCache = Blackbird.Locked<[ObjectIdentifier : Blackbird.Table]>([:])
+    let tableCache = Blackbird.Locked<[ObjectIdentifier: Blackbird.Table]>([:])
     
     internal func table<T: BlackbirdModel>(for type: T.Type) -> Blackbird.Table {
         tableCache.withLock { cache in
@@ -491,7 +491,7 @@ internal final class SchemaGenerator: Sendable {
 fileprivate struct EmptyDecoder: Decoder {
     var codingPath: [CodingKey] = []
     var userInfo: [CodingUserInfoKey: Any] = [:]
-    func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey { KeyedDecodingContainer(EmptyKeyedDecodingContainer<Key>()) }
+    func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key: CodingKey { KeyedDecodingContainer(EmptyKeyedDecodingContainer<Key>()) }
     func unkeyedContainer() throws -> UnkeyedDecodingContainer { EmptyUnkeyedDecodingContainer() }
     func singleValueContainer() throws -> SingleValueDecodingContainer { EmptySingleValueDecodingContainer() }
 }
