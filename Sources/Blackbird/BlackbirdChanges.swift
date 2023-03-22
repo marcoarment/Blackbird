@@ -56,7 +56,7 @@ public extension Blackbird {
             return true
         }
         
-        if !watchedPrimaryKeys.intersection(changedPrimaryKeys).isEmpty {
+        if !watchedPrimaryKeys.isDisjoint(with: changedPrimaryKeys) {
             // Overlapping keys -- update
             return true
         }
