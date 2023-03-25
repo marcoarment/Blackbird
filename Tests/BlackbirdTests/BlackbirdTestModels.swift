@@ -231,3 +231,18 @@ struct SchemaChangeAddIndexChanged: BlackbirdModel {
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
 }
+
+// MARK: - Invalid index definition
+
+struct DuplicateIndexesModel: BlackbirdModel {
+    static var indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ]
+    ]
+
+    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ]
+    ]
+
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+}

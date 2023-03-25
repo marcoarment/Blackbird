@@ -129,7 +129,7 @@ extension Blackbird {
         
         internal func definition(tableName: String) -> String {
             if columnNames.isEmpty { fatalError("Indexes require at least one column") }
-            return "CREATE \(unique ? "UNIQUE " : "")INDEX IF NOT EXISTS \(tableName)__\(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
+            return "CREATE \(unique ? "UNIQUE " : "")INDEX \(tableName)__\(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
         }
         
         public init(columnNames: [String], unique: Bool = false) {
@@ -477,6 +477,12 @@ internal final class SchemaGenerator: Sendable {
                 return name
             }, unique: true)
         })
+        
+        var indexedColumnSets = Set<[String]>()
+        for index in indexes {
+            let (inserted, _) = indexedColumnSets.insert(index.columnNames)
+            if !inserted { fatalError("\(String(describing: T.self)): Duplicate index definitions for [\(index.columnNames.joined(separator: ","))]") }
+        }
 
         return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes, emptyInstance: emptyInstance)
     }

@@ -1051,5 +1051,16 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 //            wait(for: [exp], timeout: 200.0)
 //        }
     }
+
+/* Tests duplicate-index detection. Throws fatal error on success.
+    func testDuplicateIndex() async throws {
+        var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
+        try await DuplicateIndexesModel(id: 1, title: "Hi").write(to: db)
+        await db.close()
+        
+        db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
+        try await DuplicateIndexesModel(id: 2, title: "Hi").write(to: db)
+    }
+*/
 }
 
