@@ -399,6 +399,7 @@ public func || <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>, rhs:
 /// - `\.$id != nil || \.$title == nil`: equivalent to `WHERE id IS NOT NULL OR title IS NULL`
 /// - `.literal("id % 3 = ?", 1)`: equivalent to `WHERE id % 3 = 1`
 /// - `.valueIn(\.$id, [1, 2, 3])`: equivalent to `WHERE id IN (1,2,3)`
+/// - `.like(\.$title, "the%")`: equivalent to `WHERE title LIKE 'the%'`
 ///
 /// Used as a `matching:` expression in ``BlackbirdModel`` functions such as:
 /// - ``BlackbirdModel/query(in:columns:matching:orderBy:limit:)``
@@ -445,6 +446,10 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
 
     init(column: T.BlackbirdColumnKeyPath, valueIn values: [Sendable]) {
         expression = BlackbirdColumnInExpression(column: column, values: values)
+    }
+
+    init(column: T.BlackbirdColumnKeyPath, valueLike pattern: String) {
+        expression = BlackbirdColumnLikeExpression(column: column, pattern: pattern)
     }
 
     init(lhs: BlackbirdModelColumnExpression<T>, sqlOperator: CombiningOperator, rhs: BlackbirdModelColumnExpression<T>) {
@@ -505,11 +510,31 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
     ///
     /// Example: `.valueIn(\.$id, [1, 2, 3])`
     ///
-    /// This would create the SQL clause: `WHERE id IN (1,2,3)`.
+    /// This would create the SQL clause: `WHERE id IN (1,2,3)`
     ///
     /// **Warning:** Do not use with very large numbers of values. The total number of arguments in a query cannot exceed its database's ``Blackbird/Database/maxQueryVariableCount``.
     public static func valueIn<T: BlackbirdModel>(_ column: T.BlackbirdColumnKeyPath, _ values: [Sendable]) -> BlackbirdModelColumnExpression<T> {
         BlackbirdModelColumnExpression<T>(column: column, valueIn: values)
+    }
+
+    /// Specify an SQLite `LIKE` expression to be used in a `WHERE` clause.
+    /// - Parameters:
+    ///   - column: The column key-path to match, e.g. `\.$title`.
+    ///   - pattern: A pattern string to match.
+    ///
+    /// The pattern string may contain:
+    /// * A percent symbol (`%`) to match any sequence of zero or more characters
+    /// * An underscore (`_`) to match any single character
+    ///
+    /// Example: `.like(\.$title, "the%")`
+    ///
+    /// This would create the SQL clause: `WHERE title LIKE 'the%'`, and any title beginning with "the" would match.
+    ///
+    /// > Note: SQLite's `LIKE` operator is **case-insensitive** for characters in the ASCII range.
+    /// >
+    /// > See the [SQLite documentation](https://www.sqlite.org/lang_expr.html#the_like_glob_regexp_match_and_extract_operators) for details.
+    public static func like<T: BlackbirdModel>(_ column: T.BlackbirdColumnKeyPath, _ pattern: String) -> BlackbirdModelColumnExpression<T> {
+        BlackbirdModelColumnExpression<T>(column: column, valueLike: pattern)
     }
 
     /// Specify a literal expression to be used in a `WHERE` clause.
@@ -564,6 +589,15 @@ internal struct BlackbirdColumnInExpression<T: BlackbirdModel>: BlackbirdQueryEx
     func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
         let placeholderStr = Array(repeating: "?", count: values.count).joined(separator: ",")
         return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` IN (\(placeholderStr))", values: values.map { try! Blackbird.Value.fromAny($0) })
+    }
+}
+
+internal struct BlackbirdColumnLikeExpression<T: BlackbirdModel>: BlackbirdQueryExpression {
+    let column: T.BlackbirdColumnKeyPath
+    let pattern: String
+    
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
+        return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` LIKE ?", values: [try! Blackbird.Value.fromAny(pattern)])
     }
 }
 
