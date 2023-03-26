@@ -298,13 +298,13 @@ extension BlackbirdModel {
     /// // Equivalent to:
     /// // "UPDATE Post SET title = 'Hi' WHERE id = 123"
     /// ```
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable], matching: BlackbirdModelColumnExpression<Self>) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
         try await updateIsolated(in: database, core: database.core, set: changes, matching: matching)
     }
 
     /// Synchronous version of ``update(in:set:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable], matching: BlackbirdModelColumnExpression<Self>) throws {
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], matching: BlackbirdModelColumnExpression<Self>) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
         let table = Self.table
