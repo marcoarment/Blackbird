@@ -398,6 +398,7 @@ public func || <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>, rhs:
 /// - `\.$id > 0 && \.$title != "a"`: equivalent to `WHERE id > 0 AND title != 'a'`
 /// - `\.$id != nil || \.$title == nil`: equivalent to `WHERE id IS NOT NULL OR title IS NULL`
 /// - `.literal("id % 3 = ?", 1)`: equivalent to `WHERE id % 3 = 1`
+/// - `.valueIn(\.$id, [1, 2, 3])`: equivalent to `WHERE id IN (1,2,3)`
 ///
 /// Used as a `matching:` expression in ``BlackbirdModel`` functions such as:
 /// - ``BlackbirdModel/query(in:columns:matching:orderBy:limit:)``
@@ -500,7 +501,7 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
         BlackbirdModelColumnExpression<T>(lhs: lhs, sqlOperator: .or, rhs: rhs)
     }
 
-    /// Specify a literal expression to be used in a `WHERE` clause.
+    /// Specify an `IN` condition to be used in a `WHERE` clause.
     ///
     /// Example: `.valueIn(\.$id, [1, 2, 3])`
     ///
