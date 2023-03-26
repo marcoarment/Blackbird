@@ -206,6 +206,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let matches0a = try await TestModelWithDescription.read(from: db, matching: \.$id == 123)
         let matches0b = try await TestModelWithDescription.read(from: db, matching: \.$id == 123 && \.$title == "Hi" || \.$id > 2)
         let matches0c = try await TestModelWithDescription.read(from: db, matching: \.$url != nil)
+        let matches0d = try await TestModelWithDescription.read(from: db, matching: .valueIn(\.$id, [1, 2, 3]))
 
         XCTAssert(first100.count == 100)
         XCTAssert(first100.first!.id == 0)
@@ -214,6 +215,8 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(matches0a.first!.id == 123)
         XCTAssert(matches0b.count == 997)
         XCTAssert(matches0c.count == 1000)
+        XCTAssert(matches0d.count == 3)
+        
 
         var id42 = try await TestModelWithDescription.read(from: db, id: 42)
         XCTAssertNotNil(id42)

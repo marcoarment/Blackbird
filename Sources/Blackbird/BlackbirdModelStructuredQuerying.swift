@@ -442,6 +442,10 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
         expression = BlackbirdColumnBinaryExpression(column: column, sqlOperator: sqlOperator, value: value)
     }
 
+    init(column: T.BlackbirdColumnKeyPath, valueIn values: [Sendable]) {
+        expression = BlackbirdColumnInExpression(column: column, values: values)
+    }
+
     init(lhs: BlackbirdModelColumnExpression<T>, sqlOperator: CombiningOperator, rhs: BlackbirdModelColumnExpression<T>) {
         expression = BlackbirdCombiningExpression(lhs: lhs, rhs: rhs, sqlOperator: sqlOperator)
     }
@@ -498,6 +502,17 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
 
     /// Specify a literal expression to be used in a `WHERE` clause.
     ///
+    /// Example: `.valueIn(\.$id, [1, 2, 3])`
+    ///
+    /// This would create the SQL clause: `WHERE id IN (1,2,3)`.
+    ///
+    /// **Warning:** Do not use with very large numbers of values. The total number of arguments in a query cannot exceed its database's ``Blackbird/Database/maxQueryVariableCount``.
+    public static func valueIn<T: BlackbirdModel>(_ column: T.BlackbirdColumnKeyPath, _ values: [Sendable]) -> BlackbirdModelColumnExpression<T> {
+        BlackbirdModelColumnExpression<T>(column: column, valueIn: values)
+    }
+
+    /// Specify a literal expression to be used in a `WHERE` clause.
+    ///
     /// Example: `.literal("id % 5 = ?", 1)`
     public static func literal<T: BlackbirdModel>(_ expressionLiteral: String, _ arguments: Sendable...) -> BlackbirdModelColumnExpression<T> {
         BlackbirdModelColumnExpression<T>(expressionLiteral: expressionLiteral, arguments: arguments)
@@ -538,6 +553,16 @@ internal struct BlackbirdColumnLiteralExpression: BlackbirdQueryExpression {
     
     func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
         return (whereClause: "\(literal)", values: arguments.map { try! Blackbird.Value.fromAny($0) })
+    }
+}
+
+internal struct BlackbirdColumnInExpression<T: BlackbirdModel>: BlackbirdQueryExpression {
+    let column: T.BlackbirdColumnKeyPath
+    let values: [Sendable]
+    
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let placeholderStr = Array(repeating: "?", count: values.count).joined(separator: ",")
+        return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` IN (\(placeholderStr))", values: values.map { try! Blackbird.Value.fromAny($0) })
     }
 }
 
