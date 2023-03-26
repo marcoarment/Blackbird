@@ -372,6 +372,7 @@ public func != <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable
     if let rhs { return .notEquals(lhs, rhs) } else { return .isNotNull(lhs) }
 }
 
+public prefix func ! <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>) -> BlackbirdModelColumnExpression<T> { .not(lhs) }
 public func <  <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdModelColumnExpression<T> { .lessThan(lhs, rhs) }
 public func >  <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdModelColumnExpression<T> { .greaterThan(lhs, rhs) }
 public func <=  <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdModelColumnExpression<T> { .lessThanOrEqual(lhs, rhs) }
@@ -456,6 +457,10 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
         expression = BlackbirdCombiningExpression(lhs: lhs, rhs: rhs, sqlOperator: sqlOperator)
     }
 
+    init(not expression: BlackbirdModelColumnExpression<T>) {
+        self.expression = BlackbirdColumnNotExpression<T>(type: T.self, expression: expression)
+    }
+
     init(expressionLiteral: String, arguments: [Sendable]) {
         expression = BlackbirdColumnLiteralExpression(literal: expressionLiteral, arguments: arguments)
     }
@@ -504,6 +509,10 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
 
     static func or<T: BlackbirdModel>(_ lhs: BlackbirdModelColumnExpression<T>, _ rhs: BlackbirdModelColumnExpression<T>) -> BlackbirdModelColumnExpression<T> {
         BlackbirdModelColumnExpression<T>(lhs: lhs, sqlOperator: .or, rhs: rhs)
+    }
+
+    static func not<T: BlackbirdModel>(_ expression: BlackbirdModelColumnExpression<T>) -> BlackbirdModelColumnExpression<T> {
+        BlackbirdModelColumnExpression<T>(not: expression)
     }
 
     /// Specify an `IN` condition to be used in a `WHERE` clause.
@@ -607,6 +616,20 @@ internal struct BlackbirdColumnUnaryExpression<T: BlackbirdModel>: BlackbirdQuer
 
     func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
         return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue)", values: [])
+    }
+}
+
+internal struct BlackbirdColumnNotExpression<T: BlackbirdModel>: BlackbirdQueryExpression {
+    let type: T.Type
+    let expression: BlackbirdQueryExpression
+
+    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let compiled = expression.compile(table: table)
+        if let whereClause = compiled.whereClause {
+            return (whereClause: "NOT (\(whereClause))", values: compiled.values)
+        } else {
+            return (whereClause: "FALSE", values: [])
+        }
     }
 }
 
