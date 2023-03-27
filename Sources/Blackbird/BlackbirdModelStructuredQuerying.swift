@@ -344,9 +344,9 @@ extension BlackbirdModel {
     /// // "UPDATE Post SET title = 'Hi' WHERE (id = 1 OR id = 2 OR id = 3)"
     /// ```
     /// For tables with multi-column primary keys, use ``update(in:set:forMulticolumnPrimaryKeys:)``.
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: any Collection<Blackbird.Value>) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: any Collection<Any>) async throws {
         if changes.isEmpty { return }
-        try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: Set(forPrimaryKeys.map { [$0] }))
+        try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
     }
 
     /// Changes a subset of the table's rows by multi-column primary-key values, using column key-paths for this model type.
@@ -370,18 +370,18 @@ extension BlackbirdModel {
     /// ```
     ///
     /// For tables with single-column primary keys, ``update(in:set:forPrimaryKeys:)`` may also be used.
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys: any Collection<[Blackbird.Value]>) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys: any Collection<[Any]>) async throws {
         if changes.isEmpty { return }
         try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
     }
 
     /// Synchronous version of ``update(in:set:forPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: any Collection<Blackbird.Value>) throws {
-        try updateIsolated(in: database, core: core, set: changes, forMulticolumnPrimaryKeys: Set(forPrimaryKeys.map { [$0] }))
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: any Collection<Any>) throws {
+        try updateIsolated(in: database, core: core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
     }
 
     /// Synchronous version of ``update(in:set:forMulticolumnPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys primaryKeyValues: any Collection<[Blackbird.Value]>) throws {
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys primaryKeyValues: any Collection<[Any]>) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
         let primaryKeyValues = Array(primaryKeyValues)
@@ -393,15 +393,18 @@ extension BlackbirdModel {
         var arguments = decoded.arguments
         var keyClauses: [String] = []
         let keyColumns = table.primaryKeys
+        var changedPrimaryKeys: [[Blackbird.Value]] = []
         for primaryKeyValueSet in primaryKeyValues {
             if primaryKeyValueSet.count != keyColumns.count {
                 fatalError("\(String(describing: self)): Invalid number of primary-key values: expected \(keyColumns.count), got \(primaryKeyValues.count)")
             }
+            let primaryKeyValueSet = primaryKeyValueSet.map { try! Blackbird.Value.fromAny($0) }
+            changedPrimaryKeys.append(primaryKeyValueSet)
             
             var keySetClauses: [String] = []
             for i in 0..<keyColumns.count {
                 keySetClauses.append("`\(keyColumns[i].name)` = ?")
-                arguments.append(try! Blackbird.Value.fromAny(primaryKeyValueSet[i]))
+                arguments.append(primaryKeyValueSet[i])
             }
             keyClauses.append("(\(keySetClauses.joined(separator: " AND ")))")
         }
@@ -414,7 +417,7 @@ extension BlackbirdModel {
         defer {
             database.changeReporter.stopIgnoringWrites()
             if core.changeCount != changeCountBefore {
-                for primaryKeyValueSet in primaryKeyValues {
+                for primaryKeyValueSet in changedPrimaryKeys {
                     database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValueSet, changedColumns: decoded.changedColumns)
                 }
             }
