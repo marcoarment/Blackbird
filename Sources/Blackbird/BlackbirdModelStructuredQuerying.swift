@@ -72,7 +72,7 @@ fileprivate struct DecodedStructuredQuery: Sendable {
     let tableName: String
     let cacheKey: [Blackbird.Value]?
     
-    init<T: BlackbirdModel>(operation: String = "SELECT * FROM", selectColumnSubset: [PartialKeyPath<T>]? = nil, matching: BlackbirdModelColumnExpression<T>? = nil, updating: [PartialKeyPath<T>: Sendable] = [:], orderBy: [BlackbirdModelOrderClause<T>] = [], limit: Int? = nil) {
+    init<T: BlackbirdModel>(operation: String = "SELECT * FROM", selectColumnSubset: [PartialKeyPath<T>]? = nil, matching: BlackbirdModelColumnExpression<T>? = nil, updating: [PartialKeyPath<T>: Sendable] = [:], orderBy: [BlackbirdModelOrderClause<T>] = [], limit: Int? = nil, updateWhereAutoOptimization: Bool = true) {
         let table = SchemaGenerator.shared.table(for: T.self)
         var clauses: [String] = []
         var arguments: [Blackbird.Value] = []
@@ -97,23 +97,25 @@ fileprivate struct DecodedStructuredQuery: Sendable {
             setClauses.append("`\(columnName)` = ?")
             arguments.append(try! Blackbird.Value.fromAny(value))
             
-            // In an UPDATE query, SQLite will call the update hook and report a change on EVERY row
-            // that matches the WHERE clause (or every row in the table without a WHERE) and report it
-            // as changed, even if no rows matched and therefore no data was changed. E.g.:
-            //
-            //   UPDATE t SET a = NULL, b = 2; -- in a table with X rows, this reports X rows changed
-            //   UPDATE t SET a = NULL, b = 2; -- ALSO reports X rows changed, even though none actually were
-            //
-            // So we add automatic WHERE clauses corresponding to each SET value to make it like this:
-            //
-            //   UPDATE t SET a = NULL, b = 2 WHERE a IS NOT NULL OR b != 2;
-            //
-            // ...which makes SQLite properly report only the actually-changed rows.
-            //
-            if updateWhereNotMatchingExpr != nil {
-                updateWhereNotMatchingExpr = updateWhereNotMatchingExpr! || keyPath != value
-            } else {
-                updateWhereNotMatchingExpr = keyPath != value
+            if updateWhereAutoOptimization {
+                // In an UPDATE query, SQLite will call the update hook and report a change on EVERY row
+                // that matches the WHERE clause (or every row in the table without a WHERE) and report it
+                // as changed, even if no rows matched and therefore no data was changed. E.g.:
+                //
+                //   UPDATE t SET a = NULL, b = 2; -- in a table with X rows, this reports X rows changed
+                //   UPDATE t SET a = NULL, b = 2; -- ALSO reports X rows changed, even though none actually were
+                //
+                // So we add automatic WHERE clauses corresponding to each SET value to make it like this:
+                //
+                //   UPDATE t SET a = NULL, b = 2 WHERE a IS NOT NULL OR b != 2;
+                //
+                // ...which makes SQLite properly report only the actually-changed rows.
+                //
+                if updateWhereNotMatchingExpr != nil {
+                    updateWhereNotMatchingExpr = updateWhereNotMatchingExpr! || keyPath != value
+                } else {
+                    updateWhereNotMatchingExpr = keyPath != value
+                }
             }
         }
         if !setClauses.isEmpty {
@@ -286,18 +288,19 @@ extension BlackbirdModel {
     ///   - matching: A filtering expression using column key-paths, e.g. `\.$id == 1`, to be used in the resulting SQL query as a `WHERE` clause. See ``BlackbirdModelColumnExpression``.
     ///
     ///       Use `.all` to delete all rows in the table (executes an SQL `UPDATE` without a `WHERE` clause).
-    /// - Returns: An array of matching rows, each containing only the columns specified.
     ///
     /// ## Example
     /// ```swift
     /// try await Post.update(
     ///     in: db,
     ///     set: [ \.$title = "Hi" ]
-    ///     matching: \.$id == 123
+    ///     matching: \.$id < 100 || \.$title == nil
     /// )
     /// // Equivalent to:
-    /// // "UPDATE Post SET title = 'Hi' WHERE id = 123"
+    /// // "UPDATE Post SET title = 'Hi' WHERE id < 100 OR title IS NULL"
     /// ```
+    ///
+    /// If matching against specific primary-key values, use ``update(in:set:forPrimaryKeys:)`` instead.
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
         try await updateIsolated(in: database, core: database.core, set: changes, matching: matching)
@@ -321,6 +324,104 @@ extension BlackbirdModel {
         }
         try core.query(decoded.query, arguments: decoded.arguments)
     }
+
+    /// Changes a subset of the table's rows by primary-key values, using column key-paths for this model type.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to query.
+    ///   - changes: A dictionary of column key-paths of this BlackbirdModel type and corresponding values to set them to, e.g. `[ \.$title : "New title" ]`.
+    ///   - forPrimaryKeys: A collection of primary-key values on which to apply the changes if present in the database.
+    ///
+    /// This is preferred over ``update(in:set:matching:)`` when the only matching criteria is primary-key value, since the change reporter can subsequently send the specific primary-key values that have potentially changed.
+    ///
+    /// ## Example
+    /// ```swift
+    /// try await Post.update(
+    ///     in: db,
+    ///     set: [ \.$title = "Hi" ]
+    ///     forPrimaryKeys: [1, 2, 3]
+    /// )
+    /// // Equivalent to:
+    /// // "UPDATE Post SET title = 'Hi' WHERE (id = 1 OR id = 2 OR id = 3)"
+    /// ```
+    /// For tables with multi-column primary keys, use ``update(in:set:forMulticolumnPrimaryKeys:)``.
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: any Collection<Blackbird.Value>) async throws {
+        if changes.isEmpty { return }
+        try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: Set(forPrimaryKeys.map { [$0] }))
+    }
+
+    /// Changes a subset of the table's rows by multi-column primary-key values, using column key-paths for this model type.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to query.
+    ///   - changes: A dictionary of column key-paths of this BlackbirdModel type and corresponding values to set them to, e.g. `[ \.$title : "New title" ]`.
+    ///   - forMulticolumnPrimaryKeys: A collection of multicolumn-primary-key value arrays on which to apply the changes if present in the database.
+    ///
+    /// This is preferred over ``update(in:set:matching:)`` when the only matching criteria is primary-key value, since the change reporter can subsequently send the specific primary-key values that have potentially changed.
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Given a two-column primary-key of (id, title):
+    /// try await Post.update(
+    ///     in: db,
+    ///     set: [ \.$title = "Hi" ]
+    ///     forMulticolumnPrimaryKeys: Set([1, "Title1"], [2, "Title 2"])
+    /// )
+    /// // Equivalent to:
+    /// // "UPDATE Post SET title = 'Hi' WHERE (id = 1 AND title = 'Title1') OR (id = 2 AND title = 'Title2')"
+    /// ```
+    ///
+    /// For tables with single-column primary keys, ``update(in:set:forPrimaryKeys:)`` may also be used.
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys: any Collection<[Blackbird.Value]>) async throws {
+        if changes.isEmpty { return }
+        try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
+    }
+
+    /// Synchronous version of ``update(in:set:forPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: any Collection<Blackbird.Value>) throws {
+        try updateIsolated(in: database, core: core, set: changes, forMulticolumnPrimaryKeys: Set(forPrimaryKeys.map { [$0] }))
+    }
+
+    /// Synchronous version of ``update(in:set:forMulticolumnPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys primaryKeyValues: any Collection<[Blackbird.Value]>) throws {
+        if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
+        if changes.isEmpty { return }
+        let primaryKeyValues = Array(primaryKeyValues)
+        let table = Self.table
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+
+        let decoded = DecodedStructuredQuery(operation: "UPDATE", updating: changes, updateWhereAutoOptimization: false)
+
+        var arguments = decoded.arguments
+        var keyClauses: [String] = []
+        let keyColumns = table.primaryKeys
+        for primaryKeyValueSet in primaryKeyValues {
+            if primaryKeyValueSet.count != keyColumns.count {
+                fatalError("\(String(describing: self)): Invalid number of primary-key values: expected \(keyColumns.count), got \(primaryKeyValues.count)")
+            }
+            
+            var keySetClauses: [String] = []
+            for i in 0..<keyColumns.count {
+                keySetClauses.append("`\(keyColumns[i].name)` = ?")
+                arguments.append(try! Blackbird.Value.fromAny(primaryKeyValueSet[i]))
+            }
+            keyClauses.append("(\(keySetClauses.joined(separator: " AND ")))")
+        }
+        let keyWhere = keyClauses.joined(separator: " OR ")
+        
+        let query = "\(decoded.query) WHERE \(keyWhere)"
+
+        let changeCountBefore = core.changeCount
+        database.changeReporter.ignoreWritesToTable(Self.tableName)
+        defer {
+            database.changeReporter.stopIgnoringWrites()
+            if core.changeCount != changeCountBefore {
+                for primaryKeyValueSet in primaryKeyValues {
+                    database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValueSet, changedColumns: decoded.changedColumns)
+                }
+            }
+        }
+        try core.query(query, arguments: arguments)
+    }
+
 
     /// Deletes a subset of the table's columns matching the given column values, using column key-paths for this model type.
     /// - Parameters:

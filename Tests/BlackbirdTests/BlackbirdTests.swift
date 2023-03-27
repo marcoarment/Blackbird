@@ -170,7 +170,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testQueries() async throws {
-        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues, .debugPrintEveryReportedChange])
         let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
         
         try await db.transaction { core in
@@ -178,6 +178,10 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
                 let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
                 try m.writeIsolated(to: db, core: core)
             }
+        }
+        
+        for i: Int64 in 1..<10 {
+            try await MulticolumnPrimaryKeyTest(userID: i, feedID: i, episodeID: i).write(to: db)
         }
         
         let countReturned = try await TestModelWithDescription.count(in: db)
@@ -223,6 +227,22 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(matches0f.count == 235)
         XCTAssert(matches0g.count == 997)
 
+        try await MulticolumnPrimaryKeyTest.update(in: db, set: [\.$episodeID: 5], forMulticolumnPrimaryKeys: [[1, 1, 1], [2, 2, 2], [3, 1, 1]])
+        let multiID1 = try await MulticolumnPrimaryKeyTest.read(from: db, multicolumnPrimaryKey: [1, 1, 5])
+        let multiID2 = try await MulticolumnPrimaryKeyTest.read(from: db, multicolumnPrimaryKey: [2, 2, 5])
+        let multiID3 = try await MulticolumnPrimaryKeyTest.read(from: db, multicolumnPrimaryKey: [3, 3, 5])
+        XCTAssert(multiID1!.episodeID == 5)
+        XCTAssert(multiID2!.episodeID == 5)
+        XCTAssert(multiID3 == nil)
+
+        try await TestModelWithDescription.update(in: db, set: [\.$title: "(new)"], forPrimaryKeys: [1, 2, 3])
+        let id1 = try await TestModelWithDescription.read(from: db, id: 1)
+        let id2 = try await TestModelWithDescription.read(from: db, id: 2)
+        let id3 = try await TestModelWithDescription.read(from: db, id: 3)
+        XCTAssert(id1!.title == "(new)")
+        XCTAssert(id2!.title == "(new)")
+        XCTAssert(id3!.title == "(new)")
+
         var id42 = try await TestModelWithDescription.read(from: db, id: 42)
         XCTAssertNotNil(id42)
         XCTAssert(id42!.id == 42)
@@ -242,8 +262,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssertNil(id43AfterDelete)
         
         let matches1 = try await TestModelWithDescription.read(from: db, orderBy: .descending(\.$title), .ascending(\.$id), limit: 1)
-        print("\(matches1.map { $0.title })")
-
+        XCTAssert(matches1.first!.title == "the memory palace")
 
         let matches = try await TestModelWithDescription.read(from: db, matching: \.$title == "Omnibus")
         XCTAssert(matches.count == 1)
@@ -745,6 +764,14 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], matching: .all)
+        await MainActor.run { }
+        expectedChangeNotificationsCallCount += 1
+        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+
+        // Unspecified/whole-table change notifications, with structured column info and primary keys
+        _testChangeNotificationsExpectedChangedKeys = [[1], [2], [3]]
+        _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
+        try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], forPrimaryKeys: [1, 2, 3])
         await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
