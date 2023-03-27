@@ -771,7 +771,7 @@ extension BlackbirdModel {
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValues, changedColumns: changedColumnNames)
+            database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: [primaryKeyValues], changedColumns: changedColumnNames)
             if Self.enableCaching { self._saveCachedInstance(for: database) }
         }
         try core.query(sql, arguments: values)
@@ -801,7 +801,7 @@ extension BlackbirdModel {
         database.changeReporter.ignoreWritesToTable(Self.tableName)
         defer {
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: values, changedColumns: table.columnNames)
+            database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: [values], changedColumns: table.columnNames)
         }
         let sql = "DELETE FROM `\(Self.tableName)` WHERE \(andClauses.joined(separator: " AND "))"
         try core.query(sql, arguments: values)

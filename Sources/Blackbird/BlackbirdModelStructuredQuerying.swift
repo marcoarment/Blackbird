@@ -319,7 +319,7 @@ extension BlackbirdModel {
         defer {
             database.changeReporter.stopIgnoringWrites()
             if core.changeCount != changeCountBefore {
-                database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: nil, changedColumns: decoded.changedColumns)
+                database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: nil, changedColumns: decoded.changedColumns)
             }
         }
         try core.query(decoded.query, arguments: decoded.arguments)
@@ -417,9 +417,7 @@ extension BlackbirdModel {
         defer {
             database.changeReporter.stopIgnoringWrites()
             if core.changeCount != changeCountBefore {
-                for primaryKeyValueSet in changedPrimaryKeys {
-                    database.changeReporter.reportChange(tableName: Self.tableName, primaryKey: primaryKeyValueSet, changedColumns: decoded.changedColumns)
-                }
+                database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: changedPrimaryKeys, changedColumns: decoded.changedColumns)
             }
         }
         try core.query(query, arguments: arguments)

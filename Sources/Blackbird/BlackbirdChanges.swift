@@ -183,14 +183,17 @@ extension Blackbird.Database {
             lock.unlock()
         }
 
-        public func reportChange(tableName: String, primaryKey: [Blackbird.Value]? = nil, changedColumns: Blackbird.ColumnNames?) {
+        public func reportChange(tableName: String, primaryKeys: [[Blackbird.Value]]? = nil, changedColumns: Blackbird.ColumnNames?) {
             lock.lock()
             if tableName != ignoreWritesToTableName {
-                if let primaryKey, !primaryKey.isEmpty, let changedColumns {
+                if let primaryKeys, !primaryKeys.isEmpty, let changedColumns {
                     if accumulatedChangesByTable[tableName] == nil { accumulatedChangesByTable[tableName] = AccumulatedChanges() }
-                    accumulatedChangesByTable[tableName]!.primaryKeys?.insert(primaryKey)
+                    accumulatedChangesByTable[tableName]!.primaryKeys?.formUnion(primaryKeys)
                     accumulatedChangesByTable[tableName]!.columnNames?.formUnion(changedColumns)
-                    cache.invalidate(tableName: tableName, primaryKeyValue: primaryKey.first)
+                    for primaryKey in primaryKeys {
+                        if primaryKey.count == 1 { cache.invalidate(tableName: tableName, primaryKeyValue: primaryKey.first) }
+                        else { cache.invalidate(tableName: tableName) }
+                    }
                 } else {
                     accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange(columnsIfKnown: changedColumns)
                     cache.invalidate(tableName: tableName)
