@@ -57,7 +57,7 @@ internal protocol BlackbirdQueryable {
     ///
     /// While inside the transaction's `action`:
     /// * Queries against the isolated ``Blackbird/Database/Core`` can be executed synchronously (using `try` instead of `try await`).
-    /// * Change notifications for this database, via both ``Blackbird/ChangePublisher`` and ``Blackbird/legacyChangeNotification``, are queued until the transaction is completed. When delivered, multiple changes for the same table are consolidated into a single notification with every affected primary-key value.
+    /// * Change notifications for this database via ``Blackbird/ChangePublisher`` are queued until the transaction is completed. When delivered, multiple changes for the same table are consolidated into a single notification with every affected primary-key value.
     ///
     ///     __Note:__ Notifications may be sent for changes occurring during the transaction even if the transaction is rolled back.
     ///
@@ -233,11 +233,8 @@ extension Blackbird {
             /// Logs every change reported by ``Blackbird/ChangePublisher`` instances for this database with `print()`. Useful for debugging.
             public static let debugPrintEveryReportedChange  = Options(rawValue: 1 << 4)
             
-            /// Sends ``Blackbird/legacyChangeNotification`` notifications using `NotificationCenter`.
-            public static let sendLegacyChangeNotifications  = Options(rawValue: 1 << 5)
-
             /// Monitor for changes to the database file from outside of this connection, such as from a different process or a different SQLite library within the same process.
-            public static let monitorForExternalChanges      = Options(rawValue: 1 << 6)
+            public static let monitorForExternalChanges      = Options(rawValue: 1 << 5)
         }
         
         internal final class InstancePool: Sendable {

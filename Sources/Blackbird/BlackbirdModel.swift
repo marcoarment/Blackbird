@@ -255,7 +255,8 @@ extension BlackbirdModel {
     ///
     /// See ``BlackbirdModel/changePublisher(in:primaryKey:columns:)`` for built-in filtering by primary-key and/or changed columns.
     ///
-    /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
+    /// > - The publisher may send from any thread.
+    /// > - Changes may be over-reported.
     public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ModelChangePublisher<Self> {
         database.changeReporter.changePublisher(for: self.tableName)
         .map { Blackbird.ModelChange(type: Self.self, from: $0) }
@@ -271,7 +272,8 @@ extension BlackbirdModel {
     ///
     /// Use ``BlackbirdModel/changePublisher(in:multicolumnPrimaryKey:columns:)`` for models with multi-column primary keys.
     ///
-    /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
+    /// > - The publisher may send from any thread.
+    /// > - Changes may be over-reported.
     public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
@@ -300,9 +302,11 @@ extension BlackbirdModel {
     ///
     /// Use ``BlackbirdModel/changePublisher(in:primaryKey:columns:)`` for models with single-column primary keys.
     ///
-    /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
-    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ChangePublisher {
-        database.changeReporter.changePublisher(for: self.tableName).filter { change in
+    /// > - The publisher may send from any thread.
+    /// > - Changes may be over-reported.
+    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
+        let selfType = Self.self
+        return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
             
             if !columns.isEmpty, let changedColumns = change.columnNames {
@@ -311,6 +315,8 @@ extension BlackbirdModel {
             }
 
             return true
+        }.map {
+            Blackbird.ModelChange(type: selfType, from: $0)
         }
         .eraseToAnyPublisher()
     }

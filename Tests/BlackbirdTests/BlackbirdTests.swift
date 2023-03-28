@@ -746,7 +746,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             self._testChangeNotificationsExpectedChangedKeys = expectedBatchedKeys
             self._testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "url", "title", "description"])
         }
-        await MainActor.run { } // blocks until after the change has been sent to the publisher
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
         
@@ -756,7 +755,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(64) ]])
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["title"])
         try await m.write(to: db)
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -764,7 +762,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues(Array(0..<count).map { [try! Blackbird.Value.fromAny($0)] })
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], matching: .all)
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -772,7 +769,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues(Array(0..<5).map { [try! Blackbird.Value.fromAny($0)] })
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.delete(from: db, matching: \.$id < 5)
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -780,7 +776,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = [[7], [8], [9]]
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], forPrimaryKeys: [7, 8, 9])
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -788,14 +783,12 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], matching: .all)
-        await MainActor.run { }
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table change notifications
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.query(in: db, "UPDATE $T SET url = NULL")
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -811,7 +804,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             try t1.writeIsolated(to: db, core: core)
             try t2.writeIsolated(to: db, core: core)
         }
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -826,7 +818,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             let t2 = TestModelWithDescription(id: count + 1, title: "New entry", description: "New description")
             try t2.writeIsolated(to: db, core: core)
         }
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -841,7 +832,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             let t2 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 51)!
             try t2.deleteIsolated(from: db, core: core)
         }
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
@@ -855,7 +845,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 
             try TestModelWithDescription.queryIsolated(in: db, core: core, "UPDATE $T SET description = ? WHERE id = 61", "Test description")
         }
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
         
@@ -866,7 +855,6 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.query(in: db, "DELETE FROM $T")
-        await MainActor.run { }
         expectedChangeNotificationsCallCount += 2 // will trigger a full-database change notification, so it'll report 2 table changes: TestModel and TestModelWithDescription
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
     }
