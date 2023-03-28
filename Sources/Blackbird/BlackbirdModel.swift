@@ -251,25 +251,30 @@ extension BlackbirdModel {
 
     /// The change publisher for this model's table.
     /// - Parameter database: The ``Blackbird/Database`` instance to monitor.
-    /// - Returns: The ``Blackbird/ChangePublisher`` for this model's table.
+    /// - Returns: The ``Blackbird/ModelChangePublisher`` for this model's table.
     ///
     /// See ``BlackbirdModel/changePublisher(in:primaryKey:columns:)`` for built-in filtering by primary-key and/or changed columns.
     ///
     /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
-    public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ChangePublisher { database.changeReporter.changePublisher(for: self.tableName) }
+    public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ModelChangePublisher<Self> {
+        database.changeReporter.changePublisher(for: self.tableName)
+        .map { Blackbird.ModelChange(type: Self.self, from: $0) }
+        .eraseToAnyPublisher()
+    }
 
     /// The change publisher for this model's table, filtered by single-column primary key and/or changed columns.
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to monitor.
     ///   - primaryKey: The single-column primary-key value set to monitor. If `nil`, changes to any keys are reported.
     ///   - columns: Specific columns to monitor. If empty, changes to any column(s) are reported.
-    /// - Returns: The filtered ``Blackbird/ChangePublisher``.
+    /// - Returns: The filtered ``Blackbird/ModelChangePublisher``.
     ///
     /// Use ``BlackbirdModel/changePublisher(in:multicolumnPrimaryKey:columns:)`` for models with multi-column primary keys.
     ///
     /// > Note: Changes may be over-reported if the database changes externally or in response to certain queries.
-    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ChangePublisher {
+    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
+        let selfType = Self.self
         
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let primaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains([primaryKey]) { return false }
@@ -280,6 +285,8 @@ extension BlackbirdModel {
             }
 
             return true
+        }.map {
+            Blackbird.ModelChange(type: selfType, from: $0)
         }
         .eraseToAnyPublisher()
     }

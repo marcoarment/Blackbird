@@ -709,7 +709,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         
         _testChangeNotificationsListeners.append(TestModel.changePublisher(in: db).sink { change in
             if let expectedTable = self._testChangeNotificationsExpectedChangedTable {
-                XCTAssert(expectedTable == change.table, "Change listener called for incorrect table")
+                XCTAssert(expectedTable == change.type.tableName, "Change listener called for incorrect table")
             }
             self._testChangeNotificationsCallCount += 1
         })
@@ -733,7 +733,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         var expectedChangeNotificationsCallCount = 0
         
         _testChangeNotificationsExpectedChangedTable = "TestModelWithDescription"
-
+        
         // Batched change notifications
         let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
         try await db.transaction { core in

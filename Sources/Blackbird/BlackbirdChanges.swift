@@ -29,21 +29,100 @@ import Foundation
 
 public extension Blackbird {
     /// A change to a table in a Blackbird database, as published by a ``ChangePublisher``.
+    ///
+    /// For `BlackbirdModel` tables, ``BlackbirdModel/changePublisher(in:)`` provides a typed ``ModelChange`` instead.
     struct Change: Sendable {
-        /// The changed table's name.
-        public let table: String
+        internal let table: String
+        internal let primaryKeys: PrimaryKeyValues?
+        internal let columnNames: Blackbird.ColumnNames?
         
-        /// The primary keys of the changed rows. If `nil`, assume any rows in the table may have changed.
-        public let primaryKeys: PrimaryKeyValues?
+        /// Determine if a specific primary-key value may have changed.
+        /// - Parameter key: The single-column primary-key value in question.
+        /// - Returns: Whether the row with this primary-key value may have changed. Note that changes may be over-reported.
+        ///
+        /// For tables with multi-column primary keys, use ``hasMulticolumnPrimaryKeyChanged(_:)``.
+        public func hasPrimaryKeyChanged(_ key: Any) -> Bool {
+            guard let primaryKeys else { return true }
+            return primaryKeys.contains([try! Blackbird.Value.fromAny(key)])
+        }
         
-        /// The changed column names. If `nil`, assume any columns may have changed.
-        public let columnNames: Blackbird.ColumnNames?
+        /// Determine if a specific primary-key value may have changed in a table with a multi-column primary key.
+        /// - Parameter key: The multi-column primary-key value array in question.
+        /// - Returns: Whether the row with these primary-key values may have changed. Note that changes may be over-reported.
+        ///
+        /// For tables with single-column primary keys, use ``hasPrimaryKeyChanged(_:)``.
+        public func hasMulticolumnPrimaryKeyChanged(_ key: [Any]) -> Bool {
+            guard let primaryKeys else { return true }
+            return primaryKeys.contains(key.map { try! Blackbird.Value.fromAny($0) })
+        }
+        
+        /// Determine if a specific column may have changed.
+        /// - Parameter columnName: The column name.
+        /// - Returns: Whether this column may have changed in any rows. Note that changes may be over-reported.
+        public func hasColumnChanged(_ columnName: String) -> Bool {
+            guard let columnNames else { return true }
+            return columnNames.contains(columnName)
+        }
     }
 
     /// A Publisher that emits when data in a Blackbird table has changed.
     ///
     /// The ``Blackbird/Change`` passed indicates which rows and columns in the table have changed.
     typealias ChangePublisher = AnyPublisher<Change, Never>
+
+    /// A change to a table in a Blackbird database, as published by a ``ChangePublisher``.
+    struct ModelChange<T: BlackbirdModel>: Sendable {
+        internal let type: T.Type
+        internal let primaryKeys: PrimaryKeyValues?
+        internal let columnNames: Blackbird.ColumnNames?
+
+        /// Determine if a specific primary-key value may have changed.
+        /// - Parameter key: The single-column primary-key value in question.
+        /// - Returns: Whether the row with this primary-key value may have changed. Note that changes may be over-reported.
+        ///
+        /// For tables with multi-column primary keys, use ``hasMulticolumnPrimaryKeyChanged(_:)``.
+        public func hasPrimaryKeyChanged(_ key: Any) -> Bool {
+            guard let primaryKeys else { return true }
+            return primaryKeys.contains([try! Blackbird.Value.fromAny(key)])
+        }
+        
+        /// Determine if a specific primary-key value may have changed in a table with a multi-column primary key.
+        /// - Parameter key: The multi-column primary-key value array in question.
+        /// - Returns: Whether the row with these primary-key values may have changed. Note that changes may be over-reported.
+        ///
+        /// For tables with single-column primary keys, use ``hasPrimaryKeyChanged(_:)``.
+        public func hasMulticolumnPrimaryKeyChanged(_ key: [Any]) -> Bool {
+            guard let primaryKeys else { return true }
+            return primaryKeys.contains(key.map { try! Blackbird.Value.fromAny($0) })
+        }
+        
+        /// Determine if a specific column name may have changed.
+        /// - Parameter columnName: The column name.
+        /// - Returns: Whether this column may have changed in any rows. Note that changes may be over-reported.
+        public func hasColumnChanged(_ columnName: String) -> Bool {
+            guard let columnNames else { return true }
+            return columnNames.contains(columnName)
+        }
+
+        /// Determine if a specific column key-path may have changed.
+        /// - Parameter keyPath: The column key-path using its `$`-prefixed wrapper, e.g. `\.$title`.
+        /// - Returns: Whether this column may have changed in any rows. Note that changes may be over-reported.
+        public func hasColumnChanged(_ keyPath: T.BlackbirdColumnKeyPath) -> Bool {
+            guard let columnNames else { return true }
+            return columnNames.contains(T.table.keyPathToColumnName(keyPath: keyPath))
+        }
+
+        internal init(type: T.Type, from change: Change) {
+            self.type = type
+            self.primaryKeys = change.primaryKeys
+            self.columnNames = change.columnNames
+        }
+    }
+
+    /// A Publisher that emits when data in a BlackbirdModel table has changed.
+    ///
+    /// The ``Blackbird/ModelChange`` passed indicates which rows and columns in the table have changed.
+    typealias ModelChangePublisher<T: BlackbirdModel> = AnyPublisher<ModelChange<T>, Never>
 
     internal static func isRelevantPrimaryKeyChange(watchedPrimaryKeys: Blackbird.PrimaryKeyValues?, changedPrimaryKeys: Blackbird.PrimaryKeyValues?) -> Bool {
         guard let watchedPrimaryKeys else {
