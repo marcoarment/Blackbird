@@ -115,6 +115,9 @@ extension Blackbird.Database {
         private var flushIsEnqueued = false
         private var activeTransactions = Set<Int64>()
         private var ignoreWritesToTableName: String? = nil
+        private var bufferRowIDsForIgnoredTable = false
+        private var bufferedRowIDsForIgnoredTable = Set<Int64>()
+        
         private var accumulatedChangesByTable: [String: AccumulatedChanges] = [:]
         private var tableChangePublishers: [String: PassthroughSubject<Blackbird.Change, Never>] = [:]
         
@@ -140,16 +143,23 @@ extension Blackbird.Database {
             }
         }
 
-        public func ignoreWritesToTable(_ name: String) {
+        public func ignoreWritesToTable(_ name: String, beginBufferingRowIDs: Bool = false) {
             lock.lock()
             ignoreWritesToTableName = name
+            bufferRowIDsForIgnoredTable = beginBufferingRowIDs
+            bufferedRowIDsForIgnoredTable.removeAll()
             lock.unlock()
         }
 
-        public func stopIgnoringWrites() {
+        @discardableResult
+        public func stopIgnoringWrites() -> Set<Int64> {
             lock.lock()
             ignoreWritesToTableName = nil
+            bufferRowIDsForIgnoredTable = false
+            let rowIDs = bufferedRowIDsForIgnoredTable
+            bufferedRowIDsForIgnoredTable.removeAll()
             lock.unlock()
+            return rowIDs
         }
 
         public func beginTransaction(_ transactionID: Int64) {
@@ -183,13 +193,21 @@ extension Blackbird.Database {
             lock.unlock()
         }
 
-        public func reportChange(tableName: String, primaryKeys: [[Blackbird.Value]]? = nil, changedColumns: Blackbird.ColumnNames?) {
+        public func reportChange(tableName: String, primaryKeys: [[Blackbird.Value]]? = nil, rowID: Int64? = nil, changedColumns: Blackbird.ColumnNames?) {
             lock.lock()
-            if tableName != ignoreWritesToTableName {
-                if let primaryKeys, !primaryKeys.isEmpty, let changedColumns {
+            if tableName == ignoreWritesToTableName {
+                if let rowID, bufferRowIDsForIgnoredTable { bufferedRowIDsForIgnoredTable.insert(rowID) }
+            } else {
+                if let primaryKeys, !primaryKeys.isEmpty {
                     if accumulatedChangesByTable[tableName] == nil { accumulatedChangesByTable[tableName] = AccumulatedChanges() }
                     accumulatedChangesByTable[tableName]!.primaryKeys?.formUnion(primaryKeys)
-                    accumulatedChangesByTable[tableName]!.columnNames?.formUnion(changedColumns)
+                    
+                    if let changedColumns {
+                        accumulatedChangesByTable[tableName]!.columnNames?.formUnion(changedColumns)
+                    } else {
+                        accumulatedChangesByTable[tableName]!.columnNames = nil
+                    }
+                    
                     for primaryKey in primaryKeys {
                         if primaryKey.count == 1 { cache.invalidate(tableName: tableName, primaryKeyValue: primaryKey.first) }
                         else { cache.invalidate(tableName: tableName) }

@@ -362,7 +362,7 @@ extension Blackbird {
                 let changeReporter = Unmanaged<ChangeReporter>.fromOpaque(ctx).takeUnretainedValue()
                 changeReporter.numChangesReportedByUpdateHook += 1
                 if let tableName, let tableNameStr = String(cString: tableName, encoding: .utf8) {
-                    changeReporter.reportChange(tableName: tableNameStr, changedColumns: nil)
+                    changeReporter.reportChange(tableName: tableNameStr, rowID: rowid, changedColumns: nil)
                 }
             }, Unmanaged<ChangeReporter>.passUnretained(changeReporter).toOpaque())
 

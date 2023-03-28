@@ -761,17 +761,25 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table change notifications, with structured column info
-        _testChangeNotificationsExpectedChangedKeys = nil
+        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues(Array(0..<count).map { [try! Blackbird.Value.fromAny($0)] })
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], matching: .all)
         await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
 
+        // Unspecified/whole-table delete notifications, with structured column info
+        _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues(Array(0..<5).map { [try! Blackbird.Value.fromAny($0)] })
+        _testChangeNotificationsExpectedChangedColumnNames = nil
+        try await TestModelWithDescription.delete(from: db, matching: \.$id < 5)
+        await MainActor.run { }
+        expectedChangeNotificationsCallCount += 1
+        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+
         // Unspecified/whole-table change notifications, with structured column info and primary keys
-        _testChangeNotificationsExpectedChangedKeys = [[1], [2], [3]]
+        _testChangeNotificationsExpectedChangedKeys = [[7], [8], [9]]
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
-        try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], forPrimaryKeys: [1, 2, 3])
+        try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], forPrimaryKeys: [7, 8, 9])
         await MainActor.run { }
         expectedChangeNotificationsCallCount += 1
         XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
@@ -1059,7 +1067,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await TestModel.update(in: db, set: [\.$id : 9999], matching: \.$id == 1)
         XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.queryInvalidations == 1)
         XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 0)
     }
     
     func testCacheSpeed() async throws {

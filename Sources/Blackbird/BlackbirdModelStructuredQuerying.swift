@@ -68,6 +68,8 @@ public struct BlackbirdModelOrderClause<T: BlackbirdModel>: Sendable {
 fileprivate struct DecodedStructuredQuery: Sendable {
     let query: String
     let arguments: [Sendable]
+    let whereClause: String?        // already included in query
+    let whereArguments: [Sendable]? // already included in arguments
     let changedColumns: Blackbird.ColumnNames
     let tableName: String
     let cacheKey: [Blackbird.Value]?
@@ -130,8 +132,13 @@ fileprivate struct DecodedStructuredQuery: Sendable {
 
         if let matching {
             let (whereClause, whereArguments) = matching.compile(table: table)
+            self.whereClause = whereClause
+            self.whereArguments = whereArguments
             if let whereClause { clauses.append("WHERE \(whereClause)") }
             arguments.append(contentsOf: whereArguments)
+        } else {
+            whereClause = nil
+            whereArguments = nil
         }
 
         if !orderBy.isEmpty {
@@ -315,14 +322,33 @@ extension BlackbirdModel {
         let decoded = DecodedStructuredQuery(operation: "UPDATE", matching: matching, updating: changes)
 
         let changeCountBefore = core.changeCount
-        database.changeReporter.ignoreWritesToTable(Self.tableName)
+        database.changeReporter.ignoreWritesToTable(Self.tableName, beginBufferingRowIDs: true)
         defer {
-            database.changeReporter.stopIgnoringWrites()
-            if core.changeCount != changeCountBefore {
-                database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: nil, changedColumns: decoded.changedColumns)
+            let changedRowIDs = database.changeReporter.stopIgnoringWrites()
+            let changeCount = core.changeCount - changeCountBefore
+            var primaryKeys = try? primaryKeysFromRowIDs(in: database, core: core, rowIDs: changedRowIDs)
+            if primaryKeys != nil, primaryKeys!.count != changeCount { primaryKeys = nil }
+            
+            if changeCount > 0 {
+                database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: primaryKeys, changedColumns: decoded.changedColumns)
             }
         }
         try core.query(decoded.query, arguments: decoded.arguments)
+    }
+    
+    private static func primaryKeysFromRowIDs(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, rowIDs: Set<Int64>) throws -> [[Blackbird.Value]]? {
+        if rowIDs.isEmpty { return [] }
+        if rowIDs.count > database.maxQueryVariableCount { return nil }
+    
+        let table = Self.table
+        let columnList = "`\(table.primaryKeys.map { $0.name }.joined(separator: "`,`"))`"
+        let placeholderStr = Array(repeating: "?", count: rowIDs.count).joined(separator: ",")
+        
+        var primaryKeys: [[Blackbird.Value]] = []
+        for row in try core.query("SELECT \(columnList) FROM \(table.name) WHERE _rowid_ IN (\(placeholderStr))", arguments: Array(rowIDs)) {
+            primaryKeys.append(table.primaryKeys.map { row[$0.name]! })
+        }
+        return primaryKeys
     }
 
     /// Changes a subset of the table's rows by primary-key values, using column key-paths for this model type.
@@ -449,7 +475,29 @@ extension BlackbirdModel {
         try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
 
         let decoded = DecodedStructuredQuery(operation: "DELETE FROM", matching: matching)
-        try queryIsolated(in: database, core: core, decoded.query, arguments: decoded.arguments)
+
+        var affectedPrimaryKeys: [[Blackbird.Value]]? = nil
+        if let whereClause = decoded.whereClause, let whereArguments = decoded.whereArguments {
+            let primaryKeyColumnList = "`\(table.primaryKeys.map { $0.name }.joined(separator: "`,`"))`"
+            affectedPrimaryKeys =
+                try core.query("SELECT \(primaryKeyColumnList) FROM \(table.name) WHERE \(whereClause)", arguments: whereArguments)
+                .map { row in
+                    table.primaryKeys.map { row[$0.name]! }
+                }
+        }
+
+        let changeCountBefore = core.changeCount
+        database.changeReporter.ignoreWritesToTable(Self.tableName)
+        defer {
+            database.changeReporter.stopIgnoringWrites()
+            let changeCount = core.changeCount - changeCountBefore
+            if affectedPrimaryKeys != nil, affectedPrimaryKeys!.count != changeCount { affectedPrimaryKeys = nil }
+            
+            if changeCount > 0 {
+                database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: affectedPrimaryKeys, changedColumns: nil)
+            }
+        }
+        try core.query(decoded.query, arguments: decoded.arguments)
     }
 }
 
