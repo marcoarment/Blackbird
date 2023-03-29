@@ -27,7 +27,9 @@
 import SwiftUI
 import Blackbird
 
-struct Post: BlackbirdModel {    
+struct Post: BlackbirdModel {
+//    public static var enableCaching = true
+    
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
 }

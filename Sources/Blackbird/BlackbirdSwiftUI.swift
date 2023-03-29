@@ -174,23 +174,23 @@ extension Blackbird {
         set { }
     }
     
-    private let queryUpdater: Blackbird.ModelUpdater<T>
-    private var generator: Blackbird.CachedResultGenerator<T?>?
-
+    private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
+    private let primaryKeyValues: [Blackbird.Value]
+    
     public init(_ instance: T) {
         _instance = State(initialValue: instance)
-        queryUpdater = Blackbird.ModelUpdater<T>(initialValue: instance)
-
-        do {
-            let primaryKeyValues = try instance.primaryKeyValues()
-            generator = { try await T.read(from: $0, multicolumnPrimaryKey: primaryKeyValues) }
-        } catch {
-            print("[Blackbird.BlackbirdLiveModel<\(String(describing: T.self))>] ⚠️ Error getting primary key values: \(error.localizedDescription)")
-        }
+        primaryKeyValues = try! instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) }
     }
 
     public func update() {
-        queryUpdater.bind(from: environmentDatabase, to: $instance, generator: generator)
+        guard let environmentDatabase else { return }
+        changeObserver.value = T.changePublisher(in: environmentDatabase, multicolumnPrimaryKey: primaryKeyValues)
+        .sink { _ in
+            Task {
+                let instance = try? await T.read(from: environmentDatabase, multicolumnPrimaryKey: primaryKeyValues)
+                await MainActor.run { self.instance = instance }
+            }
+        }
     }
 }
 
@@ -274,38 +274,7 @@ extension Blackbird {
             })
         }
     }
-
-    /// Used in Blackbird's SwiftUI primitives.
-    public class ModelUpdater<T: BlackbirdModel>: @unchecked Sendable { // unchecked due to internal locking
-        @Binding public var instance: T?
-
-        private let resultPublisher: CachedResultPublisher<T?>
-        private var changePublishers: [AnyCancellable] = []
-        private let lock = Blackbird.Lock()
-
-        public init(initialValue: T? = nil) {
-            _instance = Binding<T?>(get: { initialValue }, set: { _ in })
-            resultPublisher = CachedResultPublisher<T?>(initialValue: initialValue)
-        }
-        
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, generator: CachedResultGenerator<T?>?) {
-            lock.lock()
-            defer { lock.unlock() }
-
-            changePublishers.removeAll()
-            resultPublisher.subscribe(to: T.table.name, in: database, generator: generator)
-            _instance = instance
-            changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
-                guard let self else { return }
-                DispatchQueue.main.async {
-                    self.instance = value ?? nil
-                }
-            })
-        }
-    }
-
 }
-
 
 // MARK: - Single-instance updater
 
@@ -314,46 +283,19 @@ extension Blackbird {
     public final class ModelInstanceUpdater<T: BlackbirdModel>: @unchecked Sendable { // unchecked due to internal locking
         @Binding public var instance: T?
         @Binding public var didLoad: Bool
+        private let bindingLock = Blackbird.Lock()
         
-        private var database: Blackbird.Database? = nil
-        private var updater: ((_ db: Blackbird.Database) async throws -> T?)? = nil
-        private var changePublisher: AnyCancellable? = nil
-        private var watchedPrimaryKeys = Blackbird.PrimaryKeyValues()
-        private let lock = Blackbird.Lock()
+        private struct State {
+            var changeObserver: AnyCancellable? = nil
+            var database: Blackbird.Database? = nil
+            var primaryKeyValues: [Blackbird.Value]? = nil
+        }
+        
+        private let state = Blackbird.Locked(State())
 
         public init() {
             _instance = Binding<T?>(get: { nil }, set: { _ in })
             _didLoad = Binding<Bool>(get: { false }, set: { _ in })
-        }
-                
-        /// Update a binding with the current instance matching a single-column primary-key value, and keep it updated over time.
-        /// - Parameters:
-        ///   - database: The database to read from and monitor for changes.
-        ///   - instance: A binding to store the matching instance in. Will be set to `nil` if the database does not contain a matching instance.
-        ///   - didLoad: An optional binding that will be set to `true` after the **first** load of the specified instance has completed.
-        ///   - primaryKey: The single-column primary-key value to match.
-        ///
-        /// See also: ``bind(from:to:didLoad:multicolumnPrimaryKey:)`` and ``bind(from:to:didLoad:id:)``.
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, primaryKey: Sendable) {
-            lock.lock()
-            watchedPrimaryKeys = Blackbird.PrimaryKeyValues([ [try! Blackbird.Value.fromAny(primaryKey)] ])
-            lock.unlock()
-            bind(from: database, to: instance, didLoad: didLoad)  { try await T.read(from: $0, multicolumnPrimaryKey: [primaryKey]) }
-        }
-
-        /// Update a binding with the current instance matching a multi-column primary-key value, and keep it updated over time.
-        /// - Parameters:
-        ///   - database: The database to read from and monitor for changes.
-        ///   - instance: A binding to store the matching instance in. Will be set to `nil` if the database does not contain a matching instance.
-        ///   - didLoad: An optional binding that will be set to `true` after the **first** load of the specified instance has completed.
-        ///   - multicolumnPrimaryKey: The multi-column primary-key values to match.
-        ///
-        /// See also: ``bind(from:to:didLoad:primaryKey:)`` and ``bind(from:to:didLoad:id:)``.
-        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, multicolumnPrimaryKey: [Sendable]) {
-            lock.lock()
-            watchedPrimaryKeys = Blackbird.PrimaryKeyValues([ multicolumnPrimaryKey.map { try! Blackbird.Value.fromAny($0) } ])
-            lock.unlock()
-            bind(from: database, to: instance, didLoad: didLoad)  { try await T.read(from: $0, multicolumnPrimaryKey: multicolumnPrimaryKey) }
         }
 
         /// Update a binding with the current instance matching a single-column primary-key value named `"id"`, and keep it updated over time.
@@ -365,51 +307,67 @@ extension Blackbird {
         ///
         /// See also: ``bind(from:to:didLoad:primaryKey:)`` and ``bind(from:to:didLoad:multicolumnPrimaryKey:)`` .
         public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, id: Sendable) {
-            lock.lock()
-            watchedPrimaryKeys = Blackbird.PrimaryKeyValues([ [try! Blackbird.Value.fromAny(id)] ])
-            lock.unlock()
-            bind(from: database, to: instance, didLoad: didLoad) { try await T.read(from: $0, id: id) }
+            bind(from: database, to: instance, didLoad: didLoad, multicolumnPrimaryKey: [id])
         }
 
-        private func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, updater: @escaping ((_ db: Blackbird.Database) async throws -> T?)) {
-            lock.lock()
-            self.updater = updater
-            self.changeDatabase(database)
-            self._instance = instance
-            if let didLoad { _didLoad = didLoad }
-            lock.unlock()
-            
-            enqueueUpdate()
+        /// Update a binding with the current instance matching a single-column primary-key value, and keep it updated over time.
+        /// - Parameters:
+        ///   - database: The database to read from and monitor for changes.
+        ///   - instance: A binding to store the matching instance in. Will be set to `nil` if the database does not contain a matching instance.
+        ///   - didLoad: An optional binding that will be set to `true` after the **first** load of the specified instance has completed.
+        ///   - primaryKey: The single-column primary-key value to match.
+        ///
+        /// See also: ``bind(from:to:didLoad:multicolumnPrimaryKey:)`` and ``bind(from:to:didLoad:id:)``.
+        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, primaryKey: Sendable) {
+            bind(from: database, to: instance, didLoad: didLoad, multicolumnPrimaryKey: [primaryKey])
         }
 
-        private func update() async throws {
-            let result = updater != nil && database != nil ? try await updater!(database!) : nil
-            await MainActor.run {
-                lock.lock()
-                defer { lock.unlock() }
-                self.instance = result
-                didLoad = true
+        /// Update a binding with the current instance matching a multi-column primary-key value, and keep it updated over time.
+        /// - Parameters:
+        ///   - database: The database to read from and monitor for changes.
+        ///   - instance: A binding to store the matching instance in. Will be set to `nil` if the database does not contain a matching instance.
+        ///   - didLoad: An optional binding that will be set to `true` after the **first** load of the specified instance has completed.
+        ///   - multicolumnPrimaryKey: The multi-column primary-key values to match.
+        ///
+        /// See also: ``bind(from:to:didLoad:primaryKey:)`` and ``bind(from:to:didLoad:id:)``.
+        public func bind(from database: Blackbird.Database?, to instance: Binding<T?>, didLoad: Binding<Bool>? = nil, multicolumnPrimaryKey: [Sendable]) {
+            bindingLock.withLock {
+                self._instance = instance
+                if let didLoad { self._didLoad = didLoad }
             }
-        }
         
-        private func changeDatabase(_ newDatabase: Database?) {
-            if newDatabase == database { return }
-            database = newDatabase
-            
-            if let database {
-                self.changePublisher = database.changeReporter.changePublisher(for: T.table.name).sink { [weak self] change in
-                    guard let self, Blackbird.isRelevantPrimaryKeyChange(watchedPrimaryKeys: self.watchedPrimaryKeys, changedPrimaryKeys: change.primaryKeys) else { return }
-                    self.enqueueUpdate()
+            state.withLock { state in
+                state.database = database
+                state.primaryKeyValues = multicolumnPrimaryKey.map { try! Blackbird.Value.fromAny($0) }
+                if let database, let primaryKeyValues = state.primaryKeyValues {
+                    state.changeObserver = T.changePublisher(in: database, multicolumnPrimaryKey: primaryKeyValues)
+                    .sink { _ in
+                        Task {
+                            let instance = try? await T.read(from: database, multicolumnPrimaryKey: primaryKeyValues)
+                            await MainActor.run {
+                                self.instance = instance
+                                self.didLoad = true
+                            }
+                        }
+                    }
+                } else {
+                    state.changeObserver = nil
                 }
-            } else {
-                self.changePublisher = nil
             }
+            
+            update()
         }
         
-        private func enqueueUpdate() {
+        internal func update() {
+            let (database, primaryKeyValues) = state.withLock { state in (state.database, state.primaryKeyValues) }
+            guard let database, let primaryKeyValues else { return }
+        
             Task {
-                do { try await self.update() }
-                catch { print("[Blackbird.ModelInstanceUpdater<\(String(describing: T.self))>] ⚠️ Error updating: \(error.localizedDescription)") }
+                let instance = try? await T.read(from: database, multicolumnPrimaryKey: primaryKeyValues)
+                await MainActor.run {
+                    self.instance = instance
+                    self.didLoad = true
+                }
             }
         }
     }
