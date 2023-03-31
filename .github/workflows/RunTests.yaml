@@ -21,9 +21,7 @@ jobs:
       - name: Get swift version from Package.swift file
         shell: bash
         run: |
-          swift-tools-version=$( cat ./Package.swift | grep swift-tools-version | cut -d ":" -f2 | sed -e 's/^[[:space:]]*//' )
-          echo "Found swift version: ${swift-tools-version}"
-          echo "swift-tools-version=${swift-tools-version}" >> $GITHUB_ENV
+          echo "swift-tools-version=$( cat ./Package.swift | grep swift-tools-version | cut -d ":" -f2 | sed -e 's/^[[:space:]]*//' )" >> $GITHUB_ENV
       - uses: swift-actions/setup-swift@v1
         with:
           swift-version: "${{ env.swift-tools-version }}"
