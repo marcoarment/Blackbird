@@ -19,9 +19,10 @@ jobs:
       # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#example-of-writing-an-environment-variable-to-github_env
       # get Package.swift file contents, find line with swift-tools-version, get string after :, trim whitespaces from string
       - name: Get swift version from Package.swift file
+        shell: bash
         run: |
           swift-tools-version=$( cat ./Package.swift | grep swift-tools-version | cut -d ":" -f2 | sed -e 's/^[[:space:]]*//' )
-          echo Found swift version: ${swift-tools-version}
+          echo "Found swift version: ${swift-tools-version}"
           echo "swift-tools-version=${swift-tools-version}" >> $GITHUB_ENV
       - uses: swift-actions/setup-swift@v1
         with:
