@@ -69,26 +69,28 @@ extension Blackbird {
         }
     
         // intentionally ignoring primaryKeyIndex since it's only used for internal sorting
-        public static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name && lhs.type == rhs.type && lhs.mayBeNull == rhs.mayBeNull }
+        public static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name && lhs.columnType == rhs.columnType && lhs.mayBeNull == rhs.mayBeNull }
         public func hash(into hasher: inout Hasher) {
             hasher.combine(name)
-            hasher.combine(type)
+            hasher.combine(columnType)
             hasher.combine(mayBeNull)
         }
     
         internal let name: String
-        internal let type: ColumnType
+        internal let columnType: ColumnType
+        internal let valueType: Any.Type?
         internal let mayBeNull: Bool
         
         internal let primaryKeyIndex: Int // Only used for sorting, not considered for equality
         
         internal func definition() -> String {
-            "`\(name)` \(type.definition()) \(mayBeNull ? "NULL" : "NOT NULL") DEFAULT \((mayBeNull ? .null : type.defaultValue()).sqliteLiteral())"
+            "`\(name)` \(columnType.definition()) \(mayBeNull ? "NULL" : "NOT NULL") DEFAULT \((mayBeNull ? .null : columnType.defaultValue()).sqliteLiteral())"
         }
                 
-        public init(name: String, type: ColumnType, mayBeNull: Bool = false) {
+        public init(name: String, columnType: ColumnType, valueType: Any.Type, mayBeNull: Bool = false) {
             self.name = name
-            self.type = type
+            self.columnType = columnType
+            self.valueType = valueType
             self.mayBeNull = mayBeNull
             self.primaryKeyIndex = 0
         }
@@ -101,9 +103,10 @@ extension Blackbird {
                 let primaryKeyIndex = row["pk"]?.intValue
             else { throw Error.cannotParseColumnDefinition(table: tableName, description: "Unexpected format from PRAGMA table_info") }
             
-            guard let type = ColumnType.parseType(typeStr) else { throw Error.cannotParseColumnDefinition(table: tableName, description: "Column \"\(name)\" has unsupported type: \"\(typeStr)\"") }
+            guard let columnType = ColumnType.parseType(typeStr) else { throw Error.cannotParseColumnDefinition(table: tableName, description: "Column \"\(name)\" has unsupported type: \"\(typeStr)\"") }
             self.name = name
-            self.type = type
+            self.columnType = columnType
+            self.valueType = nil
             self.mayBeNull = !notNull
             self.primaryKeyIndex = primaryKeyIndex
         }
@@ -180,6 +183,7 @@ extension Blackbird {
         
         enum Error: Swift.Error {
             case invalidTableDefinition(table: String, description: String)
+            case impossibleMigration(table: String, description: String)
         }
     
         public func hash(into hasher: inout Hasher) {
@@ -339,7 +343,17 @@ extension Blackbird {
                     }
 
                     // add columns and indexes
-                    for columnToAdd in Set(columns).subtracting(schemaInDB.columns) { try core.execute("ALTER TABLE `\(name)` ADD COLUMN \(columnToAdd.definition())") }
+                    for columnToAdd in Set(columns).subtracting(schemaInDB.columns) {
+                        if !columnToAdd.mayBeNull, let valueType = columnToAdd.valueType, valueType is URL.Type {
+                            throw Error.impossibleMigration(
+                                table: name,
+                                description: "Cannot add non-NULL URL column `\(columnToAdd.name)` since default values for existing rows cannot be specified"
+                            )
+                        }
+                        
+                        try core.execute("ALTER TABLE `\(name)` ADD COLUMN \(columnToAdd.definition())")
+                    }
+                    
                     for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: name)) }
 
                     // allow calling model to verify before committing
@@ -408,7 +422,7 @@ internal final class SchemaGenerator: Sendable {
                 if label == "id" { hasColumNamedID = true }
 
                 var isOptional = false
-                var unwrappedType = Swift.type(of: column.value) as Any
+                var unwrappedType = Swift.type(of: column.value) as Any.Type
                 while let wrappedType = unwrappedType as? WrappedType.Type {
                     if unwrappedType is OptionalProtocol.Type {
                         isOptional = true
@@ -429,7 +443,7 @@ internal final class SchemaGenerator: Sendable {
                         fatalError("\(String(describing: T.self)).\(label) is not a supported type for a database column (\(String(describing: unwrappedType)))")
                 }
                 
-                columns.append(Blackbird.Column(name: label, type: columnType, mayBeNull: isOptional))
+                columns.append(Blackbird.Column(name: label, columnType: columnType, valueType: unwrappedType, mayBeNull: isOptional))
             }
         }
         

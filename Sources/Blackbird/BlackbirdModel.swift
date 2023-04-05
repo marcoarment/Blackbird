@@ -685,7 +685,17 @@ extension BlackbirdModel {
 
     internal static func validateSchema(database: Blackbird.Database) throws {
         var testRow = Blackbird.Row()
-        for column in table.columns { testRow[column.name] = column.mayBeNull ? .null : column.type.defaultValue() }
+        for column in table.columns {
+            let defaultValue: Blackbird.Value
+            if column.mayBeNull {
+                defaultValue = .null
+            } else if column.valueType is URL.Type {
+                defaultValue = "https://github.com/"
+            } else {
+                defaultValue = column.columnType.defaultValue()
+            }
+            testRow[column.name] = defaultValue
+        }
         let decoder = BlackbirdSQLiteDecoder(database: database, row: testRow)
         do {
             _ = try Self(from: decoder)
