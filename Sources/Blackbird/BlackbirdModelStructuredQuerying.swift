@@ -208,7 +208,7 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``count(in:matching:)``  for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func countIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>? = nil) async throws -> Int {
+    public static func countIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>? = nil) throws -> Int {
         let decoded = DecodedStructuredQuery(operation: "SELECT COUNT(*) FROM", matching: matching)
         return try _cacheableStructuredResultIsolated(database: database, core: core, decoded: decoded) {
             try _queryInternalIsolated(in: $0, core: $1, decoded.query, arguments: decoded.arguments).first!["COUNT(*)"]!.intValue!
