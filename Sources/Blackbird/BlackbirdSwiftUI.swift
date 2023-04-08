@@ -167,39 +167,100 @@ extension Blackbird {
 /// ```
 @propertyWrapper public struct BlackbirdLiveModel<T: BlackbirdModel>: DynamicProperty {
     @State private var instance: T?
+    private var instanceObserver: BlackbirdModelInstanceChangeObserver<T>
     @Environment(\.blackbirdDatabase) var environmentDatabase
     
     public var wrappedValue: T? {
         get { instance }
-        set { }
+        nonmutating set { instance = newValue }
     }
-    
-    private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
-    private let primaryKeyValues: [Blackbird.Value]
     
     public init(_ instance: T) {
         _instance = State(initialValue: instance)
-        primaryKeyValues = try! instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) }
+        instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: try! instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) })
     }
 
+    public init(type: T.Type, primaryKeyValues: [Any]) {
+        _instance = State(initialValue: nil)
+        instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: primaryKeyValues.map { try! Blackbird.Value.fromAny($0) } )
+    }
+
+    public mutating func update() {
+        instanceObserver.observe(database: environmentDatabase, currentInstance: $instance)
+    }
+}
+
+public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
+    private let primaryKeyValues: [Blackbird.Value]
+    private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
+    private var currentDatabase: Blackbird.Database? = nil
+    private var hasEverUpdated = false
+    
+    private let cachedInstance = Blackbird.Locked<T?>(nil)
+    @Binding public var currentInstance: T?
+
+    public init(primaryKeyValues: [Blackbird.Value]) {
+        self.primaryKeyValues = primaryKeyValues
+        _currentInstance = Binding<T?>(get: { nil }, set: { _ in })
+    }
+    
+    public func observe(database: Blackbird.Database?, currentInstance: Binding<T?>) {
+        _currentInstance = currentInstance
+        guard let database, database != currentDatabase else { return }
+        currentDatabase = database
+        cachedInstance.value = nil
+
+        let primaryKeyValues = primaryKeyValues
+        changeObserver.value = T.changePublisher(in: database, multicolumnPrimaryKey: primaryKeyValues)
+        .sink { [weak self] _ in
+            self?.cachedInstance.value = nil
+            self?.update()
+        }
+        update()
+    }
+    
     public func update() {
-        guard let environmentDatabase else { return }
-        changeObserver.value = T.changePublisher(in: environmentDatabase, multicolumnPrimaryKey: primaryKeyValues)
-        .sink { _ in
-            Task {
-                let instance = try? await T.read(from: environmentDatabase, multicolumnPrimaryKey: primaryKeyValues)
-                await MainActor.run { self.instance = instance }
+        guard let currentDatabase else { return }
+                
+        if let cachedInstance = cachedInstance.value {
+            currentInstance = cachedInstance
+            return
+        }
+        
+        Task {
+            let instance = try? await T.read(from: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
+            self.cachedInstance.value = instance
+            await MainActor.run {
+                self.currentInstance = instance
             }
         }
     }
 }
 
 extension BlackbirdModel {
+    /// A convenience accessor to a ``BlackbirdLiveModel`` instance with the given single-column primary-key value. Useful for SwiftUI.
+    ///
+    /// For models with multi-column primary keys, see ``liveModel(multicolumnPrimaryKey:)``.
+    public static func liveModel(primaryKey: Any) -> BlackbirdLiveModel<Self> {
+        BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: [primaryKey])
+    }
+
+    /// A convenience accessor to a ``BlackbirdLiveModel`` instance with the given multi-column primary-key value. Useful for SwiftUI.
+    ///
+    /// For models with single-column primary keys, see ``liveModel(primaryKey:)``.
+    public static func liveModel(multicolumnPrimaryKey: [Any]) -> BlackbirdLiveModel<Self> {
+        BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: multicolumnPrimaryKey)
+    }
+
+
     /// A convenience accessor to this instance's ``BlackbirdLiveModel``. Useful for SwiftUI.
     public var liveModel: BlackbirdLiveModel<Self> { get { BlackbirdLiveModel(self) } }
 
     /// Shorthand for this model's ``Blackbird/LiveResults`` type.
     public typealias LiveResults = Blackbird.LiveResults<Self>
+    
+    /// Shorthand for this model's ``BlackbirdLiveModel`` type.
+    public typealias LiveModel = BlackbirdLiveModel<Self>
 }
 
 // MARK: - Multi-row query updaters
