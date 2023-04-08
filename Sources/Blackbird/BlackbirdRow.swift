@@ -1,9 +1,16 @@
 //
+//           /\
+//          |  |                       Blackbird
+//          |  |
+//         .|  |.       https://github.com/marcoarment/Blackbird
+//         $    $
+//        /$    $\          Copyright 2022–2023 Marco Arment
+//       / $|  |$ \          Released under the MIT License
+//      .__$|  |$__.
+//           \/
+//
 //  BlackbirdRow.swift
 //  Created by Marco Arment on 2/27/23.
-//  Copyright (c) 2023 Marco Arment
-//
-//  Released under the MIT License
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal

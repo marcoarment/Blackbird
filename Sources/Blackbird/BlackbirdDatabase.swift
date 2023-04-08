@@ -1,9 +1,16 @@
 //
+//           /\
+//          |  |                       Blackbird
+//          |  |
+//         .|  |.       https://github.com/marcoarment/Blackbird
+//         $    $
+//        /$    $\          Copyright 2022–2023 Marco Arment
+//       / $|  |$ \          Released under the MIT License
+//      .__$|  |$__.
+//           \/
+//
 //  BlackbirdDatabase.swift
 //  Created by Marco Arment on 11/28/22.
-//  Copyright (c) 2022 Marco Arment
-//
-//  Released under the MIT License
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal

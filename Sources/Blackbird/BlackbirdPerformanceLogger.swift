@@ -1,9 +1,16 @@
 //
-//  BlackbirdPerformanceLogger.swift
-//  Created for Marco Arment on 12/03/22.
-//  Copyright (c) 2022 Marco Arment
+//           /\
+//          |  |                       Blackbird
+//          |  |
+//         .|  |.       https://github.com/marcoarment/Blackbird
+//         $    $
+//        /$    $\          Copyright 2022–2023 Marco Arment
+//       / $|  |$ \          Released under the MIT License
+//      .__$|  |$__.
+//           \/
 //
-//  Released under the MIT License
+//  BlackbirdPerformanceLogger.swift
+//  Created by Guy English for Marco Arment on 12/03/22.
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
