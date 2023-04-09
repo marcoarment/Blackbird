@@ -39,7 +39,7 @@ struct TestModel: BlackbirdModel {
         [ \.$title ]
     ]
     
-    static var enableCaching: Bool = false
+    static var cacheLimit: Int = 0
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
@@ -56,7 +56,7 @@ struct TestModelWithoutIDColumn: BlackbirdModel {
 }
 
 struct TestModelWithDescription: BlackbirdModel {
-    static var enableCaching = false
+    static var cacheLimit: Int = 0
 
     static var indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ],

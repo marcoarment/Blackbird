@@ -31,7 +31,7 @@
 //  SOFTWARE.
 //
 
-import Foundation
+@preconcurrency import Foundation // @preconcurrency due to DispatchSource not being annotated
 
 extension Blackbird.Database {
     public struct CachePerformanceMetrics: Sendable {
@@ -41,6 +41,8 @@ extension Blackbird.Database {
         public let rowInvalidations: Int
         public let queryInvalidations: Int
         public let tableInvalidations: Int
+        public let evictions: Int
+        public let lowMemoryFlushes: Int
     }
     
     public func cachePerformanceMetricsByTableName() -> [String: CachePerformanceMetrics] { cache.performanceMetrics() }
@@ -54,15 +56,55 @@ extension Blackbird.Database {
                 totalRequests == 0 ? "0%" :
                 "\(Int(100.0 * Double(metrics.hits) / Double(totalRequests)))%"
                 
-            print("\(tableName): \(metrics.hits) hits (\(hitPercentStr)), \(metrics.misses) misses, \(metrics.writes) writes, \(metrics.rowInvalidations) row invalidations, \(metrics.queryInvalidations) query invalidations, \(metrics.tableInvalidations) table invalidations")
+            print("\(tableName): \(metrics.hits) hits (\(hitPercentStr)), \(metrics.misses) misses, \(metrics.writes) writes, \(metrics.rowInvalidations) row invalidations, \(metrics.queryInvalidations) query invalidations, \(metrics.tableInvalidations) table invalidations, \(metrics.evictions) evictions, \(metrics.lowMemoryFlushes) low-memory flushes")
         }
     }
 
     internal final class Cache: Sendable {
+        private class CacheEntry<T> {
+            typealias AccessTime = UInt64
+            private let _value: T
+            var lastAccessed: AccessTime
+            
+            init(_ value: T) {
+                _value = value
+                lastAccessed = mach_absolute_time()
+            }
+            
+            public func value() -> T {
+                lastAccessed = mach_absolute_time()
+                return _value
+            }
+        }
+
+        private let lowMemoryEventSource: DispatchSourceMemoryPressure
+        public init() {
+            lowMemoryEventSource = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical])
+            lowMemoryEventSource.setEventHandler { [weak self] in
+                self?.entriesByTableName.withLock { entries in
+                    //
+                    // To avoid loading potentially-compressed memory pages and exacerbating memory pressure,
+                    //  or taking precious time to walk the cache contents with the normal prune() operation,
+                    //  just dump everything.
+                    //
+                    for (_, cache) in entries {
+                        cache.modelsByPrimaryKey.removeAll(keepingCapacity: false)
+                        cache.cachedQueries.removeAll(keepingCapacity: false)
+                        cache.lowMemoryFlushes += 1
+                    }
+                }
+            }
+            lowMemoryEventSource.resume()
+        }
+        
+        deinit {
+            lowMemoryEventSource.cancel()
+        }
+    
         private final class TableCache {
             // Cached data
-            var modelsByPrimaryKey: [Blackbird.Value: any BlackbirdModel] = [:]
-            var cachedQueries: [[Blackbird.Value]: Any] = [:]
+            var modelsByPrimaryKey: [Blackbird.Value: CacheEntry<any BlackbirdModel>] = [:]
+            var cachedQueries: [[Blackbird.Value]: CacheEntry<Any>] = [:]
             
             // Performance counters
             var hits: Int = 0
@@ -71,6 +113,34 @@ extension Blackbird.Database {
             var rowInvalidations: Int = 0
             var queryInvalidations: Int = 0
             var tableInvalidations: Int = 0
+            var evictions: Int = 0
+            var lowMemoryFlushes: Int = 0
+            
+            func prune(entryLimit: Int) {
+                if modelsByPrimaryKey.count + cachedQueries.count <= entryLimit { return }
+                
+                // As a table hits its entry limit, to avoid running the expensive pruning operation after EVERY addition,
+                //  we prune the cache to HALF of its size limit to give it some headroom until the next prune is needed.
+                let pruneToEntryLimit = entryLimit / 2
+                
+                if pruneToEntryLimit < 1 {
+                    modelsByPrimaryKey.removeAll()
+                    cachedQueries.removeAll()
+                    return
+                }
+
+                var accessTimes: [CacheEntry.AccessTime] = []
+                for (_, entry) in modelsByPrimaryKey { accessTimes.append(entry.lastAccessed) }
+                for (_, entry) in cachedQueries      { accessTimes.append(entry.lastAccessed) }
+                accessTimes.sort(by: >)
+                
+                let evictionCount = accessTimes.count - pruneToEntryLimit
+                guard evictionCount > 0 else { return }
+                let accessTimeThreshold = accessTimes[pruneToEntryLimit]
+                modelsByPrimaryKey = modelsByPrimaryKey.filter { (key, value) in value.lastAccessed > accessTimeThreshold }
+                cachedQueries      = cachedQueries.filter      { (key, value) in value.lastAccessed > accessTimeThreshold }
+                evictions += evictionCount
+            }
             
             func invalidate(primaryKeyValue: Blackbird.Value? = nil) {
                 if let primaryKeyValue {
@@ -124,8 +194,9 @@ extension Blackbird.Database {
                 }
 
                 if let hit = tableCache.modelsByPrimaryKey[primaryKey] {
+                    hit.lastAccessed = mach_absolute_time()
                     tableCache.hits += 1
-                    return hit
+                    return hit.value()
                 } else {
                     tableCache.misses += 1
                     return nil
@@ -147,7 +218,7 @@ extension Blackbird.Database {
                 var hits: [any BlackbirdModel] = []
                 var missedKeys: [Blackbird.Value] = []
                 for key in primaryKeys {
-                    if let hit = tableCache.modelsByPrimaryKey[key] { hits.append(hit) } else { missedKeys.append(key) }
+                    if let hit = tableCache.modelsByPrimaryKey[key] { hits.append(hit.value()) } else { missedKeys.append(key) }
                 }
                 tableCache.hits += hits.count
                 tableCache.misses += missedKeys.count
@@ -155,7 +226,7 @@ extension Blackbird.Database {
             }
         }
 
-        internal func writeModel(tableName: String, primaryKey: Blackbird.Value, instance: any BlackbirdModel) {
+        internal func writeModel(tableName: String, primaryKey: Blackbird.Value, instance: any BlackbirdModel, entryLimit: Int) {
             entriesByTableName.withLock {
                 let tableCache: TableCache
                 if let existingCache = $0[tableName] { tableCache = existingCache }
@@ -164,8 +235,9 @@ extension Blackbird.Database {
                     $0[tableName] = tableCache
                 }
 
-                tableCache.modelsByPrimaryKey[primaryKey] = instance
+                tableCache.modelsByPrimaryKey[primaryKey] = CacheEntry(instance)
                 tableCache.writes += 1
+                tableCache.prune(entryLimit: entryLimit)
             }
         }
 
@@ -196,7 +268,7 @@ extension Blackbird.Database {
 
                 if let hit = tableCache.cachedQueries[cacheKey] {
                     tableCache.hits += 1
-                    return hit
+                    return hit.value()
                 } else {
                     tableCache.misses += 1
                     return nil
@@ -204,7 +276,7 @@ extension Blackbird.Database {
             }
         }
 
-        internal func writeQueryResult(tableName: String, cacheKey: [Blackbird.Value], result: Sendable) {
+        internal func writeQueryResult(tableName: String, cacheKey: [Blackbird.Value], result: Sendable, entryLimit: Int) {
             entriesByTableName.withLock {
                 let tableCache: TableCache
                 if let existingCache = $0[tableName] { tableCache = existingCache }
@@ -213,14 +285,15 @@ extension Blackbird.Database {
                     $0[tableName] = tableCache
                 }
 
-                tableCache.cachedQueries[cacheKey] = result
+                tableCache.cachedQueries[cacheKey] = CacheEntry(result)
                 tableCache.writes += 1
+                tableCache.prune(entryLimit: entryLimit)
             }
         }
         
         internal func performanceMetrics() -> [String: CachePerformanceMetrics] {
             entriesByTableName.withLock { tableCaches in
-                tableCaches.mapValues { CachePerformanceMetrics(hits: $0.hits, misses: $0.misses, writes: $0.writes, rowInvalidations: $0.rowInvalidations, queryInvalidations: $0.queryInvalidations, tableInvalidations: $0.tableInvalidations) }
+                tableCaches.mapValues { CachePerformanceMetrics(hits: $0.hits, misses: $0.misses, writes: $0.writes, rowInvalidations: $0.rowInvalidations, queryInvalidations: $0.queryInvalidations, tableInvalidations: $0.tableInvalidations, evictions: $0.evictions, lowMemoryFlushes: $0.lowMemoryFlushes) }
             }
         }
 
@@ -233,24 +306,25 @@ extension Blackbird.Database {
 
 extension BlackbirdModel {
     internal func _saveCachedInstance(for database: Blackbird.Database) {
-        if Self.enableCaching, let pkValues = try? self.primaryKeyValues(), pkValues.count == 1, let pk = try? Blackbird.Value.fromAny(pkValues.first!) {
-            database.cache.writeModel(tableName: Self.tableName, primaryKey: pk, instance: self)
+        let cacheLimit = Self.cacheLimit
+        if cacheLimit > 0, let pkValues = try? self.primaryKeyValues(), pkValues.count == 1, let pk = try? Blackbird.Value.fromAny(pkValues.first!) {
+            database.cache.writeModel(tableName: Self.tableName, primaryKey: pk, instance: self, entryLimit: cacheLimit)
         }
     }
 
     internal func _deleteCachedInstance(for database: Blackbird.Database) {
-        if Self.enableCaching, let pkValues = try? self.primaryKeyValues(), pkValues.count == 1, let pk = try? Blackbird.Value.fromAny(pkValues.first!) {
+        if Self.cacheLimit > 0, let pkValues = try? self.primaryKeyValues(), pkValues.count == 1, let pk = try? Blackbird.Value.fromAny(pkValues.first!) {
             database.cache.deleteModel(tableName: Self.tableName, primaryKey: pk)
         }
     }
 
     internal static func _cachedInstance(for database: Blackbird.Database, primaryKeyValue: Blackbird.Value) -> Self? {
-        guard Self.enableCaching else { return nil }
+        guard Self.cacheLimit > 0 else { return nil }
         return database.cache.readModel(tableName: Self.tableName, primaryKey: primaryKeyValue) as? Self
     }
 
     internal static func _cachedInstances(for database: Blackbird.Database, primaryKeyValues: [Blackbird.Value]) -> (hits: [Self], missedKeys: [Blackbird.Value]) {
-        guard Self.enableCaching else { return (hits: [], missedKeys: primaryKeyValues) }
+        guard Self.cacheLimit > 0 else { return (hits: [], missedKeys: primaryKeyValues) }
         let results = database.cache.readModels(tableName: Self.tableName, primaryKeys: primaryKeyValues)
 
         var hits: [Self] = []

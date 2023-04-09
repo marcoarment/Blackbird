@@ -988,7 +988,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testCache() async throws {
-        TestModel.enableCaching = true
+        TestModel.cacheLimit = 10000
 
         let db = try Blackbird.Database(path: sqliteFilename)
 
@@ -1068,8 +1068,8 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     func testCacheSpeed() async throws {
         let cacheEnabled = true
 
-        TestModel.enableCaching = cacheEnabled
-        TestModelWithDescription.enableCaching = cacheEnabled
+        TestModel.cacheLimit = cacheEnabled ? 10000 : 0
+        TestModelWithDescription.cacheLimit = TestModel.cacheLimit
         let startTime = Date()
         try await testQueries()
         try await testHeavyWorkload()

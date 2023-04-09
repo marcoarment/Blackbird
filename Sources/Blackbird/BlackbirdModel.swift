@@ -184,14 +184,16 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     /// If unspecified, no additional unique indexes are created.
     static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { get }
 
-    /// Use basic, automatic caching for primary-key reads. Disabled by default.
+    /// The number of entries to keep in the automatic query cache. Set to `0` to disable the cache. The default is `0`.
     ///
-    /// May break assumptions if cacheable data is read by another thread during a transaction.
+    /// Entries are retained in most-recently-accessed order.
+    ///
+    /// Using this cache may break assumptions if cacheable data is read by another thread during a transaction.
     ///
     /// Only works for tables with single-column primary keys.
     ///
-    /// > Note: The cache is not limited in size. Use caution with memory usage if enabled for large tables.
-    static var enableCaching: Bool { get }
+    /// > Note: The cache is not limited in byte size — only entry count. Use caution with memory usage if enabled for large tables.
+    static var cacheLimit: Int { get }
 
     /// Shorthand for this type's `ModelArrayUpdater` interface for SwiftUI.
     typealias ArrayUpdater = Blackbird.ModelArrayUpdater<Self>
@@ -209,7 +211,7 @@ extension BlackbirdModel {
     public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
-    public static var enableCaching: Bool { false }
+    public static var cacheLimit: Int { 0 }
 
     // Identifiable
     public var id: [AnyHashable] {
@@ -619,7 +621,7 @@ extension BlackbirdModel {
         return try await self._queryInternal(in: database, query, arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
-            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            instance._saveCachedInstance(for: database)
             return instance
         }
     }
@@ -629,7 +631,7 @@ extension BlackbirdModel {
         return try self._queryInternalIsolated(in: database, core: core, query, arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
-            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            instance._saveCachedInstance(for: database)
             return instance
         }
     }
@@ -654,7 +656,7 @@ extension BlackbirdModel {
         return try await query(in: database, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
-            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            instance._saveCachedInstance(for: database)
             return instance
         }
     }
@@ -672,7 +674,7 @@ extension BlackbirdModel {
             return try self._queryInternalIsolated(in: $0, core: $1, query, arguments: arguments).map {
                 let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
                 let instance = try Self(from: decoder)
-                if Self.enableCaching { instance._saveCachedInstance(for: database) }
+                instance._saveCachedInstance(for: database)
                 return instance
             }
         }
@@ -683,7 +685,7 @@ extension BlackbirdModel {
         return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
-            if Self.enableCaching { instance._saveCachedInstance(for: database) }
+            instance._saveCachedInstance(for: database)
             return instance
         }
     }
@@ -879,7 +881,7 @@ extension BlackbirdModel {
         defer {
             database.changeReporter.stopIgnoringWrites()
             database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: [primaryKeyValues], changedColumns: changedColumnNames)
-            if Self.enableCaching { self._saveCachedInstance(for: database) }
+            self._saveCachedInstance(for: database)
         }
         try core.query(sql, arguments: values)
         for column in changedColumns { column.clearHasChanged(in: database) }
@@ -912,28 +914,30 @@ extension BlackbirdModel {
         }
         let sql = "DELETE FROM `\(Self.tableName)` WHERE \(andClauses.joined(separator: " AND "))"
         try core.query(sql, arguments: values)
-        if Self.enableCaching { self._deleteCachedInstance(for: database) }
+        self._deleteCachedInstance(for: database)
     }
 
     fileprivate static func _cacheableResult<T>(database: Blackbird.Database, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
-        guard Self.enableCaching else { return try await resultFetcher(database) }
+        let cacheLimit = Self.cacheLimit
+        guard cacheLimit > 0 else { return try await resultFetcher(database) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
         if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
         
         let result = try await resultFetcher(database)
-        database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result)
+        database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }
 
     fileprivate static func _cacheableResultIsolated<T>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
-        guard Self.enableCaching else { return try resultFetcher(database, core) }
+        let cacheLimit = Self.cacheLimit
+        guard cacheLimit > 0 else { return try resultFetcher(database, core) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
         if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
         
         let result = try resultFetcher(database, core)
-        database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result)
+        database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }
 }

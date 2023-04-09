@@ -173,22 +173,24 @@ fileprivate struct DecodedStructuredQuery: Sendable {
 
 extension BlackbirdModel {
     fileprivate static func _cacheableStructuredResult<T>(database: Blackbird.Database, decoded: DecodedStructuredQuery, resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
-        guard Self.enableCaching, let cacheKey = decoded.cacheKey else { return try await resultFetcher(database) }
+        let cacheLimit = Self.cacheLimit
+        guard cacheLimit > 0, let cacheKey = decoded.cacheKey else { return try await resultFetcher(database) }
         
         if let cachedResult = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey) as? T { return cachedResult }
         
         let result = try await resultFetcher(database)
-        database.cache.writeQueryResult(tableName: decoded.tableName, cacheKey: cacheKey, result: result)
+        database.cache.writeQueryResult(tableName: decoded.tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }
 
     fileprivate static func _cacheableStructuredResultIsolated<T>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, decoded: DecodedStructuredQuery, resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
-        guard Self.enableCaching, let cacheKey = decoded.cacheKey else { return try resultFetcher(database, core) }
+        let cacheLimit = Self.cacheLimit
+        guard cacheLimit > 0, let cacheKey = decoded.cacheKey else { return try resultFetcher(database, core) }
         
         if let cachedResult = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey) as? T { return cachedResult }
         
         let result = try resultFetcher(database, core)
-        database.cache.writeQueryResult(tableName: decoded.tableName, cacheKey: cacheKey, result: result)
+        database.cache.writeQueryResult(tableName: decoded.tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }
 
