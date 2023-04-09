@@ -177,19 +177,26 @@ extension Blackbird {
     private var instanceObserver: BlackbirdModelInstanceChangeObserver<T>
     @Environment(\.blackbirdDatabase) var environmentDatabase
     
+    public var updatesEnabled: Bool {
+        get { instanceObserver.updatesEnabled }
+        nonmutating set { instanceObserver.updatesEnabled = newValue }
+    }
+    
     public var wrappedValue: T? {
         get { instance }
         nonmutating set { instance = newValue }
     }
     
-    public init(_ instance: T) {
+    public init(_ instance: T, updatesEnabled: Bool = true) {
         _instance = State(initialValue: instance)
         instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: try! instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) })
+        instanceObserver.updatesEnabled = updatesEnabled
     }
 
-    public init(type: T.Type, primaryKeyValues: [Any]) {
+    public init(type: T.Type, primaryKeyValues: [Any], updatesEnabled: Bool = true) {
         _instance = State(initialValue: nil)
         instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: primaryKeyValues.map { try! Blackbird.Value.fromAny($0) } )
+        instanceObserver.updatesEnabled = updatesEnabled
     }
 
     public mutating func update() {
@@ -202,6 +209,12 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
     private var currentDatabase: Blackbird.Database? = nil
     private var hasEverUpdated = false
+
+    public var updatesEnabled = true {
+        didSet {
+            update()
+        }
+    }
     
     private let cachedInstance = Blackbird.Locked<T?>(nil)
     @Binding public var currentInstance: T?
@@ -227,7 +240,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     }
     
     public func update() {
-        guard let currentDatabase else { return }
+        guard let currentDatabase, updatesEnabled else { return }
                 
         if let cachedInstance = cachedInstance.value {
             currentInstance = cachedInstance
@@ -248,15 +261,15 @@ extension BlackbirdModel {
     /// A convenience accessor to a ``BlackbirdLiveModel`` instance with the given single-column primary-key value. Useful for SwiftUI.
     ///
     /// For models with multi-column primary keys, see ``liveModel(multicolumnPrimaryKey:)``.
-    public static func liveModel(primaryKey: Any) -> BlackbirdLiveModel<Self> {
-        BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: [primaryKey])
+    public static func liveModel(primaryKey: Any, updatesEnabled: Bool = true) -> BlackbirdLiveModel<Self> {
+        BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: [primaryKey], updatesEnabled: updatesEnabled)
     }
 
     /// A convenience accessor to a ``BlackbirdLiveModel`` instance with the given multi-column primary-key value. Useful for SwiftUI.
     ///
     /// For models with single-column primary keys, see ``liveModel(primaryKey:)``.
-    public static func liveModel(multicolumnPrimaryKey: [Any]) -> BlackbirdLiveModel<Self> {
-        BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: multicolumnPrimaryKey)
+    public static func liveModel(multicolumnPrimaryKey: [Any], updatesEnabled: Bool = true) -> BlackbirdLiveModel<Self> {
+        BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: multicolumnPrimaryKey, updatesEnabled: updatesEnabled)
     }
 
 
