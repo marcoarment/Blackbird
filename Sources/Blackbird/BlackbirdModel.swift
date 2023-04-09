@@ -503,7 +503,16 @@ extension BlackbirdModel {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
-        return try await self.read(from: database, sqlWhere: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
+        
+        let sqlWhere = table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND ")
+
+        if multicolumnPrimaryKey.count == 1 {
+            let pkValue = try Blackbird.Value.fromAny(multicolumnPrimaryKey.first!)
+            if let cached = _cachedInstance(for: database, primaryKeyValue: pkValue) { return cached }
+            return try await _readInternal(from: database, query: "SELECT * FROM $T WHERE \(sqlWhere)", arguments: [pkValue]).first
+        }
+        
+        return try await self.read(from: database, sqlWhere: sqlWhere, multicolumnPrimaryKey).first
     }
 
     /// Synchronous version of ``read(from:multicolumnPrimaryKey:)-926f3`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -511,6 +520,15 @@ extension BlackbirdModel {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
+
+        let sqlWhere = table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND ")
+
+        if multicolumnPrimaryKey.count == 1 {
+            let pkValue = try Blackbird.Value.fromAny(multicolumnPrimaryKey.first!)
+            if let cached = _cachedInstance(for: database, primaryKeyValue: pkValue) { return cached }
+            return try _readInternalIsolated(from: database, core: core, query: "SELECT * FROM $T WHERE \(sqlWhere)", arguments: [pkValue]).first
+        }
+
         return try self.readIsolated(from: database, core: core, sqlWhere: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
