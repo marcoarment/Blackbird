@@ -177,6 +177,8 @@ extension Blackbird {
     private var instanceObserver: BlackbirdModelInstanceChangeObserver<T>
     @Environment(\.blackbirdDatabase) var environmentDatabase
     
+    public var changePublisher: AnyPublisher<T?, Never> { instanceObserver.changePublisher }
+
     public var updatesEnabled: Bool {
         get { instanceObserver.updatesEnabled }
         nonmutating set { instanceObserver.updatesEnabled = newValue }
@@ -209,6 +211,9 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
     private var currentDatabase: Blackbird.Database? = nil
     private var hasEverUpdated = false
+    
+    private var _changePublisher = PassthroughSubject<T?, Never>()
+    public var changePublisher: AnyPublisher<T?, Never> { _changePublisher.eraseToAnyPublisher() }
 
     public var updatesEnabled = true {
         didSet {
@@ -244,6 +249,9 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
                 
         if let cachedInstance = cachedInstance.value {
             currentInstance = cachedInstance
+            Task {
+                await MainActor.run { _changePublisher.send(cachedInstance) }
+            }
             return
         }
         
@@ -252,6 +260,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
             self.cachedInstance.value = instance
             await MainActor.run {
                 self.currentInstance = instance
+                _changePublisher.send(instance)
             }
         }
     }
