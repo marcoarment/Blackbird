@@ -217,7 +217,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
 
     public var updatesEnabled = true {
         didSet {
-            update()
+            Task.detached { [weak self] in await self?.update() }
         }
     }
     
@@ -237,31 +237,32 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
 
         let primaryKeyValues = primaryKeyValues
         changeObserver.value = T.changePublisher(in: database, multicolumnPrimaryKey: primaryKeyValues)
-        .sink { [weak self] _ in
-            self?.cachedInstance.value = nil
-            self?.update()
+        .sink { _ in
+            Task.detached { [weak self] in
+                self?.cachedInstance.value = nil
+                await self?.update()
+            }
         }
-        update()
+        
+        Task.detached { [weak self] in await self?.update() }
     }
     
-    public func update() {
+    public func update() async {
         guard let currentDatabase, updatesEnabled else { return }
                 
         if let cachedInstance = cachedInstance.value {
             currentInstance = cachedInstance
-            Task {
-                await MainActor.run { _changePublisher.send(cachedInstance) }
+            await MainActor.run {
+                _changePublisher.send(cachedInstance)
             }
             return
         }
         
-        Task {
-            let instance = try? await T.read(from: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
-            self.cachedInstance.value = instance
-            await MainActor.run {
-                self.currentInstance = instance
-                _changePublisher.send(instance)
-            }
+        let instance = try? await T.read(from: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
+        cachedInstance.value = instance
+        await MainActor.run {
+            currentInstance = instance
+            _changePublisher.send(instance)
         }
     }
 }
@@ -432,7 +433,8 @@ extension Blackbird {
                 if let database, let primaryKeyValues = state.primaryKeyValues {
                     state.changeObserver = T.changePublisher(in: database, multicolumnPrimaryKey: primaryKeyValues)
                     .sink { _ in
-                        Task {
+                        Task.detached { [weak self] in
+                            guard let self else { return }
                             let instance = try? await T.read(from: database, multicolumnPrimaryKey: primaryKeyValues)
                             await MainActor.run {
                                 self.instance = instance
@@ -452,7 +454,8 @@ extension Blackbird {
             let (database, primaryKeyValues) = state.withLock { state in (state.database, state.primaryKeyValues) }
             guard let database, let primaryKeyValues else { return }
         
-            Task {
+            Task.detached { [weak self] in
+                guard let self else { return }
                 let instance = try? await T.read(from: database, multicolumnPrimaryKey: primaryKeyValues)
                 await MainActor.run {
                     self.instance = instance

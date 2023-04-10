@@ -382,8 +382,8 @@ extension Blackbird {
         
         private func enqueueUpdate() {
             let cachedResults = config.withLock { $0.cachedResults }
-            Task {
-                do { try await self.update(cachedResults) }
+            Task.detached { [weak self] in
+                do { try await self?.update(cachedResults) }
                 catch { print("[Blackbird.CachedResultPublisher<\(String(describing: T.self))>] ⚠️ Error updating: \(error.localizedDescription)") }
             }
         }
