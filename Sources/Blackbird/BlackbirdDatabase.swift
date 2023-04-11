@@ -242,6 +242,67 @@ extension Blackbird {
             
             /// Monitor for changes to the database file from outside of this connection, such as from a different process or a different SQLite library within the same process.
             public static let monitorForExternalChanges      = Options(rawValue: 1 << 5)
+
+            /// Require the calling of ``BlackbirdModel/resolveSchema(in:)`` before any queries to a `BlackbirdModel` type.
+            ///
+            /// Without this option, schema validation and any needed migrations are performed upon the first query to a ``BlackbirdModel`` type.
+            /// This is convenient, but has downsides:
+            ///
+            /// - Schema migrations occurring at unpredictable times may cause unpredictable performance.
+            /// - The callsite for failed validations or schema migrations is unpredictable, making it difficult to build recovery logic.
+            /// - If using multiple ``Blackbird/Database`` instances, subtle bugs may be introduced if a ``BlackbirdModel`` is inadvertently queried with the wrong database.
+            ///
+            /// With this option set, any ``BlackbirdModel`` type must first call ``BlackbirdModel/resolveSchema(in:)`` before any queries are performed against it for this database.
+            ///
+            /// If any queries are performed without first having called ``BlackbirdModel/resolveSchema(in:)``, a fatal error occurs.
+            ///
+            /// In addition to creating more predictable performance, this is useful to enforce the consolidation of schema validation and migrations to database-opening time so the caller can take appropriate action.
+            ///
+            /// ## Example
+            /// ```swift
+            /// do {
+            ///     let db = try Blackbird.Database(path: …, options: [.requireModelSchemaValidationBeforeUse])
+            ///
+            ///     for modelType in [
+            ///         // List all BlackbirdModel types to be used with this database:
+            ///         Author.self,
+            ///         Post.self,
+            ///         Genre.self,
+            ///     ] {
+            ///         // Validate schema and attempt any needed migrations
+            ///         try await modelType.resolveSchema(in: db)
+            ///     }
+            /// } catch {
+            ///     // Perform appropriate recovery actions, such as
+            ///     //  deleting the database file so it can be recreated:
+            ///     try? Blackbird.Database.delete(atPath: …)
+            /// }
+            /// ```
+            public static let requireModelSchemaValidationBeforeUse = Options(rawValue: 1 << 6)
+        }
+        
+        /// Returns all filenames expected to be used by a database if created at the given file path.
+        ///
+        /// SQLite typically uses three files for a database:
+        /// - The supplied path
+        /// - A second file at the path with `-wal` appended
+        /// - A third file at the path with `-shm` appended
+        ///
+        /// This method returns all three expected filenames based on the given path.
+        public static func allFilePaths(for path: String) -> [String] {
+            // Can't use sqlite3_filename_wal(), etc. because we don't have a DB connection.
+            return [path, "\(path)-wal", "\(path)-shm"]
+        }
+        
+        /// Delete the database files, if they exist, at the given path.
+        ///
+        /// > Note: This will delete multiple files. See ``allFilePaths(for:)``.
+        public static func delete(atPath path: String) throws {
+            for dbFilePath in allFilePaths(for: path) {
+                if FileManager.default.fileExists(atPath: dbFilePath) {
+                    try FileManager.default.removeItem(atPath: dbFilePath)
+                }
+            }
         }
         
         internal final class InstancePool: Sendable {

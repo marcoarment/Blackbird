@@ -799,7 +799,7 @@ extension BlackbirdModel {
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to resolve the schema in.
     public static func resolveSchema(in database: Blackbird.Database) async throws {
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core, isExplicitResolve: true) { try validateSchema(database: database) }
     }
     
     /// The primary-key values of the current instance, as an array (to support multi-column primary keys).

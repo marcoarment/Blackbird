@@ -177,6 +177,9 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testQueries() async throws {
+        let allFilenames = Blackbird.Database.allFilePaths(for: sqliteFilename)
+        print("SQLite filenames:\n\(allFilenames.joined(separator: "\n"))")
+    
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues, .debugPrintEveryReportedChange])
         let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
         

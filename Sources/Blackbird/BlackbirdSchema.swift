@@ -284,8 +284,13 @@ extension Blackbird {
         
         internal func createIndexStatements<T: BlackbirdModel>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
         
-        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, validator: (@Sendable () throws -> Void)?) async throws {
+        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable () throws -> Void)?) async throws {
             if _isAlreadyResolved(type: type, in: database) { return }
+            
+            if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
+                fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
+            }
+            
             try await core.transaction {
                 try _resolveWithDatabaseIsolated(type: type, database: database, core: $0, validator: validator)
             }
