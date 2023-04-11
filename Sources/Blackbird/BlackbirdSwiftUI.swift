@@ -154,7 +154,7 @@ extension Blackbird {
 ///
 /// Set `@Environment(\.blackbirdDatabase)` to the desired database instance to read.
 ///
-/// The ``BlackbirdModel/liveModel`` property is helpful when initializing child views with a specific instance.
+/// The ``BlackbirdModel/liveModel-swift.property`` property is helpful when initializing child views with a specific instance.
 ///
 /// Example:
 ///
@@ -270,14 +270,14 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
 extension BlackbirdModel {
     /// A convenience accessor to a ``BlackbirdLiveModel`` instance with the given single-column primary-key value. Useful for SwiftUI.
     ///
-    /// For models with multi-column primary keys, see ``liveModel(multicolumnPrimaryKey:)``.
+    /// For models with multi-column primary keys, see ``liveModel(multicolumnPrimaryKey:updatesEnabled:)``.
     public static func liveModel(primaryKey: Any, updatesEnabled: Bool = true) -> BlackbirdLiveModel<Self> {
         BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: [primaryKey], updatesEnabled: updatesEnabled)
     }
 
     /// A convenience accessor to a ``BlackbirdLiveModel`` instance with the given multi-column primary-key value. Useful for SwiftUI.
     ///
-    /// For models with single-column primary keys, see ``liveModel(primaryKey:)``.
+    /// For models with single-column primary keys, see ``liveModel(primaryKey:updatesEnabled:)``.
     public static func liveModel(multicolumnPrimaryKey: [Any], updatesEnabled: Bool = true) -> BlackbirdLiveModel<Self> {
         BlackbirdLiveModel<Self>(type: Self.self, primaryKeyValues: multicolumnPrimaryKey, updatesEnabled: updatesEnabled)
     }
