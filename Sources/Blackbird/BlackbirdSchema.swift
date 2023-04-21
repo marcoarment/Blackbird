@@ -139,7 +139,7 @@ extension Blackbird {
         
         internal func definition(tableName: String) -> String {
             if columnNames.isEmpty { fatalError("Indexes require at least one column") }
-            return "CREATE \(unique ? "UNIQUE " : "")INDEX \(tableName)__\(name) ON \(tableName) (\(columnNames.joined(separator: ",")))"
+            return "CREATE \(unique ? "UNIQUE " : "")INDEX `\(tableName)+index+\(name)` ON \(tableName) (\(columnNames.joined(separator: ",")))"
         }
         
         public init(columnNames: [String], unique: Bool = false) {
@@ -162,8 +162,8 @@ extension Blackbird {
             }
 
             let nameScanner = Scanner(string: indexName)
-            _ = nameScanner.scanUpToString("__")
-            if nameScanner.scanString("__") == "__" {
+            _ = nameScanner.scanUpToString("+index+")
+            if nameScanner.scanString("+index+") == "+index+" {
                 self.name = String(indexName.suffix(from: nameScanner.currentIndex))
             } else {
                 throw Error.cannotParseIndexDefinition(definition: definition, description: "Index name does not match expected format")
@@ -334,13 +334,13 @@ extension Blackbird {
                 try core.transaction { core in
                     // drop indexes and columns
                     var schemaInDB = schemaInDB
-                    for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(name)__\(indexToDrop.name)`") }
+                    for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(name)+index+\(indexToDrop.name)`") }
                     for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(name)` DROP COLUMN `\(columnNameToDrop)`") }
                     schemaInDB = try Table(isolatedCore: core, tableName: name)!
                     
                     if primaryKeysChanged || !Set(schemaInDB.columns).subtracting(columns).isEmpty {
                         // At least one column has changed type -- do a full rebuild
-                        let tempTableName = "_\(name)__\(Int32.random(in: 0..<Int32.max))"
+                        let tempTableName = "_\(name)+temp+\(Int32.random(in: 0..<Int32.max))"
                         try core.execute(createTableStatement(type: type, overrideTableName: tempTableName))
 
                         let commonColumnNames = Set(schemaInDB.columnNames).intersection(columnNames)
