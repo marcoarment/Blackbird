@@ -146,7 +146,7 @@ extension Blackbird {
             guard !columnNames.isEmpty else { fatalError("No columns specified") }
             self.columnNames = columnNames
             self.unique = unique
-            self.name = columnNames.joined(separator: "_")
+            self.name = columnNames.joined(separator: "+")
         }
         
         internal init(definition: String) throws {
