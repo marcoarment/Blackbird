@@ -200,7 +200,33 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     
     /// Shorthand for this type's `ModelInstanceUpdater` interface for SwiftUI.
     typealias InstanceUpdater = Blackbird.ModelInstanceUpdater<Self>
+
+    /// How row-level migration failures should be handled. The default is ``BlackbirdModelMigrationErrorAction/throwError``.
+    ///
+    /// Row-level migration failures may be caused when:
+    ///
+    /// * A column is changed to a non-optional `URL` or `enum` type, and some existing rows in the table have values that are not valid for that type.
+    /// * An `enum` column has cases removed or raw values changed, and some existing rows in the table have raw values that are no longer in the `enum`.
+    ///
+    /// If ``BlackbirdModelMigrationErrorAction/throwError`` is specified, a ``BlackbirdTableError/impossibleMigration(type:description:)`` error will be thrown for such failures in this model's table.
+    ///
+    /// If ``BlackbirdModelMigrationErrorAction/deleteData`` is specified, any rows in the table causing such failures will be deleted during the migration.
+    static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { get }
 }
+
+public enum BlackbirdModelMigrationErrorAction {
+    /// Throw a ``BlackbirdTableError/impossibleMigration(type:description:)`` error.
+    case throwError
+    
+    /// Delete the row or table causing the migration failure.
+    case deleteData
+}
+
+public enum BlackbirdTableError: Swift.Error {
+    /// Schema migration is impossible for the specified type.
+    case impossibleMigration(type: any BlackbirdModel.Type, description: String)
+}
+
 
 internal extension BlackbirdModel {
     static var table: Blackbird.Table { SchemaGenerator.shared.table(for: Self.self) }
@@ -212,6 +238,7 @@ extension BlackbirdModel {
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var cacheLimit: Int { 0 }
+    public static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { .throwError }
 
     // Identifiable
     public var id: [AnyHashable] {
@@ -721,7 +748,7 @@ extension BlackbirdModel {
 
     internal static func _queryInternal(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: $0, core: $1) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
@@ -736,7 +763,7 @@ extension BlackbirdModel {
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: database) }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: $0, core: $1) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
@@ -757,7 +784,7 @@ extension BlackbirdModel {
 
     internal static func _queryInternalIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
@@ -765,28 +792,105 @@ extension BlackbirdModel {
     @discardableResult
     public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: $0, core: $1) }
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
-    internal static func validateSchema(database: Blackbird.Database) throws {
+    internal static func validateSchema(database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
+        var nonNullEnumColumnsToRawValues: [Blackbird.Column: Set<Blackbird.Value>] = [:]
+        var nonNullURLColumns: [Blackbird.Column] = []
+        let table = table
+        
         var testRow = Blackbird.Row()
         for column in table.columns {
             let defaultValue: Blackbird.Value
             if column.mayBeNull {
                 defaultValue = .null
+            } else if let enumType = column.valueType as? any BlackbirdStringEnum.Type {
+                nonNullEnumColumnsToRawValues[column] = Set(try enumType.allCases.map { try Blackbird.Value.fromAny($0) })
+                defaultValue = try Blackbird.Value.fromAny(enumType.defaultPlaceholderValue())
+            } else if let enumType = column.valueType.self as? any BlackbirdIntegerEnum.Type {
+                nonNullEnumColumnsToRawValues[column] = Set(try enumType.allCases.map { try Blackbird.Value.fromAny($0) })
+                defaultValue = try Blackbird.Value.fromAny(enumType.defaultPlaceholderValue())
             } else if column.valueType is URL.Type {
+                nonNullURLColumns.append(column)
                 defaultValue = "https://github.com/"
             } else {
                 defaultValue = column.columnType.defaultValue()
             }
             testRow[column.name] = defaultValue
         }
+        
+        // Test decoding with defaults
         let decoder = BlackbirdSQLiteDecoder(database: database, row: testRow)
         do {
             _ = try Self(from: decoder)
         } catch {
-            fatalError("Table \"\(tableName)\" definition defaults do not decode to model \(String(describing: self)): \(error)")
+            fatalError("Table \"\(table.name)\" definition defaults do not decode to model \(String(describing: self)): \(error)")
+        }
+        
+        // Check validity of data already in the database for special column types (non-optional URLs, enums)
+        if !nonNullURLColumns.isEmpty || !nonNullEnumColumnsToRawValues.isEmpty {
+            let columnValidationTableName = "\(table.name)+validatedColumns"
+            try core.execute("CREATE TABLE IF NOT EXISTS `\(columnValidationTableName)` (columnName TEXT NOT NULL, format TEXT NOT NULL, PRIMARY KEY (columnName))")
+            
+            var validatedNamesToFormats: [String: String] = [:]
+            for row in try core.query("SELECT * FROM `\(columnValidationTableName)`") {
+                validatedNamesToFormats[row["columnName"]!.stringValue!] = row["format"]!.stringValue!
+            }
+            
+            // Check for invalid URL values
+            for urlColumn in nonNullURLColumns {
+                if validatedNamesToFormats[urlColumn.name] == "URL" { continue }
+                
+                for row in try core.query("SELECT _rowid_ AS _rowid_, `\(urlColumn.name)` FROM `\(table.name)`") {
+                    guard let urlStr = row[urlColumn.name]!.stringValue else {
+                        switch invalidRowDataMigrationResolution {
+                            case .throwError:
+                                throw BlackbirdTableError.impossibleMigration(type: Self.self, description: "URL column \"\(urlColumn.name)\" contains a non-string value in existing database row")
+
+                            case .deleteData:
+                                try core.query("DELETE FROM `\(table.name)` WHERE _rowid_ = ?", row["_rowid_"]!)
+                                continue
+                        }
+                    }
+                    
+                    guard let _ = URL(string: urlStr) else {
+                        switch invalidRowDataMigrationResolution {
+                            case .throwError:
+                                throw BlackbirdTableError.impossibleMigration(type: Self.self, description: "URL column \"\(urlColumn.name)\" contains invalid value (\"\(urlStr)\") in existing database row")
+
+                            case .deleteData:
+                                try core.query("DELETE FROM `\(table.name)` WHERE _rowid_ = ?", row["_rowid_"]!)
+                                continue
+                        }
+                    }
+                }
+                
+                try core.query("REPLACE INTO `\(columnValidationTableName)` (columnName, format) VALUES (?,?)", urlColumn.name, "URL")
+            }
+
+            // Check for invalid enum values
+            for (enumColumn, currentRawValues) in nonNullEnumColumnsToRawValues {
+                let expectedFormat = "enum: \(Array(currentRawValues).map { $0.sqliteLiteral() }.sorted(by: <).joined(separator: ","))"
+                if validatedNamesToFormats[enumColumn.name] == expectedFormat { continue }
+                
+                let placeholders = Array(repeating: "?", count: currentRawValues.count).joined(separator: ",")
+
+                for row in try core.query("SELECT _rowid_ AS _rowid_, `\(enumColumn.name)` FROM `\(table.name)` WHERE `\(enumColumn.name)` NOT IN (\(placeholders))", arguments: Array(currentRawValues)) {
+                    switch invalidRowDataMigrationResolution {
+                        case .throwError:
+                            let value = row[enumColumn.name]!
+                            throw BlackbirdTableError.impossibleMigration(type: Self.self, description: "Enum column \"\(enumColumn.name)\" contains invalid value (\(value.sqliteLiteral())) in existing database row")
+
+                        case .deleteData:
+                            try core.query("DELETE FROM `\(table.name)` WHERE _rowid_ = ?", row["_rowid_"]!)
+                            continue
+                    }
+                }
+
+                try core.query("REPLACE INTO `\(columnValidationTableName)` (columnName, format) VALUES (?,?)", enumColumn.name, expectedFormat)
+            }
         }
     }
 
@@ -799,7 +903,7 @@ extension BlackbirdModel {
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to resolve the schema in.
     public static func resolveSchema(in database: Blackbird.Database) async throws {
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core, isExplicitResolve: true) { try validateSchema(database: database) }
+        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core, isExplicitResolve: true) { try validateSchema(database: $0, core: $1) }
     }
     
     /// The primary-key values of the current instance, as an array (to support multi-column primary keys).
@@ -845,7 +949,7 @@ extension BlackbirdModel {
     public func writeIsolated(to database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
         let table = Self.table
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         var columnNames: [String] = []
         var placeholders: [String] = []
@@ -902,7 +1006,7 @@ extension BlackbirdModel {
     public func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot delete BlackbirdModel from a read-only database") }
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         let values = try self.primaryKeyValues().map { try Blackbird.Value.fromAny($0) }
         let andClauses: [String] = table.primaryKeys.map { "`\($0.name)` = ?" }

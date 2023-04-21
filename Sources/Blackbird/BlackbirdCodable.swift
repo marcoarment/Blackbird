@@ -60,6 +60,10 @@ internal class BlackbirdSQLiteDecoder: Decoder {
 }
 
 fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecodingContainer {
+    public enum Error: Swift.Error {
+        case invalidEnumValue(typeDescription: String, value: Any)
+    }
+
     var codingPath: [CodingKey] = []
     let database: Blackbird.Database
     var row: Blackbird.Row
@@ -109,14 +113,18 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
 
         if let eT = T.self as? any BlackbirdIntegerEnum.Type {
             let rawValue = value.int64Value ?? 0
-            let integerEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue)
-            return (integerEnum as? T)!
+            guard let integerEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue), let converted = integerEnum as? T else {
+                throw Error.invalidEnumValue(typeDescription: String(describing: eT), value: rawValue)
+            }
+            return converted
         }
 
         if let eT = T.self as? any BlackbirdStringEnum.Type {
             let rawValue = value.stringValue ?? ""
-            let stringEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue)
-            return (stringEnum as? T)!
+            guard let stringEnum = try decodeRepresentable(eT, unifiedRawValue: rawValue), let converted = stringEnum as? T else {
+                throw Error.invalidEnumValue(typeDescription: String(describing: eT), value: rawValue)
+            }
+            return converted
         }
 
         if let eT = T.self as? any OptionalCreatable.Type, let wrappedType = eT.creatableWrappedType() as? any Decodable.Type {
@@ -131,12 +139,12 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
         return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: codingPath))
     }
 
-    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: Int64) throws -> T where T: BlackbirdIntegerEnum {
-        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))!
+    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: Int64) throws -> T? where T: BlackbirdIntegerEnum {
+        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))
     }
 
-    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: String) throws -> T where T: BlackbirdStringEnum {
-        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))!
+    func decodeRepresentable<T>(_ type: T.Type, unifiedRawValue: String) throws -> T? where T: BlackbirdStringEnum {
+        T.init(rawValue: T.RawValue.from(unifiedRepresentation: unifiedRawValue))
     }
 
     func decodeNilRepresentable<T>(_ type: T.Type) throws -> T where T: BlackbirdIntegerOptionalEnum {

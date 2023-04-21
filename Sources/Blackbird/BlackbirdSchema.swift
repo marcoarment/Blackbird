@@ -95,6 +95,7 @@ extension Blackbird {
         }
                 
         public init(name: String, columnType: ColumnType, valueType: Any.Type, mayBeNull: Bool = false) {
+            if name == "_rowid_" { fatalError("A @BlackbirdColumn cannot be named \"_rowid_\"") }
             self.name = name
             self.columnType = columnType
             self.valueType = valueType
@@ -109,7 +110,9 @@ extension Blackbird {
                 let notNull = row["notnull"]?.boolValue,
                 let primaryKeyIndex = row["pk"]?.intValue
             else { throw Error.cannotParseColumnDefinition(table: tableName, description: "Unexpected format from PRAGMA table_info") }
-            
+
+            guard name != "_rowid_" else { throw Error.cannotParseColumnDefinition(table: tableName, description: "Columns named \"_rowid_\" are not supported in BlackbirdModel tables") }
+
             guard let columnType = ColumnType.parseType(typeStr) else { throw Error.cannotParseColumnDefinition(table: tableName, description: "Column \"\(name)\" has unsupported type: \"\(typeStr)\"") }
             self.name = name
             self.columnType = columnType
@@ -187,12 +190,7 @@ extension Blackbird {
         static func == (lhs: Blackbird.Table, rhs: Blackbird.Table) -> Bool {
             lhs.name == rhs.name && lhs.columns == rhs.columns && lhs.indexes == rhs.indexes && lhs.primaryKeys == rhs.primaryKeys
         }
-        
-        enum Error: Swift.Error {
-            case invalidTableDefinition(table: String, description: String)
-            case impossibleMigration(table: String, description: String)
-        }
-    
+            
         public func hash(into hasher: inout Hasher) {
             hasher.combine(name)
             hasher.combine(columns)
@@ -234,8 +232,8 @@ extension Blackbird {
             return upsertReplacements.isEmpty ? "" : "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"
         }
         
-        internal init?(isolatedCore core: isolated Database.Core, tableName: String) throws {
-            if tableName.isEmpty { throw Error.invalidTableDefinition(table: tableName, description: "Table name cannot be empty") }
+        internal init?(isolatedCore core: isolated Database.Core, tableName: String, type: any BlackbirdModel.Type) throws {
+            if tableName.isEmpty { fatalError("Table name cannot be empty") }
 
             var columns: [Column] = []
             var primaryKeyColumns: [Column] = []
@@ -284,7 +282,7 @@ extension Blackbird {
         
         internal func createIndexStatements<T: BlackbirdModel>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
         
-        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable () throws -> Void)?) async throws {
+        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) async throws {
             if _isAlreadyResolved(type: type, in: database) { return }
             
             if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
@@ -296,7 +294,7 @@ extension Blackbird {
             }
         }
 
-        internal func resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
+        internal func resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws {
             if _isAlreadyResolved(type: type, in: database) { return }
             try _resolveWithDatabaseIsolated(type: type, database: database, core: core, validator: validator)
         }
@@ -309,17 +307,17 @@ extension Blackbird {
             return alreadyResolved
         }
 
-        private func _resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable () throws -> Void)?) throws {
+        private func _resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws {
             // Table not created yet
             let schemaInDB: Table
             do {
-                let existingSchemaInDB = try Table(isolatedCore: core, tableName: name)
+                let existingSchemaInDB = try Table(isolatedCore: core, tableName: name, type: type)
                 if let existingSchemaInDB {
                     schemaInDB = existingSchemaInDB
                 } else {
                     try core.execute(createTableStatement(type: type))
                     for createIndexStatement in createIndexStatements(type: type) { try core.execute(createIndexStatement) }
-                    schemaInDB = try Table(isolatedCore: core, tableName: name)!
+                    schemaInDB = try Table(isolatedCore: core, tableName: name, type: type)!
                 }
             }
 
@@ -336,7 +334,7 @@ extension Blackbird {
                     var schemaInDB = schemaInDB
                     for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(name)+index+\(indexToDrop.name)`") }
                     for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(name)` DROP COLUMN `\(columnNameToDrop)`") }
-                    schemaInDB = try Table(isolatedCore: core, tableName: name)!
+                    schemaInDB = try Table(isolatedCore: core, tableName: name, type: type)!
                     
                     if primaryKeysChanged || !Set(schemaInDB.columns).subtracting(columns).isEmpty {
                         // At least one column has changed type -- do a full rebuild
@@ -351,14 +349,14 @@ extension Blackbird {
                         }
                         try core.execute("DROP TABLE `\(name)`")
                         try core.execute("ALTER TABLE `\(tempTableName)` RENAME TO `\(name)`")
-                        schemaInDB = try Table(isolatedCore: core, tableName: name)!
+                        schemaInDB = try Table(isolatedCore: core, tableName: name, type: type)!
                     }
 
                     // add columns and indexes
                     for columnToAdd in Set(columns).subtracting(schemaInDB.columns) {
                         if !columnToAdd.mayBeNull, let valueType = columnToAdd.valueType, valueType is URL.Type {
-                            throw Error.impossibleMigration(
-                                table: name,
+                            throw BlackbirdTableError.impossibleMigration(
+                                type: type,
                                 description: "Cannot add non-NULL URL column `\(columnToAdd.name)` since default values for existing rows cannot be specified"
                             )
                         }
@@ -367,11 +365,11 @@ extension Blackbird {
                     }
                     
                     for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: name)) }
-
-                    // allow calling model to verify before committing
-                    if let validator { try validator() }
                 }
             }
+
+            // allow calling model to verify before committing
+            if let validator { try validator(database, core) }
 
             Self.resolvedTablesWithDatabases.withLock {
                 if $0[self] == nil { $0[self] = Set<Database.InstanceID>() }

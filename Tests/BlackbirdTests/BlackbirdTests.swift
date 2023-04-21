@@ -306,7 +306,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
 
     func testColumnTypes() async throws {
-        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])
         try await TypeTest.resolveSchema(in: db)
         
         let now = Date()

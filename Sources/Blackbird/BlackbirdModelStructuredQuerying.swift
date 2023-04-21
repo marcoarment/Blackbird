@@ -327,7 +327,7 @@ extension BlackbirdModel {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
         let decoded = DecodedStructuredQuery(operation: "UPDATE", matching: matching, updating: changes)
 
         let changeCountBefore = core.changeCount
@@ -421,7 +421,7 @@ extension BlackbirdModel {
         if changes.isEmpty { return }
         let primaryKeyValues = Array(primaryKeyValues)
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         let decoded = DecodedStructuredQuery(operation: "UPDATE", updating: changes, updateWhereAutoOptimization: false)
 
@@ -481,7 +481,7 @@ extension BlackbirdModel {
     public static func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot delete BlackbirdModels from a read-only database") }
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: database) }
+        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         let decoded = DecodedStructuredQuery(operation: "DELETE FROM", matching: matching)
 

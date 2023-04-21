@@ -171,11 +171,14 @@ public protocol BlackbirdIntegerEnum: RawRepresentable, CaseIterable, BlackbirdC
 
 extension BlackbirdStringEnum {
     public static func fromValue(_ value: Blackbird.Value) -> Self? { if let s = value.stringValue { return Self(rawValue: RawValue.from(unifiedRepresentation: s)) } else { return nil } }
+    
+    internal static func defaultPlaceholderValue() -> Self { allCases.first! }
 }
 
 extension BlackbirdIntegerEnum {
     public static func unifiedRawValue(from unifiedRepresentation: Int64) -> RawValue { RawValue.from(unifiedRepresentation: unifiedRepresentation) }
     public static func fromValue(_ value: Blackbird.Value) -> Self? { if let i = value.int64Value { return Self(rawValue: Self.unifiedRawValue(from: i)) } else { return nil } }
+    internal static func defaultPlaceholderValue() -> Self { allCases.first! }
 }
 
 extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrappable {
