@@ -279,7 +279,7 @@ extension Blackbird {
         internal func createTableStatement<T: BlackbirdModel>(type: T.Type, overrideTableName: String? = nil) -> String {
             let columnDefs = columns.map { $0.definition() }.joined(separator: ",")
             let pkDef = primaryKeys.isEmpty ? "" : ",PRIMARY KEY (`\(primaryKeys.map { $0.name }.joined(separator: "`,`"))`)"
-            return "CREATE TABLE \(overrideTableName ?? name) (\(columnDefs)\(pkDef))"
+            return "CREATE TABLE `\(overrideTableName ?? name)` (\(columnDefs)\(pkDef))"
         }
         
         internal func createIndexStatements<T: BlackbirdModel>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
