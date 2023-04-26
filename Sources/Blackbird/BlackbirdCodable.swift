@@ -12,6 +12,9 @@
 //  BlackbirdCodable.swift
 //  Created by Marco Arment on 11/7/22.
 //
+//  With significant thanks to (and borrowing from):
+//   https://shareup.app/blog/encoding-and-decoding-sqlite-in-swift/
+//
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
 //  in the Software without restriction, including without limitation the rights
@@ -33,8 +36,6 @@
 
 import Foundation
 
-// with significant thanks to (and borrowing from) https://shareup.app/blog/encoding-and-decoding-sqlite-in-swift/
-
 internal class BlackbirdSQLiteDecoder: Decoder {
     public enum Error: Swift.Error {
         case invalidValue(String, value: String)
@@ -53,8 +54,21 @@ internal class BlackbirdSQLiteDecoder: Decoder {
     }
 
     public func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key: CodingKey {
+        if let iterableKey = Key.self as? any BlackbirdCodingKey.Type {
+            // Custom CodingKeys are in use, so remap the row to use the expected keys instead of raw column names
+            var newRow = Blackbird.Row()
+            for (columnName, customFieldName) in iterableKey.allLabeledCases {
+                if let rowValue = row[columnName] {
+                    newRow[customFieldName] = rowValue
+                }
+            }
+            return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(codingPath: codingPath, database: database, row: newRow))
+        }
+        
+        // Use default names without custom CodingKeys
         return KeyedDecodingContainer(BlackbirdSQLiteKeyedDecodingContainer<Key>(codingPath: codingPath, database: database, row: row))
     }
+
     public func unkeyedContainer() throws -> UnkeyedDecodingContainer { fatalError("unsupported") }
     public func singleValueContainer() throws -> SingleValueDecodingContainer { BlackbirdSQLiteSingleValueDecodingContainer(codingPath: codingPath, database: database, row: row) }
 }

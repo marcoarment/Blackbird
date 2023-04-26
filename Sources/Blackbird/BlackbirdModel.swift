@@ -826,7 +826,10 @@ extension BlackbirdModel {
         do {
             _ = try Self(from: decoder)
         } catch {
-            fatalError("Table \"\(table.name)\" definition defaults do not decode to model \(String(describing: self)): \(error)")
+            fatalError(
+                "Table \"\(table.name)\" definition defaults do not decode to model \(String(describing: self)): \(error).\n\n" +
+                "If \(table.name) defines custom CodingKeys, it must be declared as:\n\n    enum CodingKeys: String, BlackbirdCodingKey {...}\n"
+            )
         }
         
         // Check validity of data already in the database for special column types (non-optional URLs, enums)

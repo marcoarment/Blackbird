@@ -195,7 +195,9 @@ try await db.transaction { core in
 
 * __Static type reflection for cleaner schema detection:__ Swift currently has no way to reflect a type's properties without creating an instance — [Mirror](https://developer.apple.com/documentation/swift/mirror) only reflects property names and values of given instances. If the language adds static type reflection in the future, my schema detection wouldn't need to rely on a hack using a Decoder to generate empty instances.
 
-* __KeyPath to/from String, static reflection of a type's KeyPaths:__ With the abilities to get a type's available KeyPaths (without some [crazy hacks](https://forums.swift.org/t/getting-keypaths-to-members-automatically-using-mirror/21207)) and create KeyPaths from strings at runtime, many of my hacks using Codable could be replaced with KeyPaths, which would be cleaner and probably much faster.
+* __KeyPath to/from String, static reflection of a type's KeyPaths:__ With the abilities to get a type's available KeyPaths (without some [awful hacks](https://forums.swift.org/t/getting-keypaths-to-members-automatically-using-mirror/21207)) and create KeyPaths from strings at runtime, many of my hacks using Codable could be replaced with KeyPaths, which would be cleaner and probably much faster.
+
+* __Method to get CodingKeys enum names and custom values:__ It's currently impossible to get the names of `CodingKeys` cases without resorting to [this awful hack](https://forums.swift.org/t/getting-the-name-of-a-swift-enum-value/35654/18). Decoders must know these names to perform proper decoding to arbitrary types that may have custom `CodingKeys` declared. If this hack ever stops working, BlackbirdModel cannot support custom `CodingKeys`.
 
 * __Cleaner protocol name (`Blackbird.Model`):__ Protocols can't contain dots or be nested within another type.
 

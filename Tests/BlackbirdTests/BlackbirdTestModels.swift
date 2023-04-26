@@ -69,6 +69,18 @@ struct TestModelWithDescription: BlackbirdModel {
     @BlackbirdColumn var description: String
 }
 
+struct TestCodingKeys: BlackbirdModel {
+    enum CodingKeys: String, BlackbirdCodingKey {
+        case id
+        case title = "customTitle"
+        case description = "d"
+    }
+
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var description: String
+}
+
 struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var id: Int64
     

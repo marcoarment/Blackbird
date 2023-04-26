@@ -527,6 +527,31 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     
         await AssertThrowsErrorAsync(try await db1.execute("PRAGMA user_version = 1")) // so db1 doesn't get deallocated until after this and we test throwing errors for accessing a closed DB
     }
+    
+    func testCodingKeys() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange])
+        
+        let id = TestData.randomInt64()
+        let title = TestData.randomTitle
+        let desc = TestData.randomDescription
+        
+        let t = TestCodingKeys(id: id, title: title, description: desc)
+        try await t.write(to: db)
+        
+        let readBack = try await TestCodingKeys.read(from: db, id: id)
+        XCTAssertNotNil(readBack)
+        XCTAssert(readBack!.id == id)
+        XCTAssert(readBack!.title == title)
+        XCTAssert(readBack!.description == desc)
+        
+        let jsonEncoder = JSONEncoder()
+        let data = try jsonEncoder.encode(readBack)
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(TestCodingKeys.self, from: data)
+        XCTAssert(decoded.id == id)
+        XCTAssert(decoded.title == title)
+        XCTAssert(decoded.description == desc)
+    }
 
     func testSchemaChangeAddPrimaryKeyColumn() async throws {
         let userID = TestData.randomInt64()
