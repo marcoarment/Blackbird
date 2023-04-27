@@ -81,6 +81,40 @@ struct TestCodingKeys: BlackbirdModel {
     @BlackbirdColumn var description: String
 }
 
+struct TestCustomDecoder: BlackbirdModel {
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var name: String
+    @BlackbirdColumn var thumbnail: URL
+
+    enum CodingKeys: String, BlackbirdCodingKey {
+        case id = "idStr"
+        case name = "nameStr"
+        case thumbnail = "thumbStr"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // Special-case handling for BlackbirdDefaultsDecoder:
+        //  supplies a valid numeric string instead of failing on
+        //  the empty string ("") returned by BlackbirdDefaultsDecoder
+        
+        if decoder is BlackbirdDefaultsDecoder {
+            self.id = 0
+        } else {
+            let idStr = try container.decode(String.self, forKey: .id)
+            guard let id = Int(idStr) else {
+                throw DecodingError.dataCorruptedError(forKey: .id, in: container, debugDescription: "Expected numeric string")
+            }
+            self.id = id
+        }
+
+        self.name = try container.decode(String.self, forKey: .name)
+        self.thumbnail = try container.decode(URL.self, forKey: .thumbnail)
+    }
+}
+
+
 struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var id: Int64
     

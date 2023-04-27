@@ -551,6 +551,15 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(decoded.id == id)
         XCTAssert(decoded.title == title)
         XCTAssert(decoded.description == desc)
+
+        let custom = try decoder.decode(TestCustomDecoder.self, from: """
+            {"idStr":"123","nameStr":"abc","thumbStr":"https://google.com/"}
+        """.data(using: .utf8)!)
+        XCTAssert(custom.id == 123)
+        XCTAssert(custom.name == "abc")
+        XCTAssert(custom.thumbnail == URL(string: "https://google.com/")!)
+        
+        try await custom.write(to: db)
     }
 
     func testSchemaChangeAddPrimaryKeyColumn() async throws {
