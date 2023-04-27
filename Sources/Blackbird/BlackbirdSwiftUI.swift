@@ -34,6 +34,9 @@
 import SwiftUI
 import Combine
 
+// Required to use with the @StateObject wrapper
+extension Blackbird.Database: ObservableObject { }
+
 struct EnvironmentBlackbirdDatabaseKey: EnvironmentKey {
     static var defaultValue: Blackbird.Database? = nil
 }

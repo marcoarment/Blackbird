@@ -46,7 +46,7 @@ struct Post: BlackbirdModel {
 struct BlackbirdSwiftUITestApp: App {
 
     // In-memory database
-    var database: Blackbird.Database = try! Blackbird.Database.inMemoryDatabase(options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])
+    @StateObject var database: Blackbird.Database = try! Blackbird.Database.inMemoryDatabase(options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])
     
     // On-disk database
 //    var database: Blackbird.Database = try! Blackbird.Database(path: "\(FileManager.default.temporaryDirectory.path)/blackbird-swiftui-test.sqlite", options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])
@@ -94,6 +94,8 @@ struct BlackbirdSwiftUITestApp: App {
 //                    for _ in 0..<5 { try! await Post(id: TestData.randomInt64(), title: TestData.randomTitle).write(to: database) }
 
                     // Transaction version:
+                    let database = database
+                    let firstPost = firstPost
                     try await database.transaction { core in
                         try firstPost.writeIsolated(to: database, core: core)
                         for _ in 0..<5 { try! Post(id: TestData.randomInt64(), title: TestData.randomTitle).writeIsolated(to: database, core: core) }

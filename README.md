@@ -131,7 +131,7 @@ Blackbird is designed for SwiftUI, offering async-loading, automatically-updatin
 ```swift
 struct RootView: View {
     // The database that all child views will automatically use
-    var database = try! Blackbird.Database.inMemoryDatabase()
+    @StateObject var database = try! Blackbird.Database.inMemoryDatabase()
 
     var body: some View {
         PostListView()
