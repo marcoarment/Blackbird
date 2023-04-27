@@ -1,12 +1,22 @@
 # Blackbird
 
-A small, fast, lightweight SQLite database wrapper and model layer, based on modern Swift concurrency and `Codable`, with no other dependencies.
+A SQLite database wrapper and model layer, using Swift concurrency and `Codable`, with no other dependencies.
+
+Philosophy:
+
+* Prioritize speed of development over all else.
+* No schema definitions.
+* Automatic migrations.
+* Whenever possible, use the type system and key-paths instead of strings.
+* No code generation.
 
 ## Project status
 
-Blackbird is an __alpha__. The API might change dramatically at any time.
+Blackbird is a __beta__.
 
-You shouldn't build anything against this yet. But it's close.
+Minor changes may still occur that break backwards compatibility with code or databases.
+
+I'm using Blackbird in shipping software now, but do so at your own risk.
 
 ## BlackbirdModel
 
