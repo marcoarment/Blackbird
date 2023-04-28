@@ -5,11 +5,12 @@ A SQLite database wrapper and model layer, using Swift concurrency and `Codable`
 Philosophy:
 
 * Prioritize speed of development over all else.
+* No code generation.
 * No schema definitions.
 * Automatic migrations.
-* Whenever possible, use the type system and key-paths instead of strings.
-* No code generation.
-
+* Async by default.
+* Use Swift’s type system and key-paths instead of strings whenever possible.
+ 
 ## Project status
 
 Blackbird is a __beta__.
