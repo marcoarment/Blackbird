@@ -140,12 +140,15 @@ extension Blackbird {
         get { result }
         set { }
     }
-    
+
+    public var projectedValue: BlackbirdLiveModels<T> { self }
+
     private let queryUpdater = Blackbird.ModelArrayUpdater<T>()
     private let generator: Blackbird.CachedResultGenerator<[T]>
 
     public init(_ generator: @escaping Blackbird.CachedResultGenerator<[T]>) {
         self.generator = generator
+        
     }
 
     public func update() {
@@ -191,7 +194,9 @@ extension Blackbird {
         get { instance }
         nonmutating set { instance = newValue }
     }
-    
+
+    public var projectedValue: BlackbirdLiveModel<T> { self }
+
     public init(_ instance: T, updatesEnabled: Bool = true) {
         _instance = State(initialValue: instance)
         instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: try! instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) })
@@ -208,6 +213,20 @@ extension Blackbird {
         instanceObserver.observe(database: environmentDatabase, currentInstance: $instance)
     }
 }
+
+extension View {
+    /// Automatically enable updates on the supplied ``BlackbirdLiveModel`` when the view appears and suspend updates when it disappears.
+    public func blackbirdUpdateWhenVisible<T: BlackbirdModel>(_ liveModel: BlackbirdLiveModel<T>) -> some View {
+        self
+        .onAppear {
+            liveModel.updatesEnabled = true
+        }
+        .onDisappear {
+            liveModel.updatesEnabled = false
+        }
+    }
+}
+
 
 public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     private let primaryKeyValues: [Blackbird.Value]
