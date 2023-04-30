@@ -110,8 +110,13 @@ Monitor for row- and column-level changes with Combine:
 
 ```swift
 let listener = Post.changePublisher(in: db).sink { change in
-    print("Post IDs changed: \(change.primaryKeys ?? "all")")
-    print(" Columns changed: \(change.columnNames ?? "all")")
+    if change.hasPrimaryKeyChanged(7) {
+        print("Post 7 has changed")
+    }
+
+    if change.hasColumnChanged(\.$title) {
+        print("A title has changed")
+    }
 }
 
 // Or monitor a single column by key-path:
