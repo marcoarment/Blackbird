@@ -256,21 +256,27 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
         guard let database, database != currentDatabase else { return }
         currentDatabase = database
         cachedInstance.value = nil
-
-        let primaryKeyValues = primaryKeyValues
-        changeObserver.value = T.changePublisher(in: database, multicolumnPrimaryKey: primaryKeyValues)
-        .sink { _ in
-            Task.detached { [weak self] in
-                self?.cachedInstance.value = nil
-                await self?.update()
-            }
-        }
         
-        Task.detached { [weak self] in await self?.update() }
+        if updatesEnabled {
+            Task.detached { [weak self] in await self?.update() }
+        }
     }
     
     public func update() async {
         guard let currentDatabase, updatesEnabled else { return }
+        
+        changeObserver.withLock { observer in
+            if observer != nil { return }
+            
+            let primaryKeyValues = primaryKeyValues
+            observer = T.changePublisher(in: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
+            .sink { _ in
+                Task.detached { [weak self] in
+                    self?.cachedInstance.value = nil
+                    await self?.update()
+                }
+            }
+        }
                 
         if let cachedInstance = cachedInstance.value {
             currentInstance = cachedInstance
