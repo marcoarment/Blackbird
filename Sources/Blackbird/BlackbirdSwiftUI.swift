@@ -141,7 +141,7 @@ extension Blackbird {
         set { }
     }
 
-    public var projectedValue: BlackbirdLiveModels<T> { self }
+    public var projectedValue: Binding<Blackbird.LiveResults<T>> { $result }
 
     private let queryUpdater = Blackbird.ModelArrayUpdater<T>()
     private let generator: Blackbird.CachedResultGenerator<[T]>
@@ -195,7 +195,7 @@ extension Blackbird {
         nonmutating set { instance = newValue }
     }
 
-    public var projectedValue: BlackbirdLiveModel<T> { self }
+    public var projectedValue: Binding<T?> { $instance }
 
     public init(_ instance: T, updatesEnabled: Bool = true) {
         _instance = State(initialValue: instance)
@@ -272,7 +272,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
             observer = T.changePublisher(in: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
             .sink { _ in
                 Task.detached { [weak self] in
-                    self?.cachedInstance.value = nil
+                    await MainActor.run { [weak self] in self?.cachedInstance.value = nil }
                     await self?.update()
                 }
             }
@@ -287,8 +287,8 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
         }
         
         let instance = try? await T.read(from: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
-        cachedInstance.value = instance
         await MainActor.run {
+            cachedInstance.value = instance
             currentInstance = instance
             _changePublisher.send(instance)
         }

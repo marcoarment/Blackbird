@@ -98,6 +98,8 @@ struct PostViewEnvironmentDB: View {
             } else {
                 Text("Post not found")
             }
+            
+            PostViewTitle(post: $post)
         }
         .padding()
         .navigationTitle(post?.title ?? "")
@@ -131,6 +133,14 @@ struct PostViewEnvironmentDB: View {
         .onAppear {
             if let post { title = post.title }
         }
+    }
+}
+
+struct PostViewTitle: View {
+    @Binding var post: Post?
+    
+    var body: some View {
+        Text("Bound title: \(post?.title ?? "(nil)")")
     }
 }
 
