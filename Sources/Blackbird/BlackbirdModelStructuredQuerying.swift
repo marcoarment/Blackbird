@@ -49,7 +49,7 @@ public extension String.StringInterpolation {
 /// Used as a `orderBy:` expression in ``BlackbirdModel`` functions such as:
 /// - ``BlackbirdModel/query(in:columns:matching:orderBy:limit:)``
 /// - ``BlackbirdModel/read(from:matching:orderBy:limit:)``
-public struct BlackbirdModelOrderClause<T: BlackbirdModel>: Sendable {
+public struct BlackbirdModelOrderClause<T: BlackbirdModel>: Sendable, CustomDebugStringConvertible {
     public enum Direction: Sendable {
         case ascending
         case descending
@@ -70,6 +70,8 @@ public struct BlackbirdModelOrderClause<T: BlackbirdModel>: Sendable {
         let columnName = table.keyPathToColumnName(keyPath: column)
         return "`\(columnName)`\(direction == .descending ? " DESC" : "")"
     }
+
+    public var debugDescription: String { orderByClause(table: T.table) }
 }
 
 fileprivate struct DecodedStructuredQuery: Sendable {
@@ -566,12 +568,12 @@ public func || <T: BlackbirdModel> (lhs: BlackbirdModelColumnExpression<T>, rhs:
 /// - ``BlackbirdModel/read(from:matching:orderBy:limit:)``
 /// - ``BlackbirdModel/update(in:set:matching:)``
 /// - ``BlackbirdModel/delete(from:matching:)``
-public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, BlackbirdQueryExpression {
+public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, BlackbirdQueryExpression, CustomDebugStringConvertible {
 
     /// Use `.all` to operate on all rows in the table without a `WHERE` clause.
     public static var all: Self {
         get {
-            BlackbirdModelColumnExpression<T>()
+            BlackbirdModelColumnExpression<Model>()
         }
     }
 
@@ -595,29 +597,31 @@ public struct BlackbirdModelColumnExpression<T: BlackbirdModel>: Sendable, Black
     }
     
     private let expression: BlackbirdQueryExpression
+    
+    public var debugDescription: String { expression.compile(table: Model.table).whereClause ?? String(describing: self) }
 
-    init(column: T.BlackbirdColumnKeyPath, sqlOperator: UnaryOperator) {
+    init(column: Model.BlackbirdColumnKeyPath, sqlOperator: UnaryOperator) {
         expression = BlackbirdColumnUnaryExpression(column: column, sqlOperator: sqlOperator)
     }
 
-    init(column: T.BlackbirdColumnKeyPath, sqlOperator: BinaryOperator, value: Sendable) {
+    init(column: Model.BlackbirdColumnKeyPath, sqlOperator: BinaryOperator, value: Sendable) {
         expression = BlackbirdColumnBinaryExpression(column: column, sqlOperator: sqlOperator, value: value)
     }
 
-    init(column: T.BlackbirdColumnKeyPath, valueIn values: [Sendable]) {
+    init(column: Model.BlackbirdColumnKeyPath, valueIn values: [Sendable]) {
         expression = BlackbirdColumnInExpression(column: column, values: values)
     }
 
-    init(column: T.BlackbirdColumnKeyPath, valueLike pattern: String) {
+    init(column: Model.BlackbirdColumnKeyPath, valueLike pattern: String) {
         expression = BlackbirdColumnLikeExpression(column: column, pattern: pattern)
     }
 
-    init(lhs: BlackbirdModelColumnExpression<T>, sqlOperator: CombiningOperator, rhs: BlackbirdModelColumnExpression<T>) {
+    init(lhs: BlackbirdModelColumnExpression<Model>, sqlOperator: CombiningOperator, rhs: BlackbirdModelColumnExpression<Model>) {
         expression = BlackbirdCombiningExpression(lhs: lhs, rhs: rhs, sqlOperator: sqlOperator)
     }
 
-    init(not expression: BlackbirdModelColumnExpression<T>) {
-        self.expression = BlackbirdColumnNotExpression<T>(type: T.self, expression: expression)
+    init(not expression: BlackbirdModelColumnExpression<Model>) {
+        self.expression = BlackbirdColumnNotExpression<Model>(type: Model.self, expression: expression)
     }
 
     init(expressionLiteral: String, arguments: [Sendable]) {
