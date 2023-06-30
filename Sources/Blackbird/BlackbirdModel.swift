@@ -233,6 +233,8 @@ internal extension BlackbirdModel {
 }
 
 extension BlackbirdModel {
+    public typealias ChangePublisher = Blackbird.ModelChangePublisher<Self>
+
     public static var tableName: String { String(describing: Self.self) }
     public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
@@ -293,7 +295,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database) -> Self.ChangePublisher {
         database.changeReporter.changePublisher(for: self.tableName)
         .map { Blackbird.ModelChange(type: Self.self, from: $0) }
         .eraseToAnyPublisher()
@@ -310,7 +312,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Self.ChangePublisher {
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
         
@@ -340,7 +342,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Self.ChangePublisher {
         let selfType = Self.self
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
@@ -368,7 +370,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Self.ChangePublisher {
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
         
@@ -398,7 +400,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Self.ChangePublisher {
         let selfType = Self.self
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
