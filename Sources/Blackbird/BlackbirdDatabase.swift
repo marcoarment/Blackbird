@@ -281,7 +281,7 @@ extension Blackbird {
             ///     try? Blackbird.Database.delete(atPath: …)
             /// }
             /// ```
-            public static let requireModelSchemaValidationBeforeUse = Options(rawValue: 1 << 6)
+            public static let requireModelSchemaValidationBeforeUse = Options(rawValue: 1 << 7)
         }
         
         /// Returns all filenames expected to be used by a database if created at the given file path.
