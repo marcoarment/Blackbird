@@ -83,7 +83,7 @@ fileprivate struct DecodedStructuredQuery: Sendable {
     let tableName: String
     let cacheKey: [Blackbird.Value]?
     
-    init<T: BlackbirdModel>(operation: String = "SELECT * FROM", selectColumnSubset: [PartialKeyPath<T>]? = nil, matching: BlackbirdModelColumnExpression<T>? = nil, updating: [PartialKeyPath<T>: Sendable] = [:], orderBy: [BlackbirdModelOrderClause<T>] = [], limit: Int? = nil, updateWhereAutoOptimization: Bool = true) {
+    init<T: BlackbirdModel>(operation: String = "SELECT * FROM", selectColumnSubset: [PartialKeyPath<T>]? = nil, forMulticolumnPrimaryKey: [Any]? = nil, matching: BlackbirdModelColumnExpression<T>? = nil, updating: [PartialKeyPath<T>: Sendable] = [:], orderBy: [BlackbirdModelOrderClause<T>] = [], limit: Int? = nil, updateWhereAutoOptimization: Bool = true) {
         let table = SchemaGenerator.shared.table(for: T.self)
         var clauses: [String] = []
         var arguments: [Blackbird.Value] = []
@@ -140,10 +140,18 @@ fileprivate struct DecodedStructuredQuery: Sendable {
         }
 
         if let matching {
+            if forMulticolumnPrimaryKey != nil { fatalError("Cannot combine forMulticolumnPrimaryKey with matching") }
+
             let (whereClause, whereArguments) = matching.compile(table: table)
             self.whereClause = whereClause
             self.whereArguments = whereArguments
             if let whereClause { clauses.append("WHERE \(whereClause)") }
+            arguments.append(contentsOf: whereArguments)
+        } else if let forMulticolumnPrimaryKey {
+            let whereArguments = forMulticolumnPrimaryKey.map { try! Blackbird.Value.fromAny($0) }
+            self.whereClause = table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND ")
+            self.whereArguments = whereArguments
+            clauses.append("WHERE \(whereClause!)")
             arguments.append(contentsOf: whereArguments)
         } else {
             whereClause = nil
@@ -158,7 +166,7 @@ fileprivate struct DecodedStructuredQuery: Sendable {
         if let limit { clauses.append("LIMIT \(limit)") }
         
         tableName = table.name
-        query = "\(operation) \(tableName)\(clauses.isEmpty ? "" : " \(clauses.joined(separator: " "))")"
+        query = "\(operation) `\(tableName)`\(clauses.isEmpty ? "" : " \(clauses.joined(separator: " "))")"
         self.arguments = arguments
         self.changedColumns = changedColumns
         
@@ -281,7 +289,7 @@ extension BlackbirdModel {
     /// Selects a subset of the table's columns matching the given column values, using column key-paths for this model type.
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to query.
-    ///   - selectColumns: An array of column key-paths of this BlackbirdModel type. The returned rows will contain only these columns.
+    ///   - columns: An array of column key-paths of this BlackbirdModel type. The returned rows will contain only these columns.
     ///   - matching: An optional filtering expression using column key-paths, e.g. `\.$id == 1`, to be used in the resulting SQL query as a `WHERE` clause. See ``BlackbirdModelColumnExpression``.
     ///   - orderBy: An optional series of column key-paths to order the results by, represented as:
     ///     - `.ascending(keyPath)`: equivalent to SQL `ORDER BY keyPath`
@@ -304,6 +312,48 @@ extension BlackbirdModel {
             try _queryInternalIsolated(in: $0, core: $1, decoded.query, arguments: decoded.arguments)
         }
     }
+
+
+
+    /// Selects a subset of the table's columns matching the given column values, using column key-paths for this model type.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to query.
+    ///   - columns: An array of column key-paths of this BlackbirdModel type. The returned rows will contain only these columns.
+    ///   - primaryKey: The single-column primary-key value to match.
+    ///
+    /// - Returns: A row with the requested column values for the given primary-key value, or `nil` if no row matches the supplied primary-key value.
+    public static func query(in database: Blackbird.Database, columns: [BlackbirdColumnKeyPath], primaryKey: Any) async throws -> Blackbird.ModelRow<Self>? {
+        try await query(in: database, columns: columns, multicolumnPrimaryKey: [primaryKey])
+    }
+
+    /// Synchronous version of ``query(in:columns:primaryKey:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, columns: [BlackbirdColumnKeyPath], primaryKey: Any) throws -> Blackbird.ModelRow<Self>? {
+        try queryIsolated(in: database, core: core, columns: columns, multicolumnPrimaryKey: [primaryKey])
+    }
+
+    /// Selects a subset of the table's columns matching the given column values, using column key-paths for this model type.
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to query.
+    ///   - columns: An array of column key-paths of this BlackbirdModel type. The returned rows will contain only these columns.
+    ///   - multicolumnPrimaryKey: The multi-column primary-key value set to match.
+    ///
+    /// - Returns: A row with the requested column values for the given primary-key value, or `nil` if no row matches the supplied primary-key value.
+    public static func query(in database: Blackbird.Database, columns: [BlackbirdColumnKeyPath], multicolumnPrimaryKey: [Any]) async throws -> Blackbird.ModelRow<Self>? {
+        let decoded = DecodedStructuredQuery(selectColumnSubset: columns, forMulticolumnPrimaryKey: multicolumnPrimaryKey)
+        return try await _cacheableStructuredResult(database: database, decoded: decoded) {
+            try await _queryInternal(in: $0, decoded.query, arguments: decoded.arguments).first
+        }
+    }
+
+    /// Synchronous version of ``query(in:columns:multicolumnPrimaryKey:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, columns: [BlackbirdColumnKeyPath], multicolumnPrimaryKey: [Any]) throws -> Blackbird.ModelRow<Self>? {
+        let decoded = DecodedStructuredQuery(selectColumnSubset: columns, forMulticolumnPrimaryKey: multicolumnPrimaryKey)
+        return try _cacheableStructuredResultIsolated(database: database, core: core, decoded: decoded) {
+            try _queryInternalIsolated(in: $0, core: $1, decoded.query, arguments: decoded.arguments).first
+        }
+    }
+
+
 
     /// Changes a subset of the table's rows matching the given column values, using column key-paths for this model type.
     /// - Parameters:
