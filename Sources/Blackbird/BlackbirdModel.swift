@@ -1031,8 +1031,9 @@ extension BlackbirdModel {
         guard cacheLimit > 0 else { return try await resultFetcher(database) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
-        if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
         
+        if case .hit(let value) = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey), let cachedResult = value as? T { return cachedResult }
+
         let result = try await resultFetcher(database)
         database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
@@ -1043,7 +1044,8 @@ extension BlackbirdModel {
         guard cacheLimit > 0 else { return try resultFetcher(database, core) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
-        if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
+        
+        if case .hit(let value) = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey), let cachedResult = value as? T { return cachedResult }
         
         let result = try resultFetcher(database, core)
         database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)

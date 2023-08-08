@@ -77,6 +77,11 @@ extension Blackbird.Database {
             }
         }
 
+        internal enum CachedQueryResult {
+            case miss
+            case hit(value: Any?)
+        }
+
         private let lowMemoryEventSource: DispatchSourceMemoryPressure
         public init() {
             lowMemoryEventSource = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical])
@@ -255,7 +260,7 @@ extension Blackbird.Database {
             }
         }
 
-        internal func readQueryResult(tableName: String, cacheKey: [Blackbird.Value]) -> Any? {
+        internal func readQueryResult(tableName: String, cacheKey: [Blackbird.Value]) -> CachedQueryResult {
             entriesByTableName.withLock {
                 let tableCache: TableCache
                 if let existingCache = $0[tableName] { tableCache = existingCache }
@@ -263,15 +268,15 @@ extension Blackbird.Database {
                     tableCache = TableCache()
                     $0[tableName] = tableCache
                     tableCache.misses += 1
-                    return nil
+                    return .miss
                 }
 
                 if let hit = tableCache.cachedQueries[cacheKey] {
                     tableCache.hits += 1
-                    return hit.value()
+                    return .hit(value: hit.value())
                 } else {
                     tableCache.misses += 1
-                    return nil
+                    return .miss
                 }
             }
         }

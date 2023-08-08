@@ -178,9 +178,15 @@ extension BlackbirdModel {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0, let cacheKey = decoded.cacheKey else { return try await resultFetcher(database) }
         
-        if let cachedResult = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey) as? T { return cachedResult }
+        let logActivity = database.options.contains(.debugPrintCacheActivity)
+
+        if let cachedResult = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey) as? T {
+            if logActivity { print("[BlackbirdModel] ++ Cache hit: \(cacheKey)") }
+            return cachedResult
+        }
         
         let result = try await resultFetcher(database)
+        if logActivity { print("[BlackbirdModel] -- Cache write: \(cacheKey)") }
         database.cache.writeQueryResult(tableName: decoded.tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }
