@@ -72,7 +72,7 @@ extension Blackbird.Row {
 //
 extension Blackbird {
     /// A specialized version of ``Row`` associated with its source ``BlackbirdModel`` type for convenient access to its values with column key-paths.
-    public struct ModelRow<T: BlackbirdModel>: Collection, Equatable {
+    public struct ModelRow<T: BlackbirdModel>: Collection, Equatable, Sendable {
         private let table: Blackbird.Table
     
         internal init(_ row: Blackbird.Row, table: Blackbird.Table) {

@@ -32,7 +32,7 @@
 //
 
 import SwiftUI
-import Combine
+@preconcurrency import Combine
 
 // Required to use with the @StateObject wrapper
 extension Blackbird.Database: ObservableObject { }
@@ -228,17 +228,21 @@ extension View {
 }
 
 
-public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
+public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel>: @unchecked Sendable { /* unchecked due to internal locking */
     private let primaryKeyValues: [Blackbird.Value]
     private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
-    private var currentDatabase: Blackbird.Database? = nil
-    private var hasEverUpdated = false
     
-    private var _changePublisher = PassthroughSubject<T?, Never>()
+    private let currentDatabase = Blackbird.Locked<Blackbird.Database?>(nil)
+    private let hasEverUpdated = Blackbird.Locked(false)
+    
+    private let _changePublisher = PassthroughSubject<T?, Never>()
     public var changePublisher: AnyPublisher<T?, Never> { _changePublisher.eraseToAnyPublisher() }
 
-    public var updatesEnabled = true {
-        didSet {
+    private let _updatesEnabled = Blackbird.Locked(true)
+    public var updatesEnabled: Bool {
+        get { _updatesEnabled.value }
+        set {
+            _updatesEnabled.value = newValue
             Task.detached { [weak self] in await self?.update() }
         }
     }
@@ -253,8 +257,8 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     
     public func observe(database: Blackbird.Database?, currentInstance: Binding<T?>) {
         _currentInstance = currentInstance
-        guard let database, database != currentDatabase else { return }
-        currentDatabase = database
+        guard let database, database != currentDatabase.value else { return }
+        currentDatabase.value = database
         cachedInstance.value = nil
         
         if updatesEnabled {
@@ -263,7 +267,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     }
     
     public func update() async {
-        guard let currentDatabase, updatesEnabled else { return }
+        guard let currentDatabase = currentDatabase.value, updatesEnabled else { return }
         
         changeObserver.withLock { observer in
             if observer != nil { return }

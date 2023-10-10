@@ -1026,7 +1026,7 @@ extension BlackbirdModel {
         self._deleteCachedInstance(for: database)
     }
 
-    fileprivate static func _cacheableResult<T>(database: Blackbird.Database, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
+    fileprivate static func _cacheableResult<T: Sendable>(database: Blackbird.Database, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0 else { return try await resultFetcher(database) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
@@ -1039,7 +1039,7 @@ extension BlackbirdModel {
         return result
     }
 
-    fileprivate static func _cacheableResultIsolated<T>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
+    fileprivate static func _cacheableResultIsolated<T: Sendable>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0 else { return try resultFetcher(database, core) }
         var cacheKey: [Blackbird.Value] = [.text(query)]

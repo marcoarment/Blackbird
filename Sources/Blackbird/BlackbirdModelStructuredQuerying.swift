@@ -182,7 +182,7 @@ fileprivate struct DecodedStructuredQuery: Sendable {
 
 
 extension BlackbirdModel {
-    fileprivate static func _cacheableStructuredResult<T>(database: Blackbird.Database, decoded: DecodedStructuredQuery, resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
+    fileprivate static func _cacheableStructuredResult<T: Sendable>(database: Blackbird.Database, decoded: DecodedStructuredQuery, resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0, let cacheKey = decoded.cacheKey else { return try await resultFetcher(database) }
         
@@ -199,7 +199,7 @@ extension BlackbirdModel {
         return result
     }
 
-    fileprivate static func _cacheableStructuredResultIsolated<T>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, decoded: DecodedStructuredQuery, resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
+    fileprivate static func _cacheableStructuredResultIsolated<T: Sendable>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, decoded: DecodedStructuredQuery, resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0, let cacheKey = decoded.cacheKey else { return try resultFetcher(database, core) }
         
@@ -375,13 +375,13 @@ extension BlackbirdModel {
     /// ```
     ///
     /// If matching against specific primary-key values, use ``update(in:set:forPrimaryKeys:)`` instead.
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], matching: BlackbirdModelColumnExpression<Self>) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable?], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
         try await updateIsolated(in: database, core: database.core, set: changes, matching: matching)
     }
 
     /// Synchronous version of ``update(in:set:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], matching: BlackbirdModelColumnExpression<Self>) throws {
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable?], matching: BlackbirdModelColumnExpression<Self>) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
         let table = Self.table
@@ -437,7 +437,7 @@ extension BlackbirdModel {
     /// // "UPDATE Post SET title = 'Hi' WHERE (id = 1 OR id = 2 OR id = 3)"
     /// ```
     /// For tables with multi-column primary keys, use ``update(in:set:forMulticolumnPrimaryKeys:)``.
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: [Any]) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable?], forPrimaryKeys: [Sendable]) async throws {
         if changes.isEmpty { return }
         try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
     }
@@ -463,18 +463,18 @@ extension BlackbirdModel {
     /// ```
     ///
     /// For tables with single-column primary keys, ``update(in:set:forPrimaryKeys:)`` may also be used.
-    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys: [[Any]]) async throws {
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable?], forMulticolumnPrimaryKeys: [[Sendable]]) async throws {
         if changes.isEmpty { return }
         try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
     }
 
     /// Synchronous version of ``update(in:set:forPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forPrimaryKeys: [Any]) throws {
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable?], forPrimaryKeys: [Sendable]) throws {
         try updateIsolated(in: database, core: core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
     }
 
     /// Synchronous version of ``update(in:set:forMulticolumnPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Any?], forMulticolumnPrimaryKeys primaryKeyValues: [[Any]]) throws {
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable?], forMulticolumnPrimaryKeys primaryKeyValues: [[Sendable]]) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
         let primaryKeyValues = Array(primaryKeyValues)

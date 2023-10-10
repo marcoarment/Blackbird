@@ -279,7 +279,7 @@ extension Blackbird {
     }
 
     /// Blackbird's locked-value utility, offered for public use. Useful when conforming to `Sendable`.
-    public final class Locked<T>: @unchecked Sendable /* unchecked due to use of internal locking */ {
+    public final class Locked<T: Sendable>: @unchecked Sendable /* unchecked due to use of internal locking */ {
         public var value: T {
             get {
                 return lock.withLock { _value }
