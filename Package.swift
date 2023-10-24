@@ -22,7 +22,7 @@ let package = Package(
             name: "Blackbird",
             dependencies: [],
             swiftSettings: [
-//                .unsafeFlags(["-Xfrontend", "-warn-concurrency"]) // Uncomment for Sendable testing
+//                .enableExperimentalFeature("StrictConcurrency"),  // Uncomment for Sendable testing
             ]
         ),
         .testTarget(

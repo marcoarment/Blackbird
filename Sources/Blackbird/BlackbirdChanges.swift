@@ -118,6 +118,12 @@ public extension Blackbird {
             guard let columnNames else { return true }
             return columnNames.contains(T.table.keyPathToColumnName(keyPath: keyPath))
         }
+        
+        /// The set of primary-key values that may have changed, or `nil` if any primary key may have changed.
+        public var changedPrimaryKeys: PrimaryKeyValues? {
+            if let primaryKeys, primaryKeys.count > 0 { return primaryKeys }
+            return nil
+        }
 
         internal init(type: T.Type, from change: Change) {
             self.type = type
