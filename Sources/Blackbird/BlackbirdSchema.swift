@@ -35,6 +35,15 @@ import Foundation
 
 // MARK: - Schema
 
+public struct BlackbirdModelSchemaResolution: OptionSet, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    public static let createdTable          = BlackbirdModelSchemaResolution(rawValue: 1 << 0)
+    public static let migratedTable         = BlackbirdModelSchemaResolution(rawValue: 1 << 1)
+    public static let migratedFullTextIndex = BlackbirdModelSchemaResolution(rawValue: 1 << 2)
+}
+
 extension Blackbird {
 
     internal enum ColumnType: Sendable {
@@ -203,6 +212,7 @@ extension Blackbird {
         internal let columnNames: ColumnNames
         internal let primaryKeys: [Column]
         internal let indexes: [Index]
+        internal let fullTextIndex: FullTextIndexSchema?
         internal let upsertClause: String
         
         internal let emptyInstance: (any BlackbirdModel)?
@@ -210,13 +220,14 @@ extension Blackbird {
         private static let resolvedTablesWithDatabases = Locked([Table: Set<Database.InstanceID>]())
         private static let resolvedTableNamesInDatabases = Locked([Database.InstanceID: Set<String>]())
         
-        public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = [], emptyInstance: any BlackbirdModel) {
+        public init(name: String, columns: [Column], primaryKeyColumnNames: [String] = ["id"], indexes: [Index] = [], fullTextSearchableColumns: [String: BlackbirdModelFullTextSearchableColumn], emptyInstance: any BlackbirdModel) {
             if columns.isEmpty { fatalError("No columns specified") }
             let orderedColumnNames = columns.map { $0.name }
             self.emptyInstance = emptyInstance
             self.name = name
             self.columns = columns
             self.indexes = indexes
+            self.fullTextIndex = fullTextSearchableColumns.isEmpty ? nil : FullTextIndexSchema(contentTableName: name, fields: fullTextSearchableColumns)
             self.columnNames = Set(orderedColumnNames)
             self.primaryKeys = primaryKeyColumnNames.map { name in
                 guard let pkColumn = columns.first(where: { $0.name == name }) else { fatalError("Primary-key column \"\(name)\" not found") }
@@ -252,6 +263,7 @@ extension Blackbird {
             self.columns = columns
             self.primaryKeys = primaryKeyColumns
             self.columnNames = Set(orderedColumnNames)
+            self.fullTextIndex = nil
             self.indexes = try core.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", tableName).compactMap { row in
                 guard let sql = row["sql"]?.stringValue else { return nil }
                 return try Index(definition: sql)
@@ -274,6 +286,12 @@ extension Blackbird {
             return name
         }
 
+        internal func keyPathToFTSColumnName(keyPath: AnyKeyPath) -> String {
+            let keyPathName = keyPathToColumnName(keyPath: keyPath)
+            guard fullTextIndex?.fields[keyPathName] != nil else { fatalError("Column \\.$\(keyPathName) is not included in `\(name).fullTextSearchableColumns`.") }
+            return keyPathName
+        }
+
         internal func createTableStatement<T: BlackbirdModel>(type: T.Type, overrideTableName: String? = nil) -> String {
             let columnDefs = columns.map { $0.definition() }.joined(separator: ",")
             let pkDef = primaryKeys.isEmpty ? "" : ",PRIMARY KEY (`\(primaryKeys.map { $0.name }.joined(separator: "`,`"))`)"
@@ -282,21 +300,28 @@ extension Blackbird {
         
         internal func createIndexStatements<T: BlackbirdModel>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
         
-        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) async throws {
-            if _isAlreadyResolved(type: type, in: database) { return }
+        @discardableResult
+        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) async throws -> BlackbirdModelSchemaResolution {
+            if _isAlreadyResolved(type: type, in: database) { return [] }
             
             if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
                 fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
             }
             
-            try await core.transaction {
+            return try await core.transaction {
                 try _resolveWithDatabaseIsolated(type: type, database: database, core: $0, validator: validator)
             }
         }
 
-        internal func resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws {
-            if _isAlreadyResolved(type: type, in: database) { return }
-            try _resolveWithDatabaseIsolated(type: type, database: database, core: core, validator: validator)
+        @discardableResult
+        internal func resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
+            if _isAlreadyResolved(type: type, in: database) { return [] }
+
+            if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
+                fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
+            }
+
+            return try _resolveWithDatabaseIsolated(type: type, database: database, core: core, validator: validator)
         }
 
         internal func _isAlreadyResolved<T>(type: T.Type, in database: Database) -> Bool {
@@ -307,7 +332,9 @@ extension Blackbird {
             return alreadyResolved
         }
 
-        private func _resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws {
+        private func _resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
+            var resolution: BlackbirdModelSchemaResolution = []
+        
             // Table not created yet
             let schemaInDB: Table
             do {
@@ -318,6 +345,7 @@ extension Blackbird {
                     try core.execute(createTableStatement(type: type))
                     for createIndexStatement in createIndexStatements(type: type) { try core.execute(createIndexStatement) }
                     schemaInDB = try Table(isolatedCore: core, tableName: name, type: type)!
+                    resolution.insert(.createdTable)
                 }
             }
 
@@ -328,7 +356,12 @@ extension Blackbird {
             let targetColumns = Set(columns)
             let currentIndexes = Set(schemaInDB.indexes)
             let targetIndexes = Set(indexes)
-            if primaryKeysChanged || currentColumns != targetColumns || currentIndexes != targetIndexes {
+            
+            let needsSchemaChanges = primaryKeysChanged || currentColumns != targetColumns || currentIndexes != targetIndexes
+            let needsFTSRebuild = try fullTextIndex?.needsRebuild(core: core) ?? false
+            let needsFTSDelete = try fullTextIndex == nil && FullTextIndexSchema.ftsTableExists(core: core, contentTableName: name)
+
+            if needsSchemaChanges || needsFTSRebuild || needsFTSDelete {
                 try core.transaction { core in
                     // drop indexes and columns
                     var schemaInDB = schemaInDB
@@ -363,9 +396,22 @@ extension Blackbird {
                         
                         try core.execute("ALTER TABLE `\(name)` ADD COLUMN \(columnToAdd.definition())")
                     }
-                    
+
                     for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: name)) }
+
+                    if needsFTSRebuild { try fullTextIndex?.rebuild(core: core) }
+
+                    if needsFTSDelete {
+                        try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.insertTriggerName(name))`")
+                        try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.updateTriggerName(name))`")
+                        try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.deleteTriggerName(name))`")
+                        try core.query("DROP TABLE IF EXISTS `\(FullTextIndexSchema.ftsTableName(name))`")
+                    }
                 }
+                
+                if needsSchemaChanges { resolution.insert(.migratedTable) }
+
+                if needsFTSRebuild || needsFTSDelete { resolution.insert(.migratedFullTextIndex) }
             }
 
             // allow calling model to verify before committing
@@ -380,6 +426,8 @@ extension Blackbird {
                 if $0[database.id] == nil { $0[database.id] = Set<String>() }
                 $0[database.id]!.insert(name)
             }
+            
+            return resolution
         }
     }
 }
@@ -513,8 +561,13 @@ internal final class SchemaGenerator: Sendable {
             let (inserted, _) = indexedColumnSets.insert(index.columnNames)
             if !inserted { fatalError("\(String(describing: T.self)): Duplicate index definitions for [\(index.columnNames.joined(separator: ","))]") }
         }
-
-        return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes, emptyInstance: emptyInstance)
+        
+        var ftsColumns: [String: BlackbirdModelFullTextSearchableColumn] = [:]
+        for (key, value) in T.fullTextSearchableColumns {
+            ftsColumns[keyPathToColumnName(key, "fullTextSearchableColumns")] = value
+        }
+        
+        return Blackbird.Table(name: T.tableName, columns: columns, primaryKeyColumnNames: primaryKeyNames, indexes: indexes, fullTextSearchableColumns: ftsColumns, emptyInstance: emptyInstance)
     }
 }
 

@@ -82,10 +82,12 @@ import Combine
 /// ### Schema migrations
 ///
 /// If a table with the same name already exists in a database, a schema migration will be attempted for the following operations:
+///
 /// * Adding or dropping columns
 /// * Adding or dropping indexes
 /// * Changing column type or nullability
 /// * Changing the primary key
+///
 /// If the migration fails, an error will be thrown.
 ///
 /// Schema migrations are performed when the first `BlackbirdModel` database operation is performed for a given table.
@@ -147,6 +149,43 @@ import Combine
 /// }
 /// ```
 ///
+/// ## Full-text search
+///
+/// Adding support for [SQLite FTS5 full-text search](https://sqlite.org/fts5.html) is simple:
+///
+/// ```swift
+/// struct Post: BlackbirdModel {
+///     @BlackbirdColumn var id: Int
+///     @BlackbirdColumn var title: String
+///     @BlackbirdColumn var description: String
+///     @BlackbirdColumn var category: Int
+///     @BlackbirdColumn var popularity: Double
+///
+///     static var fullTextSearchableColumns: FullTextIndex = [
+///         \.$title       : .text(weight: 3.0),
+///         \.$description : .text,
+///         \.$category    : .filterOnly,
+///         \.$popularity  : .filterOnly,
+///     ]
+/// }
+///
+/// // Results automatically get snippets and highlighted search terms
+/// try await FTSModel.fullTextSearch(from: db, matching: .match("tech"))
+///
+/// // Use filterOnly columns as filters
+/// try await FTSModel.fullTextSearch(
+///     from: db,
+///     matching: .match("tech") && \.$category == 1,
+/// )
+///
+/// // Use a column value to adjust the ranking
+/// try await FTSModel.fullTextSearch(
+///     from: db,
+///     matching: .match("tech"),
+///     options: .init(scoreMultipleColumn: \.$popularity)
+/// )
+/// ```
+///
 /// ## Unsupported SQLite features
 ///
 /// `BlackbirdModel` assumes simple and straightforward SQLite usage.
@@ -183,6 +222,18 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     ///
     /// If unspecified, no additional unique indexes are created.
     static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { get }
+
+
+    typealias FullTextIndex = [BlackbirdColumnKeyPath: BlackbirdModelFullTextSearchableColumn]
+
+    /// A dictionary of column key-paths to ``BlackbirdModelFullTextSearchableColumn`` definitions for a [SQLite FTS5](https://sqlite.org/fts5.html) full-text index for this table.
+    ///
+    /// If unspecified or empty, no full-text index is created.
+    ///
+    /// Query with ``fullTextSearch(from:matching:limit:options:)``
+    ///
+    /// Any changes to this property may cause an index rebuild for existing databases on first run, which may be slow on large tables.
+    static var fullTextSearchableColumns: FullTextIndex { get }
 
     /// The number of entries to keep in the automatic query cache. Set to `0` to disable the cache. The default is `0`.
     ///
@@ -239,6 +290,7 @@ extension BlackbirdModel {
     public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
+    public static var fullTextSearchableColumns: FullTextIndex { [:] }
     public static var cacheLimit: Int { 0 }
     public static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { .throwError }
 
@@ -907,7 +959,9 @@ extension BlackbirdModel {
     ///
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to resolve the schema in.
-    public static func resolveSchema(in database: Blackbird.Database) async throws {
+
+    @discardableResult
+    public static func resolveSchema(in database: Blackbird.Database) async throws -> BlackbirdModelSchemaResolution {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core, isExplicitResolve: true) { try validateSchema(database: $0, core: $1) }
     }
     
@@ -954,7 +1008,7 @@ extension BlackbirdModel {
     public func writeIsolated(to database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
         let table = Self.table
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
+        _ = try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         var columnNames: [String] = []
         var placeholders: [String] = []

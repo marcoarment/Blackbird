@@ -142,7 +142,7 @@ fileprivate struct DecodedStructuredQuery: Sendable {
         if let matching {
             if forMulticolumnPrimaryKey != nil { fatalError("Cannot combine forMulticolumnPrimaryKey with matching") }
 
-            let (whereClause, whereArguments) = matching.compile(table: table)
+            let (whereClause, whereArguments) = matching.compile(table: table, queryingFullTextIndex: false)
             self.whereClause = whereClause
             self.whereArguments = whereArguments
             if let whereClause { clauses.append("WHERE \(whereClause)") }
@@ -479,7 +479,7 @@ extension BlackbirdModel {
         if changes.isEmpty { return }
         let primaryKeyValues = Array(primaryKeyValues)
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
+        _ = try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         let decoded = DecodedStructuredQuery(operation: "UPDATE", updating: changes, updateWhereAutoOptimization: false)
 
@@ -654,7 +654,7 @@ public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, B
     
     private let expression: BlackbirdQueryExpression
     
-    public var debugDescription: String { expression.compile(table: Model.table).whereClause ?? String(describing: self) }
+    public var debugDescription: String { expression.compile(table: Model.table, queryingFullTextIndex: true).whereClause ?? String(describing: self) }
 
     init(column: Model.BlackbirdColumnKeyPath, sqlOperator: UnaryOperator) {
         expression = BlackbirdColumnUnaryExpression(column: column, sqlOperator: sqlOperator)
@@ -670,6 +670,10 @@ public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, B
 
     init(column: Model.BlackbirdColumnKeyPath, valueLike pattern: String) {
         expression = BlackbirdColumnLikeExpression(column: column, pattern: pattern)
+    }
+
+    init(column: Model.BlackbirdColumnKeyPath?, fullTextMatch pattern: String, syntaxMode: BlackbirdFullTextQuerySyntaxMode) {
+        expression = BlackbirdColumnFTSMatchExpression(column: column, pattern: pattern, syntaxMode: syntaxMode)
     }
 
     init(lhs: BlackbirdModelColumnExpression<Model>, sqlOperator: CombiningOperator, rhs: BlackbirdModelColumnExpression<Model>) {
@@ -688,7 +692,7 @@ public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, B
         expression = BlackbirdColumnNoExpression()
     }
 
-    internal func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) { expression.compile(table: table) }
+    internal func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) { expression.compile(table: table, queryingFullTextIndex: queryingFullTextIndex) }
 
     static func isNull<T: BlackbirdModel>(_ columnKeyPath: T.BlackbirdColumnKeyPath) -> BlackbirdModelColumnExpression<T> {
         BlackbirdModelColumnExpression<T>(column: columnKeyPath, sqlOperator: .isNull)
@@ -765,6 +769,24 @@ public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, B
         BlackbirdModelColumnExpression<T>(column: column, valueLike: pattern)
     }
 
+    
+    /// Perform a text search in the model's full-text index.
+    /// - Parameters:
+    ///   - column: The full-text-indexed column to match against. If `nil` or unspecified, all indexed text columns are searched.
+    ///   - searchQuery: The text to search for.
+    ///   - syntaxMode: How and whether the query is escaped or processed.
+    ///
+    /// This operator only works for models declaring ``BlackbirdModel/fullTextSearchableColumns`` and when using ``BlackbirdModel/fullTextSearch(from:matching:limit:options:)``.
+    public static func match<T: BlackbirdModel>(column: T.BlackbirdColumnKeyPath? = nil, _ searchQuery: String, syntaxMode: BlackbirdFullTextQuerySyntaxMode = .escapeQuerySyntax) -> BlackbirdModelColumnExpression<T> {
+        if let column {
+            guard let config = T.fullTextSearchableColumns[column], config.indexed else {
+                fatalError("[Blackbird] .match() can only be used on `\(String(describing: T.self)).fullTextSearchableColumns` entries specified as `.text`")
+            }
+        }
+
+        return BlackbirdModelColumnExpression<T>(column: column, fullTextMatch: searchQuery, syntaxMode: syntaxMode)
+    }
+
     /// Specify a literal expression to be used in a `WHERE` clause.
     ///
     /// Example: `.literal("id % 5 = ?", 1)`
@@ -775,11 +797,11 @@ public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, B
 
 
 internal protocol BlackbirdQueryExpression: Sendable {
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value])
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value])
 }
 
 internal struct BlackbirdColumnNoExpression: BlackbirdQueryExpression {
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
         return (whereClause: nil, values: [])
     }
 }
@@ -789,8 +811,9 @@ internal struct BlackbirdColumnBinaryExpression<T: BlackbirdModel>: BlackbirdQue
     let sqlOperator: BlackbirdModelColumnExpression<T>.BinaryOperator
     let value: Sendable
 
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
-        var whereClause = "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue) ?"
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let columnName = queryingFullTextIndex ? table.keyPathToFTSColumnName(keyPath: column) : table.keyPathToColumnName(keyPath: column)
+        var whereClause = "`\(columnName)` \(sqlOperator.rawValue) ?"
         let value = try! Blackbird.Value.fromAny(value)
         var values = [value]
         if value == .null {
@@ -805,7 +828,7 @@ internal struct BlackbirdColumnLiteralExpression: BlackbirdQueryExpression {
     let literal: String
     let arguments: [Sendable]
     
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
         return (whereClause: "\(literal)", values: arguments.map { try! Blackbird.Value.fromAny($0) })
     }
 }
@@ -814,9 +837,10 @@ internal struct BlackbirdColumnInExpression<T: BlackbirdModel>: BlackbirdQueryEx
     let column: T.BlackbirdColumnKeyPath
     let values: [Sendable]
     
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let columnName = queryingFullTextIndex ? table.keyPathToFTSColumnName(keyPath: column) : table.keyPathToColumnName(keyPath: column)
         let placeholderStr = Array(repeating: "?", count: values.count).joined(separator: ",")
-        return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` IN (\(placeholderStr))", values: values.map { try! Blackbird.Value.fromAny($0) })
+        return (whereClause: "`\(columnName)` IN (\(placeholderStr))", values: values.map { try! Blackbird.Value.fromAny($0) })
     }
 }
 
@@ -824,8 +848,9 @@ internal struct BlackbirdColumnLikeExpression<T: BlackbirdModel>: BlackbirdQuery
     let column: T.BlackbirdColumnKeyPath
     let pattern: String
     
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
-        return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` LIKE ?", values: [try! Blackbird.Value.fromAny(pattern)])
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let columnName = queryingFullTextIndex ? table.keyPathToFTSColumnName(keyPath: column) : table.keyPathToColumnName(keyPath: column)
+        return (whereClause: "`\(columnName)` LIKE ?", values: [.text(pattern)])
     }
 }
 
@@ -833,8 +858,9 @@ internal struct BlackbirdColumnUnaryExpression<T: BlackbirdModel>: BlackbirdQuer
     let column: T.BlackbirdColumnKeyPath
     let sqlOperator: BlackbirdModelColumnExpression<T>.UnaryOperator
 
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
-        return (whereClause: "`\(table.keyPathToColumnName(keyPath: column))` \(sqlOperator.rawValue)", values: [])
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let columnName = queryingFullTextIndex ? table.keyPathToFTSColumnName(keyPath: column) : table.keyPathToColumnName(keyPath: column)
+        return (whereClause: "`\(columnName)` \(sqlOperator.rawValue)", values: [])
     }
 }
 
@@ -842,8 +868,8 @@ internal struct BlackbirdColumnNotExpression<T: BlackbirdModel>: BlackbirdQueryE
     let type: T.Type
     let expression: BlackbirdQueryExpression
 
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
-        let compiled = expression.compile(table: table)
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let compiled = expression.compile(table: table, queryingFullTextIndex: queryingFullTextIndex)
         if let whereClause = compiled.whereClause {
             return (whereClause: "NOT (\(whereClause))", values: compiled.values)
         } else {
@@ -857,9 +883,9 @@ internal struct BlackbirdCombiningExpression<T: BlackbirdModel>: BlackbirdQueryE
     let rhs: BlackbirdQueryExpression
     let sqlOperator: BlackbirdModelColumnExpression<T>.CombiningOperator
 
-    func compile(table: Blackbird.Table) -> (whereClause: String?, values: [Blackbird.Value]) {
-        let l = lhs.compile(table: table)
-        let r = rhs.compile(table: table)
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        let l = lhs.compile(table: table, queryingFullTextIndex: queryingFullTextIndex)
+        let r = rhs.compile(table: table, queryingFullTextIndex: queryingFullTextIndex)
         
         var combinedValues = l.values
         combinedValues.append(contentsOf: r.values)
@@ -868,5 +894,23 @@ internal struct BlackbirdCombiningExpression<T: BlackbirdModel>: BlackbirdQueryE
         if let whereL = l.whereClause { wheres.append(whereL) }
         if let whereR = r.whereClause { wheres.append(whereR) }
         return (whereClause: "(\(wheres.joined(separator: " \(sqlOperator.rawValue) ")))", values: combinedValues)
+    }
+}
+
+internal struct BlackbirdColumnFTSMatchExpression<T: BlackbirdModel>: BlackbirdQueryExpression {
+    let column: T.BlackbirdColumnKeyPath?
+    let pattern: String
+    let syntaxMode: BlackbirdFullTextQuerySyntaxMode
+    
+    func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
+        guard queryingFullTextIndex else { fatalError("[Blackbird] .match() is only available on full-text searches.") }
+        
+        let columnOrFTSTableName: String
+        if let column { columnOrFTSTableName = table.keyPathToFTSColumnName(keyPath: column) }
+        else { columnOrFTSTableName = Blackbird.Table.FullTextIndexSchema.ftsTableName(T.tableName) }
+        
+        let escapedQuery = T.fullTextQueryEscape(pattern, mode: syntaxMode)
+        
+        return (whereClause: "`\(columnOrFTSTableName)` MATCH ?", values: [.text(escapedQuery)])
     }
 }

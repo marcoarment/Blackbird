@@ -1136,6 +1136,71 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 //        }
     }
 
+    func testFTS() async throws {
+        let options: Blackbird.Database.Options = [.debugPrintEveryQuery, .requireModelSchemaValidationBeforeUse]
+
+        let db1 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution1 = try await FTSModel.resolveSchema(in: db1)
+        XCTAssert(resolution1.contains(.createdTable))
+        XCTAssert(resolution1.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution1.contains(.migratedTable))
+
+        let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
+        
+        try await db1.transaction { core in
+            for i in 0..<count {
+                let m = FTSModel(id: i, title: TestData.titles[i], url: TestData.URLs[i], description: TestData.descriptions[i], keywords: TestData.descriptions[(i + 2) % count].lowercased(), category: i % 10)
+                try m.writeIsolated(to: db1, core: core)
+            }
+        }
+
+        let results1 = try await FTSModel.fullTextSearch(from: db1, matching: .match("tech"), options: .default)
+        XCTAssert(results1.count == 38)
+        await db1.close()
+        
+        let db2 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution2 = try await FTSModel.resolveSchema(in: db2)
+        XCTAssert(!resolution2.contains(.createdTable))
+        XCTAssert(!resolution2.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution2.contains(.migratedTable))
+        try await FTSModel.optimizeFullTextIndex(in: db2)
+        let results2a = try await FTSModel.fullTextSearch(from: db2, matching: .match(column: \.$title, "podcast"), options: .default)
+        XCTAssert(results2a.count == 111)
+        let results2b = try await FTSModel.fullTextSearch(from: db2, matching: .match(column: \.$title, "podcast") && \.$category == 1, options: .init(scoreMultipleColumn: \.$category))
+        XCTAssert(results2b.count == 10)
+        await db2.close()
+        
+        
+        let db3 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution3 = try await FTSModelAfterMigration.resolveSchema(in: db3)
+        XCTAssert(!resolution3.contains(.createdTable))
+        XCTAssert(resolution3.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution3.contains(.migratedTable))
+
+        let results3 = try await FTSModelAfterMigration.fullTextSearch(from: db3, matching: .match(column: \.$keywords, "finance"), options: .default)
+        XCTAssert(results3.count == 18)
+        await db3.close()
+        
+        let db4 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution4 = try await FTSModelAfterDeletion.resolveSchema(in: db4)
+        XCTAssert(!resolution4.contains(.createdTable))
+        XCTAssert(resolution4.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution4.contains(.migratedTable))
+        await db4.close()
+
+        let db5 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution5 = try await FTSModelAfterDeletion.resolveSchema(in: db5)
+        XCTAssert(!resolution5.contains(.createdTable))
+        XCTAssert(!resolution5.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution5.contains(.migratedTable))
+
+//        for result in results3 {
+//            guard let instance = try await result.instance(from: db3) else { continue }
+//            print("[#] id \(instance.id), cat \(instance.category), title: [\(result.highlighted(\.$title)!)], keywords: [\(result.snippet(\.$keywords) ?? "--")]")
+//        }
+    }
+
+
 /* Tests duplicate-index detection. Throws fatal error on success.
     func testDuplicateIndex() async throws {
         var db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintQueryParameterValues])
