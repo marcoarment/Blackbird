@@ -408,8 +408,13 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
     }
     
     func query(in database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws -> [BlackbirdModelSearchResult<T>] {
-        try T.queryIsolated(in: database, core: core, query, arguments: arguments)
-        .compactMap { try result(database: database, core: core, ftsRow: $0) }
+        var results: [BlackbirdModelSearchResult<T>] = []
+        for row in try T.queryIsolated(in: database, core: core, query, arguments: arguments) {
+            if let result = try result(database: database, core: core, ftsRow: row) {
+                results.append(result)
+            }
+        }
+        return results
     }
     
     func result(database: Blackbird.Database, core: isolated Blackbird.Database.Core, ftsRow: Blackbird.ModelRow<T>) throws -> BlackbirdModelSearchResult<T>? {
