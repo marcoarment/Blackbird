@@ -129,7 +129,9 @@ public struct BlackbirdModelSearchOptions<T: BlackbirdModel>: Sendable {
 }
 
 /// A matching model from a full-text search query, with snippets to highlight the query in the source text.
-public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Sendable {
+public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Sendable {
+    public var id: Blackbird.Value { rowid }
+    
     private let highlights: Blackbird.ModelRow<T>?
     private let highlightMode: BlackbirdModelSearchOptions<T>.HighlightMode
     private let snippets: Blackbird.ModelRow<T>?
