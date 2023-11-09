@@ -60,7 +60,17 @@ public class Blackbird {
     }
 
     /// A wrapper for SQLite's column data types.
-    public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
+    public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable, Comparable {
+        public static func < (lhs: Blackbird.Value, rhs: Blackbird.Value) -> Bool {
+            switch lhs {
+                case .null:           return false
+                case let .integer(i): return i < rhs.int64Value ?? 0
+                case let .double(d):  return d < rhs.doubleValue ?? 0
+                case let .text(s):    return s < rhs.stringValue ?? ""
+                case let .data(b):    return b.count < rhs.dataValue?.count ?? 0
+            }
+        }
+        
         case null
         case integer(Int64)
         case double(Double)

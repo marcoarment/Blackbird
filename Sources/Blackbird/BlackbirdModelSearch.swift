@@ -115,38 +115,81 @@ public struct BlackbirdModelSearchOptions<T: BlackbirdModel>: Sendable {
     let preloadInstances: Bool
     
     /// If set, relevance scores are multiplied by the numeric value in this column for search ranking. Results with higher values in this column will be ranked higher. This column must be in the full-text index.
+    ///
+    /// Can be used simultaneously with ``scoreMultiple``. Scores will be multiplied by both values.
     let scoreMultipleColumn: T.BlackbirdColumnKeyPath?
+    
+    /// If set, all result scores in this query are multiplied by this value. Useful when merging the results of multiple searches, such as when performing secondary searches for spelling-corrected queries.
+    ///
+    /// Can be used simultaneously with ``scoreMultipleColumn``. Scores will be multiplied by both values.
+    let scoreMultiple: Double
     
     /// The default options: generate highlights and snippets, preload instances, and use only relevance-based ranking.
     public static var `default`: Self { .init() }
 
-    public init(highlights: HighlightMode = .generate(prefix: "<b>", suffix: "</b>"), snippets: SnippetMode = .generate(contextWords: 7, prefix: "<b>", suffix: "</b>", ellipsis: "…"), preloadInstances: Bool = true, scoreMultipleColumn: T.BlackbirdColumnKeyPath? = nil) {
+    public init(highlights: HighlightMode = .generate(prefix: "<b>", suffix: "</b>"), snippets: SnippetMode = .generate(contextWords: 7, prefix: "<b>", suffix: "</b>", ellipsis: "…"), preloadInstances: Bool = true, scoreMultiple: Double = 1.0, scoreMultipleColumn: T.BlackbirdColumnKeyPath? = nil) {
         self.highlights = highlights
         self.snippets = snippets
         self.preloadInstances = preloadInstances
+        self.scoreMultiple = scoreMultiple
         self.scoreMultipleColumn = scoreMultipleColumn
     }
 }
 
 /// A matching model from a full-text search query, with snippets to highlight the query in the source text.
 public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Sendable {
+    /// Intended only for `Identifiable` conformance, not external use.
     public var id: Blackbird.Value { rowid }
+    
+    /// The score of this item within the search that generated it. Results with higher values were ranked earlier and considered more relevant than those with lower values.
+    ///
+    /// Values are only meaningful as relative relevance within their search, not as an absolute scale or indicator of anything outside the context of the search that generated them.
+    public let score: Double
     
     private let highlights: Blackbird.ModelRow<T>?
     private let highlightMode: BlackbirdModelSearchOptions<T>.HighlightMode
     private let snippets: Blackbird.ModelRow<T>?
     private let snippetMode: BlackbirdModelSearchOptions<T>.SnippetMode
     private let rowid: Blackbird.Value
+    
+    
+    /// Merge results from multiple searches.
+    /// - Parameter results: A list of result arrays.
+    /// - Returns: A single result array containing all elements of the input arrays, with duplicates removed, and with each element bearing its highest score among all occurrences in the input arrays.
+    public static func merge(results: [Self]...) -> [Self] {
+        var allResults: [Self] = []
+        for resultSet in results { allResults.append(contentsOf: resultSet) }
+        
+        // Sort by rowid, then highest-scoring version
+        allResults.sort { a, b in
+            if a.rowid == b.rowid { return a.score > b.score }
+            return a.rowid > b.rowid
+        }
+
+        // Create array with only the first copy of each rowid, which will now have the highest score
+        var mergedResults: [Self] = []
+        var rowids = Set<Blackbird.Value>()
+        for result in allResults {
+            let (inserted, _) = rowids.insert(result.rowid)
+            if inserted { mergedResults.append(result) }
+        }
+
+        // sort by score
+        mergedResults.sort { $0.score > $1.score }
+
+        return mergedResults
+    }
 
     /// The preloaded instance for this search result if ``BlackbirdModelSearchOptions`` specified `preloadInstances` for the search query.
     public let preloadedInstance: T?
 
-    internal init(highlights: Blackbird.ModelRow<T>?, highlightMode: BlackbirdModelSearchOptions<T>.HighlightMode, snippets: Blackbird.ModelRow<T>?, snippetMode: BlackbirdModelSearchOptions<T>.SnippetMode, rowid: Blackbird.Value, preloadedInstance: T?) {
+    internal init(highlights: Blackbird.ModelRow<T>?, highlightMode: BlackbirdModelSearchOptions<T>.HighlightMode, snippets: Blackbird.ModelRow<T>?, snippetMode: BlackbirdModelSearchOptions<T>.SnippetMode, rowid: Blackbird.Value, score: Double, preloadedInstance: T?) {
         self.highlights = highlights
         self.highlightMode = highlightMode
         self.snippets = snippets
         self.snippetMode = snippetMode
         self.rowid = rowid
+        self.score = score
         self.preloadedInstance = preloadedInstance
     }
 
@@ -290,7 +333,7 @@ extension BlackbirdModel {
     /// Synchronous version of ``fullTextSearch(from:matching:limit:options:)``.
     public static func fullTextSearchIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>, limit: Int? = nil, options: BlackbirdModelSearchOptions<Self> = .init()) throws -> [Self.SearchResult] {
         let decoded = DecodedStructuredFTSQuery<Self>(matching: matching, options: options, limit: limit)
-        return try decoded.query(in: database, core: core)
+        return try decoded.query(in: database, core: core, scoreMultiplier: options.scoreMultiple)
     }
 
     internal static func fullTextQueryEscape(_ query: String, mode: BlackbirdFullTextQuerySyntaxMode) -> String {
@@ -349,6 +392,7 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
     
     let highlightColumnPrefix = "FTSHighlight"
     let snippetColumnPrefix = "FTSSnippet"
+    let scoreColumnName = "FTS+Score"
     let fieldNames: [String]
     let options: BlackbirdModelSearchOptions<T>
     
@@ -363,7 +407,15 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         fieldNames = fullTextIndex.sortedFieldNames
         let fieldWeights = fieldNames.map { fullTextIndex.fields[$0]?.weight ?? 0.0 }
 
-        var columnsToSelect: [String] = ["rowid"]
+        var bm25expr = "(-1 * bm25(`\(ftsTableName)`,\(fieldWeights.map { "\($0)" }.joined(separator: ","))))"
+        if let scoreMultipleColumn = options.scoreMultipleColumn {
+            bm25expr += " * `\(table.keyPathToFTSColumnName(keyPath: scoreMultipleColumn))`"
+        }
+
+        var columnsToSelect: [String] = [
+            "rowid",
+            "\(bm25expr) AS `\(scoreColumnName)`"
+        ]
 
         if case let .generate(prefix, suffix) = options.highlights {
             var idx = 0
@@ -392,13 +444,8 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         if let whereClause { clauses.append("WHERE \(whereClause)") }
         arguments.append(contentsOf: whereArguments)
         
-        let bm25expr = "bm25(`\(ftsTableName)`,\(fieldWeights.map { "\($0)" }.joined(separator: ",")))"
-        if let scoreMultipleColumn = options.scoreMultipleColumn {
-            clauses.append("ORDER BY (-1 * \(bm25expr)) * `\(table.keyPathToFTSColumnName(keyPath: scoreMultipleColumn))` DESC")
-        } else {
-            clauses.append("ORDER BY \(bm25expr)")
-        }
-        
+        clauses.append("ORDER BY `\(scoreColumnName)` DESC")
+
         if let limit { clauses.append("LIMIT \(limit)") }
 
         query = "\(selectClause) FROM `\(ftsTableName)` \(clauses.joined(separator: " "))"
@@ -409,18 +456,20 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         self.cacheKey = cacheKey
     }
     
-    func query(in database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws -> [BlackbirdModelSearchResult<T>] {
+    func query(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, scoreMultiplier: Double) throws -> [BlackbirdModelSearchResult<T>] {
         var results: [BlackbirdModelSearchResult<T>] = []
         for row in try T.queryIsolated(in: database, core: core, query, arguments: arguments) {
-            if let result = try result(database: database, core: core, ftsRow: row) {
+            if let result = try result(database: database, core: core, ftsRow: row, scoreMultiplier: scoreMultiplier) {
                 results.append(result)
             }
         }
         return results
     }
     
-    func result(database: Blackbird.Database, core: isolated Blackbird.Database.Core, ftsRow: Blackbird.ModelRow<T>) throws -> BlackbirdModelSearchResult<T>? {
-        guard let rowid = ftsRow["rowid"] else { fatalError("Unexpected result row format from FTS query on \(String(describing: T.self)) (missing rowid)") }
+    private func result(database: Blackbird.Database, core: isolated Blackbird.Database.Core, ftsRow: Blackbird.ModelRow<T>, scoreMultiplier: Double) throws -> BlackbirdModelSearchResult<T>? {
+        guard let rowid = ftsRow["rowid"], let score = ftsRow[scoreColumnName] else {
+            fatalError("Unexpected result row format from FTS query on \(String(describing: T.self)) (missing rowid or score)")
+        }
         
         var idx = 0
         var highlightRow: [String: Blackbird.Value] = [:]
@@ -437,7 +486,7 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         }
         
         let preloadedInstance = try options.preloadInstances ? T.readIsolated(from: database, core: core, sqlWhere: "rowid = ?", arguments: [rowid]).first : nil
-        return BlackbirdModelSearchResult<T>(highlights: .init(highlightRow, table: table), highlightMode: options.highlights, snippets: .init(snippetRow, table: table), snippetMode: options.snippets, rowid: rowid, preloadedInstance: preloadedInstance)
+        return BlackbirdModelSearchResult<T>(highlights: .init(highlightRow, table: table), highlightMode: options.highlights, snippets: .init(snippetRow, table: table), snippetMode: options.snippets, rowid: rowid, score: (score.doubleValue ?? 0) * scoreMultiplier, preloadedInstance: preloadedInstance)
     }
 }
 
