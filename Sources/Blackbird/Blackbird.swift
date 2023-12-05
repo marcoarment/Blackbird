@@ -373,4 +373,54 @@ extension Blackbird {
             self.lock.unlock()
         }
     }
+    
+    
+    /// Blackbird's async-sempahore utility, offered for public use.
+    ///
+    /// Suggested use:
+    ///
+    /// ```swift
+    /// class MyClass {
+    ///     let myMethodSemaphore = Blackbird.Semaphore(value: 1)
+    ///
+    ///     func myMethod() async {
+    ///         await myMethodSemaphore.wait()
+    ///         defer { myMethodSemaphore.signal() }
+    ///
+    ///         // do async work...
+    ///     }
+    /// }
+    /// ```
+    /// Inspired by [Sebastian Toivonen's approach](https://forums.swift.org/t/semaphore-alternatives-for-structured-concurrency/59353/3).
+    /// Consider using the Gwendal Roué's more-featured [Semaphore](https://github.com/groue/Semaphore) instead.
+    public final class Semaphore: Sendable {
+        private struct State: Sendable {
+            var value = 0
+            var waiting: [CheckedContinuation<Void, Never>] = []
+        }
+        private let state: Locked<State>
+
+        public init(value: Int = 0) { state = Locked(State(value: value)) }
+        
+        public func wait() async {
+            let wait = state.withLock { state in
+                state.value -= 1
+                return state.value < 0
+            }
+            
+            if wait {
+                await withCheckedContinuation { continuation in
+                    state.withLock { $0.waiting.append(continuation) }
+                }
+            }
+        }
+
+        public func signal() {
+            state.withLock { state in
+                state.value += 1
+                if state.waiting.isEmpty { return }
+                state.waiting.removeFirst().resume()
+            }
+        }
+    }
 }

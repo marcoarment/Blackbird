@@ -35,8 +35,6 @@ import SwiftUI
 import Blackbird
 
 struct Post: BlackbirdModel {
-//    public static var cacheLimit = 1000
-    
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
 }
@@ -81,6 +79,24 @@ struct BlackbirdSwiftUITestApp: App {
                         }
                     } header: {
                         Text("Bound database")
+                    }
+
+                    if #available(macOS 14, iOS 17, tvOS 17, watchOS 10, *) {
+                        Section {
+                            NavigationLink {
+                                ContentViewObservation()
+                            } label: {
+                                Text("Model list")
+                            }
+
+                            NavigationLink {
+                                PostViewObservation(post: firstPost.observer)
+                            } label: {
+                                Text("Single-model updater")
+                            }
+                        } header: {
+                            Text("Observation")
+                        }
                     }
                 }
             }
