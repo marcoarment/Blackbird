@@ -44,23 +44,35 @@ extension BlackbirdModel {
 @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
 @Observable
 public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Any> {
-    /// Whether this instance is currently loading from the database, either initially or after an update.
+    /// Whether this query is currently loading from the database, either initially or after an update.
     public var isLoading = false
     
-    /// Whether this instance has ever loaded from the database. After the initial load, it is set to `true` and remains true.
+    /// Whether this query has ever loaded from the database. After the initial load, it is set to `true` and remains true.
     public var didLoad = false
     
-    /// The current instance matching the supplied primary-key value.
+    /// The current result.
     public var result: R?
 
-    @ObservationIgnored private weak var database: Blackbird.Database?
+    @ObservationIgnored private var database: Blackbird.Database?
     @ObservationIgnored private var observer: AnyCancellable? = nil
-    
+    @ObservationIgnored private var multicolumnPrimaryKeyForInvalidation: [Blackbird.Value]?
+    @ObservationIgnored private var columnsForInvalidation: [T.BlackbirdColumnKeyPath]?
     @ObservationIgnored private var fetcher: ((_ database: Blackbird.Database) async throws -> R)
     
-    public init(in database: Blackbird.Database? = nil, _ fetcher: @escaping ((_ database: Blackbird.Database) async throws -> R)) {
+    public init(in database: Blackbird.Database? = nil, multicolumnPrimaryKeyForInvalidation: [Any]? = nil, columnsForInvalidation: [T.BlackbirdColumnKeyPath]? = nil, _ fetcher: @escaping ((_ database: Blackbird.Database) async throws -> R)) {
         self.fetcher = fetcher
+        self.multicolumnPrimaryKeyForInvalidation = multicolumnPrimaryKeyForInvalidation?.map { try! Blackbird.Value.fromAny($0) } ?? nil
+        self.columnsForInvalidation = columnsForInvalidation
         bind(to: database)
+    }
+    
+    public convenience init(in database: Blackbird.Database? = nil, primaryKeyForInvalidation: Any? = nil, columnsForInvalidation: [T.BlackbirdColumnKeyPath]? = nil, _ fetcher: @escaping ((_ database: Blackbird.Database) async throws -> R)) {
+        self.init(
+            in: database,
+            multicolumnPrimaryKeyForInvalidation: primaryKeyForInvalidation != nil ? [primaryKeyForInvalidation!] : nil,
+            columnsForInvalidation: columnsForInvalidation,
+            fetcher
+        )
     }
 
     /// Set or change the ``Blackbird/Database`` to read from and monitor for changes.
@@ -74,7 +86,7 @@ public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Any> {
         observer = nil
         result = nil
         
-        observer = T.changePublisher(in: database).sink { _ in
+        observer = T.changePublisher(in: database, multicolumnPrimaryKey: multicolumnPrimaryKeyForInvalidation, columns: columnsForInvalidation ?? []).sink { _ in
             Task.detached { [weak self] in await self?.update() }
         }
         Task.detached { [weak self] in await self?.update() }
@@ -89,7 +101,7 @@ public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Any> {
             self.isLoading = true
         }
         
-        let result: R? = if let database { try? await fetcher(database) } else { nil }
+        let result: R? = if let database, !database.isClosed { try? await fetcher(database) } else { nil }
 
         await MainActor.run {
             self.result = result
@@ -120,7 +132,7 @@ public final class BlackbirdModelObserver<T: BlackbirdModel> {
     /// The current instance matching the supplied primary-key value.
     public var instance: T?
 
-    @ObservationIgnored private weak var database: Blackbird.Database?
+    @ObservationIgnored private var database: Blackbird.Database?
     @ObservationIgnored private var multicolumnPrimaryKey: [Blackbird.Value]?
     @ObservationIgnored private var observer: AnyCancellable? = nil
     
@@ -178,7 +190,7 @@ public final class BlackbirdModelObserver<T: BlackbirdModel> {
             self.isLoading = true
         }
         
-        let newInstance: T? = if let database, let multicolumnPrimaryKey { try? await T.read(from: database, multicolumnPrimaryKey: multicolumnPrimaryKey) } else { nil }
+        let newInstance: T? = if let database, let multicolumnPrimaryKey, !database.isClosed { try? await T.read(from: database, multicolumnPrimaryKey: multicolumnPrimaryKey) } else { nil }
 
         await MainActor.run {
             self.instance = newInstance
