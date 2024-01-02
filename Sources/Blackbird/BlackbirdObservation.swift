@@ -157,7 +157,7 @@ public final class BlackbirdModelObserver<T: BlackbirdModel> {
     }
     
     /// Set or change the single-column primary-key value to observe.
-    public func observe(primaryKey: Sendable? = nil) { observe(multicolumnPrimaryKey: [primaryKey]) }
+    public func observe(primaryKey: Sendable? = nil) { observe(multicolumnPrimaryKey: primaryKey == nil ? nil : [primaryKey]) }
 
     /// Set or change the multi-column primary-key value to observe.
     public func observe(multicolumnPrimaryKey: [Sendable]? = nil) {
