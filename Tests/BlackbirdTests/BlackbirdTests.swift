@@ -1030,7 +1030,26 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(all[2].id == 3)
         XCTAssert(all[2].a == "a2")
         XCTAssert(all[2].b == 201)
-
+    }
+    
+    // To test bug #25: https://github.com/marcoarment/Blackbird/issues/25
+    func testConcurrentTransactions() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename)
+        let semaphore = Blackbird.Semaphore(value: 0)
+        
+        let numTasks = 1000
+        
+        for i in 0..<numTasks {
+            Task {
+                try! await db.transaction { core in
+                    try? await Task.sleep(nanoseconds: UInt64(arc4random_uniform(10_000_000)))
+                    try! TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL).writeIsolated(to: db, core: core)
+                }
+                semaphore.signal()
+            }
+        }
+        
+        for _ in 0..<numTasks { await semaphore.wait() }
     }
     
     func testCache() async throws {
