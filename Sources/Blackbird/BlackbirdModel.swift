@@ -265,7 +265,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { get }
 }
 
-public enum BlackbirdModelMigrationErrorAction {
+public enum BlackbirdModelMigrationErrorAction: Sendable {
     /// Throw a ``BlackbirdTableError/impossibleMigration(type:description:)`` error.
     case throwError
     
