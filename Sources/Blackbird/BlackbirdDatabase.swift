@@ -402,7 +402,7 @@ extension Blackbird {
             
             self.maxQueryVariableCount = Int(sqlite3_limit(handle, SQLITE_LIMIT_VARIABLE_NUMBER, -1))
             
-            if SQLITE_OK != sqlite3_exec(handle, "PRAGMA journal_mode = WAL", nil, nil, nil) || SQLITE_OK != sqlite3_exec(handle, "PRAGMA synchronous = NORMAL", nil, nil, nil) {
+            if !normalizedOptions.contains(.readOnly), SQLITE_OK != sqlite3_exec(handle, "PRAGMA journal_mode = WAL", nil, nil, nil) || SQLITE_OK != sqlite3_exec(handle, "PRAGMA synchronous = NORMAL", nil, nil, nil) {
                 sqlite3_close(handle)
                 if let path = self.path { InstancePool.removeInstance(path: path) }
                 throw Error.unsupportedConfigurationAtPath(path: path)
