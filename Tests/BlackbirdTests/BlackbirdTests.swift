@@ -313,6 +313,51 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 
         db.debugPrintCachePerformanceMetrics()
     }
+    
+    func testUpdateExpressions() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])
+
+        try await TestModelForUpdateExpressions(id: 1, i: 1, d: 1.5).write(to: db)
+        try await TestModelForUpdateExpressions(id: 2, i: 2, d: 2.5).write(to: db)
+        try await TestModelForUpdateExpressions(id: 3, i: 3, d: 3.5).write(to: db)
+        
+//        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : BlackbirdUpdateExpression.addInteger(100) ], matching: \.$id == 1)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : \.$i + 100 ], matching: \.$id == 1)
+
+        let testModel1 = try await TestModelForUpdateExpressions.read(from: db, id: 1)
+        let testModel2 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        let testModel3 = try await TestModelForUpdateExpressions.read(from: db, id: 3)
+        
+        XCTAssert(testModel1!.id == 1)
+        XCTAssert(testModel1!.i == 101)
+        XCTAssert(testModel2!.id == 2)
+        XCTAssert(testModel2!.i == 2)
+        XCTAssert(testModel3!.id == 3)
+        XCTAssert(testModel3!.i == 3)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$d : \.$i + 10 ], matching: \.$id == 2)
+
+        let a = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a!.i == 2)
+        XCTAssert(a!.d == 12)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : !\.$i], matching: \.$id == 2)
+        let a2 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a2!.i == 0)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : !\.$i], matching: \.$id == 2)
+        let a3 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a3!.i == 1)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [
+            \.$d : 5.5,
+            \.$i : \.$i * 10,
+        ], matching: \.$id == 2)
+        let a4 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a4!.i == 10)
+        XCTAssert(a4!.d == 5.5)
+    }
 
     func testColumnTypes() async throws {
         let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])

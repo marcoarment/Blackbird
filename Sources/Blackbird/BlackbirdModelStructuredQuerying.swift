@@ -105,10 +105,21 @@ fileprivate struct DecodedStructuredQuery: Sendable {
         for (keyPath, value) in updating {
             let columnName = table.keyPathToColumnName(keyPath: keyPath)
             changedColumns.insert(columnName)
-            setClauses.append("`\(columnName)` = ?")
-            arguments.append(try! Blackbird.Value.fromAny(value))
             
-            if updateWhereAutoOptimization {
+            let constantValue: Blackbird.Value?
+            if let valueExpression = value as? BlackbirdColumnExpression<T> {
+                constantValue = valueExpression.constantValue
+                let (placeholder, values) = valueExpression.expressionInUpdateQuery(table: table)
+                setClauses.append("`\(columnName)` = \(placeholder)")
+                arguments.append(contentsOf: values)
+            } else {
+                let valueWrapped = try! Blackbird.Value.fromAny(value)
+                setClauses.append("`\(columnName)` = ?")
+                arguments.append(valueWrapped)
+                constantValue = valueWrapped
+            }
+                        
+            if updateWhereAutoOptimization, let constantValue {
                 // In an UPDATE query, SQLite will call the update hook and report a change on EVERY row
                 // that matches the WHERE clause (or every row in the table without a WHERE) and report it
                 // as changed, even if no rows matched and therefore no data was changed. E.g.:
@@ -123,19 +134,21 @@ fileprivate struct DecodedStructuredQuery: Sendable {
                 // ...which makes SQLite properly report only the actually-changed rows.
                 //
                 if updateWhereNotMatchingExpr != nil {
-                    updateWhereNotMatchingExpr = updateWhereNotMatchingExpr! || keyPath != value
+                    updateWhereNotMatchingExpr = updateWhereNotMatchingExpr! || keyPath != constantValue
                 } else {
-                    updateWhereNotMatchingExpr = keyPath != value
+                    updateWhereNotMatchingExpr = keyPath != constantValue
                 }
             }
         }
         if !setClauses.isEmpty {
             clauses.append("SET \(setClauses.joined(separator: ","))")
 
-            if matching != nil, let updateWhereNotMatchingExpr {
-                matching = matching! && updateWhereNotMatchingExpr
-            } else {
-                matching = updateWhereNotMatchingExpr
+            if let updateWhereNotMatchingExpr {
+                if matching != nil {
+                    matching = matching! && updateWhereNotMatchingExpr
+                } else {
+                    matching = updateWhereNotMatchingExpr
+                }
             }
         }
 
@@ -380,6 +393,15 @@ extension BlackbirdModel {
         try await updateIsolated(in: database, core: database.core, set: changes, matching: matching)
     }
 
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], matching: BlackbirdModelColumnExpression<Self>) async throws {
+        if changes.isEmpty { return }
+        try await updateIsolated(in: database, core: database.core, set: changes, matching: matching)
+    }
+
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], matching: BlackbirdModelColumnExpression<Self>) throws {
+        try updateIsolated(in: database, core: core, set: changes as [BlackbirdColumnKeyPath: Sendable?], matching: matching)
+    }
+    
     /// Synchronous version of ``update(in:set:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable?], matching: BlackbirdModelColumnExpression<Self>) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
@@ -442,6 +464,11 @@ extension BlackbirdModel {
         try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
     }
 
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], forPrimaryKeys: [Sendable]) async throws {
+        if changes.isEmpty { return }
+        try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
+    }
+
     /// Changes a subset of the table's rows by multi-column primary-key values, using column key-paths for this model type.
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to query.
@@ -468,11 +495,24 @@ extension BlackbirdModel {
         try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
     }
 
+    public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], forMulticolumnPrimaryKeys: [[Sendable]]) async throws {
+        if changes.isEmpty { return }
+        try await updateIsolated(in: database, core: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
+    }
+
     /// Synchronous version of ``update(in:set:forPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable?], forPrimaryKeys: [Sendable]) throws {
         try updateIsolated(in: database, core: core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
     }
 
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], forPrimaryKeys: [Sendable]) throws {
+        try updateIsolated(in: database, core: core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
+    }
+
+    public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], forMulticolumnPrimaryKeys primaryKeyValues: [[Sendable]]) throws {
+        try updateIsolated(in: database, core: core, set: changes as [BlackbirdColumnKeyPath: Sendable?], forMulticolumnPrimaryKeys: primaryKeyValues)
+    }
+    
     /// Synchronous version of ``update(in:set:forMulticolumnPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     public static func updateIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: Sendable?], forMulticolumnPrimaryKeys primaryKeyValues: [[Sendable]]) throws {
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
@@ -914,3 +954,46 @@ internal struct BlackbirdColumnFTSMatchExpression<T: BlackbirdModel>: BlackbirdQ
         return (whereClause: "`\(columnOrFTSTableName)` MATCH ?", values: [.text(escapedQuery)])
     }
 }
+
+// MARK: - Update expressions
+
+public prefix func ! <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath) -> BlackbirdColumnExpression<T> { .not(keyPath: lhs) }
+public func * <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdColumnExpression<T> { .multiply(keyPath: lhs, value: rhs) }
+public func / <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdColumnExpression<T> { .divide(keyPath: lhs, value: rhs) }
+public func + <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdColumnExpression<T> { .add(keyPath: lhs, value: rhs) }
+public func - <T: BlackbirdModel> (lhs: T.BlackbirdColumnKeyPath, rhs: Sendable) -> BlackbirdColumnExpression<T> { .subtract(keyPath: lhs, value: rhs) }
+
+public enum BlackbirdColumnExpression<T: BlackbirdModel>: ExpressibleByFloatLiteral, ExpressibleByStringLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, ExpressibleByNilLiteral {
+
+    public init(nilLiteral: ()) { self = .value(nil) }
+    public init(stringLiteral value: StaticString) { self = .value(value) }
+    public init(floatLiteral value: Double) { self = .value(value) }
+    public init(integerLiteral value: Int64) { self = .value(value) }
+    public init(booleanLiteral value: Bool) { self = .value(value) }
+    
+    case value(_ value: Sendable?)
+    case not(keyPath: T.BlackbirdColumnKeyPath)
+    case multiply(keyPath: T.BlackbirdColumnKeyPath, value: Sendable)
+    case divide(keyPath: T.BlackbirdColumnKeyPath, value: Sendable)
+    case add(keyPath: T.BlackbirdColumnKeyPath, value: Sendable)
+    case subtract(keyPath: T.BlackbirdColumnKeyPath, value: Sendable)
+    
+    internal var constantValue: Blackbird.Value? {
+        switch self {
+            case .value(let v): try! Blackbird.Value.fromAny(v)
+            default: nil
+        }
+    }
+
+    internal func expressionInUpdateQuery(table: Blackbird.Table) -> (queryExpression: String, arguments: [Blackbird.Value]) {
+        switch self {
+            case .value(let value): ("?", [try! Blackbird.Value.fromAny(value)])
+            case .not(let keyPath): ("NOT(`\(table.keyPathToColumnName(keyPath: keyPath))`)", [])
+            case .multiply(let keyPath, let value): ("`\(table.keyPathToColumnName(keyPath: keyPath))` * ?", [try! Blackbird.Value.fromAny(value)])
+            case .divide(let keyPath, let value): ("`\(table.keyPathToColumnName(keyPath: keyPath))` / ?", [try! Blackbird.Value.fromAny(value)])
+            case .add(let keyPath, let value): ("`\(table.keyPathToColumnName(keyPath: keyPath))` + ?", [try! Blackbird.Value.fromAny(value)])
+            case .subtract(let keyPath, let value):("`\(table.keyPathToColumnName(keyPath: keyPath))` - ?", [try! Blackbird.Value.fromAny(value)])
+        }
+    }
+}
+

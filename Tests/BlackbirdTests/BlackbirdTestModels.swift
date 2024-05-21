@@ -204,6 +204,12 @@ public struct TestModelWithUniqueIndex: BlackbirdModel {
     @BlackbirdColumn public var c: Date
 }
 
+public struct TestModelForUpdateExpressions: BlackbirdModel {
+    @BlackbirdColumn public var id: Int64
+    @BlackbirdColumn public var i: Int
+    @BlackbirdColumn public var d: Double
+}
+
 // MARK: - Schema change: Add primary-key column
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
