@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A9858C8C2B1D21FA00531BD9 /* ObservationContentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9858C8B2B1D21FA00531BD9 /* ObservationContentViews.swift */; };
 		A9E94F87293E2A8E00A89AC3 /* BlackbirdSwiftUITestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9E94F86293E2A8E00A89AC3 /* BlackbirdSwiftUITestApp.swift */; };
 		A9E94F89293E2A8E00A89AC3 /* ContentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9E94F88293E2A8E00A89AC3 /* ContentViews.swift */; };
 		A9E94F8B293E2A8F00A89AC3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A9E94F8A293E2A8F00A89AC3 /* Assets.xcassets */; };
@@ -17,6 +18,7 @@
 
 /* Begin PBXFileReference section */
 		A92E4F222951FBE700954C3F /* Blackbird */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Blackbird; path = ../..; sourceTree = "<group>"; };
+		A9858C8B2B1D21FA00531BD9 /* ObservationContentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationContentViews.swift; sourceTree = "<group>"; };
 		A9E94F83293E2A8E00A89AC3 /* BlackbirdSwiftUITest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BlackbirdSwiftUITest.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A9E94F86293E2A8E00A89AC3 /* BlackbirdSwiftUITestApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackbirdSwiftUITestApp.swift; sourceTree = "<group>"; };
 		A9E94F88293E2A8E00A89AC3 /* ContentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentViews.swift; sourceTree = "<group>"; };
@@ -61,6 +63,7 @@
 				A9EE2E2A293E2C5600BCEBCE /* BlackbirdTestData.swift */,
 				A9E94F86293E2A8E00A89AC3 /* BlackbirdSwiftUITestApp.swift */,
 				A9E94F88293E2A8E00A89AC3 /* ContentViews.swift */,
+				A9858C8B2B1D21FA00531BD9 /* ObservationContentViews.swift */,
 				A9E94F8A293E2A8F00A89AC3 /* Assets.xcassets */,
 				A9E94F8C293E2A8F00A89AC3 /* Preview Content */,
 			);
@@ -164,6 +167,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A9E94F89293E2A8E00A89AC3 /* ContentViews.swift in Sources */,
+				A9858C8C2B1D21FA00531BD9 /* ObservationContentViews.swift in Sources */,
 				A9EE2E2B293E2C5600BCEBCE /* BlackbirdTestData.swift in Sources */,
 				A9E94F87293E2A8E00A89AC3 /* BlackbirdSwiftUITestApp.swift in Sources */,
 			);

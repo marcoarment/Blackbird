@@ -1,4 +1,4 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 5.9
 
 import PackageDescription
 
@@ -22,7 +22,7 @@ let package = Package(
             name: "Blackbird",
             dependencies: [],
             swiftSettings: [
-//                .unsafeFlags(["-Xfrontend", "-warn-concurrency"]) // Uncomment for Sendable testing
+//                .enableExperimentalFeature("StrictConcurrency"),  // Uncomment for Sendable testing
             ]
         ),
         .testTarget(

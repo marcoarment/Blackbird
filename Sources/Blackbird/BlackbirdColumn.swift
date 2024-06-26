@@ -49,7 +49,7 @@ internal protocol ColumnWrapper: WrappedType {
     public static func == (lhs: Self, rhs: Self) -> Bool { type(of: lhs) == type(of: rhs) && lhs.value == rhs.value }
     
     private var _value: T
-    internal final class ColumnState<T>: @unchecked Sendable /* unchecked due to external locking in all uses */ {
+    internal final class ColumnState<U>: @unchecked Sendable /* unchecked due to external locking in all uses */ {
         var hasChanged: Bool
         weak var lastUsedDatabase: Blackbird.Database?
         

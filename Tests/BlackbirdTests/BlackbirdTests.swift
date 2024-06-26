@@ -217,7 +217,9 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 
         // Structured queries
         let first100 =  try await TestModelWithDescription.read(from: db, orderBy: .ascending(\.$id), limit: 100)
-        let matches0a = try await TestModelWithDescription.read(from: db, matching: \.$id == 123)
+        let matches0a1 = try await TestModelWithDescription.read(from: db, matching: \.$id == 123)
+        let matches0a2 = try await TestModelWithDescription.read(from: db, primaryKey: 123)
+        let matches0a3 = try await TestModelWithDescription.query(in: db, columns: [\.$title], primaryKey: 123)
         let matches0b = try await TestModelWithDescription.read(from: db, matching: \.$id == 123 && \.$title == "Hi" || \.$id > 2)
         let matches0c = try await TestModelWithDescription.read(from: db, matching: \.$url != nil)
         let matches0d = try await TestModelWithDescription.read(from: db, matching: .valueIn(\.$id, [1, 2, 3]))
@@ -228,8 +230,12 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(first100.count == 100)
         XCTAssert(first100.first!.id == 0)
         XCTAssert(first100.last!.id == 99)
-        XCTAssert(matches0a.count == 1)
-        XCTAssert(matches0a.first!.id == 123)
+        XCTAssert(matches0a1.count == 1)
+        XCTAssert(matches0a1.first!.id == 123)
+        XCTAssert(matches0a2 != nil)
+        XCTAssert(matches0a2!.id == 123)
+        XCTAssert(matches0a3 != nil)
+        XCTAssert(matches0a3![\.$title] == matches0a2!.title)
         XCTAssert(matches0b.count == 997)
         XCTAssert(matches0c.count == 1000)
         XCTAssert(matches0d.count == 3)
@@ -240,10 +246,13 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await MulticolumnPrimaryKeyTest.update(in: db, set: [\.$episodeID: 5], forMulticolumnPrimaryKeys: [[1, 1, 1], [2, 2, 2], [3, 1, 1]])
         let multiID1 = try await MulticolumnPrimaryKeyTest.read(from: db, multicolumnPrimaryKey: [1, 1, 5])
         let multiID2 = try await MulticolumnPrimaryKeyTest.read(from: db, multicolumnPrimaryKey: [2, 2, 5])
+        let multiID2b = try await MulticolumnPrimaryKeyTest.query(in: db, columns: [\.$userID], multicolumnPrimaryKey: [2, 2, 5])
         let multiID3 = try await MulticolumnPrimaryKeyTest.read(from: db, multicolumnPrimaryKey: [3, 3, 5])
         XCTAssert(multiID1!.episodeID == 5)
         XCTAssert(multiID2!.episodeID == 5)
         XCTAssert(multiID3 == nil)
+        XCTAssert(multiID2b != nil)
+        XCTAssert(multiID2b![\.$userID] == multiID2!.userID)
 
         try await TestModelWithDescription.update(in: db, set: [\.$title: "(new)"], forPrimaryKeys: [1, 2, 3])
         let id1 = try await TestModelWithDescription.read(from: db, id: 1)
@@ -303,6 +312,51 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(leftovers2.isEmpty)
 
         db.debugPrintCachePerformanceMetrics()
+    }
+    
+    func testUpdateExpressions() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename, options: [.debugPrintEveryQuery, .debugPrintEveryReportedChange, .debugPrintQueryParameterValues])
+
+        try await TestModelForUpdateExpressions(id: 1, i: 1, d: 1.5).write(to: db)
+        try await TestModelForUpdateExpressions(id: 2, i: 2, d: 2.5).write(to: db)
+        try await TestModelForUpdateExpressions(id: 3, i: 3, d: 3.5).write(to: db)
+        
+//        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : BlackbirdUpdateExpression.addInteger(100) ], matching: \.$id == 1)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : \.$i + 100 ], matching: \.$id == 1)
+
+        let testModel1 = try await TestModelForUpdateExpressions.read(from: db, id: 1)
+        let testModel2 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        let testModel3 = try await TestModelForUpdateExpressions.read(from: db, id: 3)
+        
+        XCTAssert(testModel1!.id == 1)
+        XCTAssert(testModel1!.i == 101)
+        XCTAssert(testModel2!.id == 2)
+        XCTAssert(testModel2!.i == 2)
+        XCTAssert(testModel3!.id == 3)
+        XCTAssert(testModel3!.i == 3)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$d : \.$i + 10 ], matching: \.$id == 2)
+
+        let a = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a!.i == 2)
+        XCTAssert(a!.d == 12)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : !\.$i], matching: \.$id == 2)
+        let a2 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a2!.i == 0)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [\.$i : !\.$i], matching: \.$id == 2)
+        let a3 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a3!.i == 1)
+
+        try await TestModelForUpdateExpressions.update(in: db, set: [
+            \.$d : 5.5,
+            \.$i : \.$i * 10,
+        ], matching: \.$id == 2)
+        let a4 = try await TestModelForUpdateExpressions.read(from: db, id: 2)
+        XCTAssert(a4!.i == 10)
+        XCTAssert(a4!.d == 5.5)
     }
 
     func testColumnTypes() async throws {
@@ -1021,7 +1075,26 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         XCTAssert(all[2].id == 3)
         XCTAssert(all[2].a == "a2")
         XCTAssert(all[2].b == 201)
-
+    }
+    
+    // To test bug #25: https://github.com/marcoarment/Blackbird/issues/25
+    func testConcurrentTransactions() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename)
+        let semaphore = Blackbird.Semaphore(value: 0)
+        
+        let numTasks = 1000
+        
+        for i in 0..<numTasks {
+            Task {
+                try! await db.transaction { core in
+                    try? await Task.sleep(nanoseconds: UInt64(arc4random_uniform(10_000_000)))
+                    try! TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL).writeIsolated(to: db, core: core)
+                }
+                semaphore.signal()
+            }
+        }
+        
+        for _ in 0..<numTasks { await semaphore.wait() }
     }
     
     func testCache() async throws {
@@ -1126,6 +1199,71 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
 //            wait(for: [exp], timeout: 200.0)
 //        }
     }
+
+    func testFTS() async throws {
+        let options: Blackbird.Database.Options = [.debugPrintEveryQuery, .requireModelSchemaValidationBeforeUse]
+
+        let db1 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution1 = try await FTSModel.resolveSchema(in: db1)
+        XCTAssert(resolution1.contains(.createdTable))
+        XCTAssert(resolution1.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution1.contains(.migratedTable))
+
+        let count = min(TestData.URLs.count, TestData.titles.count, TestData.descriptions.count)
+        
+        try await db1.transaction { core in
+            for i in 0..<count {
+                let m = FTSModel(id: i, title: TestData.titles[i], url: TestData.URLs[i], description: TestData.descriptions[i], keywords: TestData.descriptions[(i + 2) % count].lowercased(), category: i % 10)
+                try m.writeIsolated(to: db1, core: core)
+            }
+        }
+
+        let results1 = try await FTSModel.fullTextSearch(from: db1, matching: .match("tech"), options: .default)
+        XCTAssert(results1.count == 38)
+        await db1.close()
+        
+        let db2 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution2 = try await FTSModel.resolveSchema(in: db2)
+        XCTAssert(!resolution2.contains(.createdTable))
+        XCTAssert(!resolution2.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution2.contains(.migratedTable))
+        try await FTSModel.optimizeFullTextIndex(in: db2)
+        let results2a = try await FTSModel.fullTextSearch(from: db2, matching: .match(column: \.$title, "podcast"), options: .default)
+        XCTAssert(results2a.count == 111)
+        let results2b = try await FTSModel.fullTextSearch(from: db2, matching: .match(column: \.$title, "podcast") && \.$category == 1, options: .init(scoreMultipleColumn: \.$category))
+        XCTAssert(results2b.count == 10)
+        await db2.close()
+        
+        
+        let db3 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution3 = try await FTSModelAfterMigration.resolveSchema(in: db3)
+        XCTAssert(!resolution3.contains(.createdTable))
+        XCTAssert(resolution3.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution3.contains(.migratedTable))
+
+        let results3 = try await FTSModelAfterMigration.fullTextSearch(from: db3, matching: .match(column: \.$keywords, "finance"), options: .default)
+        XCTAssert(results3.count == 18)
+        await db3.close()
+        
+        let db4 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution4 = try await FTSModelAfterDeletion.resolveSchema(in: db4)
+        XCTAssert(!resolution4.contains(.createdTable))
+        XCTAssert(resolution4.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution4.contains(.migratedTable))
+        await db4.close()
+
+        let db5 = try Blackbird.Database(path: sqliteFilename, options: options)
+        let resolution5 = try await FTSModelAfterDeletion.resolveSchema(in: db5)
+        XCTAssert(!resolution5.contains(.createdTable))
+        XCTAssert(!resolution5.contains(.migratedFullTextIndex))
+        XCTAssert(!resolution5.contains(.migratedTable))
+
+//        for result in results3 {
+//            guard let instance = try await result.instance(from: db3) else { continue }
+//            print("[#] id \(instance.id), cat \(instance.category), title: [\(result.highlighted(\.$title)!)], keywords: [\(result.snippet(\.$keywords) ?? "--")]")
+//        }
+    }
+
 
 /* Tests duplicate-index detection. Throws fatal error on success.
     func testDuplicateIndex() async throws {

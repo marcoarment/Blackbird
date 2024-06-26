@@ -32,7 +32,7 @@
 //
 
 import SwiftUI
-import Combine
+@preconcurrency import Combine
 
 // Required to use with the @StateObject wrapper
 extension Blackbird.Database: ObservableObject { }
@@ -228,17 +228,21 @@ extension View {
 }
 
 
-public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
+public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel>: @unchecked Sendable { /* unchecked due to internal locking */
     private let primaryKeyValues: [Blackbird.Value]
     private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
-    private var currentDatabase: Blackbird.Database? = nil
-    private var hasEverUpdated = false
     
-    private var _changePublisher = PassthroughSubject<T?, Never>()
+    private let currentDatabase = Blackbird.Locked<Blackbird.Database?>(nil)
+    private let hasEverUpdated = Blackbird.Locked(false)
+    
+    private let _changePublisher = PassthroughSubject<T?, Never>()
     public var changePublisher: AnyPublisher<T?, Never> { _changePublisher.eraseToAnyPublisher() }
 
-    public var updatesEnabled = true {
-        didSet {
+    private let _updatesEnabled = Blackbird.Locked(true)
+    public var updatesEnabled: Bool {
+        get { _updatesEnabled.value }
+        set {
+            _updatesEnabled.value = newValue
             Task.detached { [weak self] in await self?.update() }
         }
     }
@@ -253,8 +257,8 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     
     public func observe(database: Blackbird.Database?, currentInstance: Binding<T?>) {
         _currentInstance = currentInstance
-        guard let database, database != currentDatabase else { return }
-        currentDatabase = database
+        guard let database, database != currentDatabase.value else { return }
+        currentDatabase.value = database
         cachedInstance.value = nil
         
         if updatesEnabled {
@@ -263,7 +267,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel> {
     }
     
     public func update() async {
-        guard let currentDatabase, updatesEnabled else { return }
+        guard let currentDatabase = currentDatabase.value, updatesEnabled else { return }
         
         changeObserver.withLock { observer in
             if observer != nil { return }
@@ -493,3 +497,156 @@ extension Blackbird {
         }
     }
 }
+
+// MARK: - Single-column updater
+
+/// SwiftUI property wrapper for automatic updating of a single column value for the specified primary-key value.
+///
+/// ## Example
+///
+/// Given a model defined with this column:
+/// ```swift
+/// struct MyModel: BlackbirdModel {
+///     // ...
+///     @BlackbirdColumn var title: String
+///     // ...
+/// }
+/// ```
+///
+/// Then, in a SwiftUI view:
+///
+/// ```swift
+/// struct MyView: View {
+///     // title will be of type: String?
+///     @BlackbirdColumnObserver(\MyModel.$title, primaryKey: 123) var title
+///
+///     var body: some View {
+///         Text(title ?? "Loading…")
+///     }
+/// ```
+///
+/// Or, to provide the primary-key value dynamically:
+///
+/// ```swift
+/// struct MyView: View {
+///     // title will be of type: String?
+///     @BlackbirdColumnObserver(\MyModel.$title) var title
+///
+///     init(primaryKey: Any) {
+///         _title = BlackbirdColumnObserver(\MyModel.$title, primaryKey: primaryKey)
+///     }
+///
+///     var body: some View {
+///         Text(title ?? "Loading…")
+///     }
+/// ```
+@propertyWrapper public struct BlackbirdColumnObserver<T: BlackbirdModel, V: BlackbirdColumnWrappable>: DynamicProperty {
+    @Environment(\.blackbirdDatabase) var environmentDatabase
+
+    @State private var primaryKey: Any?
+    @State private var currentValue: V? = nil
+
+    public var wrappedValue: V? {
+        get { currentValue }
+        nonmutating set { fatalError() }
+    }
+
+    public var projectedValue: Binding<V?> { $currentValue }
+
+    private var observer: BlackbirdColumnObserverInternal<T, V>?
+
+    public init(_ column: KeyPath<T, BlackbirdColumn<V>>, primaryKey: Any? = nil) {
+        self.observer = BlackbirdColumnObserverInternal<T, V>(modelType: T.self, column: column)
+        _primaryKey = State(initialValue: primaryKey)
+    }
+
+    public mutating func update() {
+        observer?.bind(to: environmentDatabase, primaryKey: $primaryKey, result: $currentValue)
+    }
+}
+
+internal final class BlackbirdColumnObserverInternal<T: BlackbirdModel, V: BlackbirdColumnWrappable>: @unchecked Sendable /* unchecked due to internal locking */ {
+    @Binding private var primaryKey: Any?
+    @Binding private var result: V?
+
+    private let configLock = Blackbird.Lock()
+    private var column: T.BlackbirdColumnKeyPath
+    private var database: Blackbird.Database? = nil
+    private var listeners: [AnyCancellable] = []
+    private var lastPrimaryKeyValue: Blackbird.Value? = nil
+
+    public init(modelType: T.Type, column: T.BlackbirdColumnKeyPath) {
+        self.column = column
+        _primaryKey = Binding<Any?>(get: { nil }, set: { _ in })
+        _result = Binding<V?>(get: { nil }, set: { _ in })
+    }
+    
+    public func bind(to database: Blackbird.Database? = nil, primaryKey: Binding<Any?>, result: Binding<V?>) {
+        _result = result
+        _primaryKey = primaryKey
+        
+        let needsUpdate = configLock.withLock {
+            let newPK = primaryKey.wrappedValue != nil ? try! Blackbird.Value.fromAny(primaryKey.wrappedValue) : nil
+            if let existingDB = self.database, let newDB = database, existingDB == newDB, lastPrimaryKeyValue == newPK { return false }
+
+            listeners.removeAll()
+            self.database = database
+            self.lastPrimaryKeyValue = newPK
+            if let database, let primaryKey = newPK {
+                T.changePublisher(in: database, primaryKey: primaryKey, columns: [column])
+                .sink { [weak self] _ in self?.update() }
+                .store(in: &listeners)
+            }
+            
+            return true
+        }
+
+        if needsUpdate {
+            update()
+        }
+    }
+    
+    private func setResult(_ value: V?) {
+        Task {
+            await MainActor.run {
+                if value != result {
+                    result = value
+                }
+            }
+        }
+    }
+    
+    private func update() {
+        guard let database else {
+            setResult(nil)
+            return
+        }
+        
+        Task.detached { [weak self] in
+            do {
+                try await self?.fetch(in: database)
+            } catch {
+                self?.setResult(nil)
+            }
+        }
+    }
+    
+    private func fetch(in database: Blackbird.Database) async throws {
+        configLock.lock()
+        let primaryKey = primaryKey
+        let column = column
+        let database = database
+        configLock.unlock()
+    
+        guard let primaryKey else { return }
+    
+        guard let row = try await T.query(in: database, columns: [column], primaryKey: primaryKey) else {
+            setResult(nil)
+            return
+        }
+
+        let newValue = V.fromValue(row.value(keyPath: column)!)!
+        setResult(newValue)
+    }
+}
+

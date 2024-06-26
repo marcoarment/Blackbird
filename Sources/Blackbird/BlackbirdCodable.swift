@@ -75,7 +75,7 @@ internal class BlackbirdSQLiteDecoder: Decoder {
 
 fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecodingContainer {
     public enum Error: Swift.Error {
-        case invalidEnumValue(typeDescription: String, value: Any)
+        case invalidEnumValue(typeDescription: String, value: Sendable)
     }
 
     var codingPath: [CodingKey] = []

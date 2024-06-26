@@ -60,7 +60,17 @@ public class Blackbird {
     }
 
     /// A wrapper for SQLite's column data types.
-    public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable {
+    public enum Value: Sendable, ExpressibleByStringLiteral, ExpressibleByFloatLiteral, ExpressibleByBooleanLiteral, ExpressibleByIntegerLiteral, Hashable, Comparable {
+        public static func < (lhs: Blackbird.Value, rhs: Blackbird.Value) -> Bool {
+            switch lhs {
+                case .null:           return false
+                case let .integer(i): return i < rhs.int64Value ?? 0
+                case let .double(d):  return d < rhs.doubleValue ?? 0
+                case let .text(s):    return s < rhs.stringValue ?? ""
+                case let .data(b):    return b.count < rhs.dataValue?.count ?? 0
+            }
+        }
+        
         case null
         case integer(Int64)
         case double(Double)
@@ -279,7 +289,7 @@ extension Blackbird {
     }
 
     /// Blackbird's locked-value utility, offered for public use. Useful when conforming to `Sendable`.
-    public final class Locked<T>: @unchecked Sendable /* unchecked due to use of internal locking */ {
+    public final class Locked<T: Sendable>: @unchecked Sendable /* unchecked due to use of internal locking */ {
         public var value: T {
             get {
                 return lock.withLock { _value }
@@ -361,6 +371,56 @@ extension Blackbird {
             self.lock.lock()
             self.currentExpectedChanges.remove(changeID)
             self.lock.unlock()
+        }
+    }
+    
+    
+    /// Blackbird's async-sempahore utility, offered for public use.
+    ///
+    /// Suggested use:
+    ///
+    /// ```swift
+    /// class MyClass {
+    ///     let myMethodSemaphore = Blackbird.Semaphore(value: 1)
+    ///
+    ///     func myMethod() async {
+    ///         await myMethodSemaphore.wait()
+    ///         defer { myMethodSemaphore.signal() }
+    ///
+    ///         // do async work...
+    ///     }
+    /// }
+    /// ```
+    /// Inspired by [Sebastian Toivonen's approach](https://forums.swift.org/t/semaphore-alternatives-for-structured-concurrency/59353/3).
+    /// Consider using the Gwendal Roué's more-featured [Semaphore](https://github.com/groue/Semaphore) instead.
+    public final class Semaphore: Sendable {
+        private struct State: Sendable {
+            var value = 0
+            var waiting: [CheckedContinuation<Void, Never>] = []
+        }
+        private let state: Locked<State>
+
+        public init(value: Int = 0) { state = Locked(State(value: value)) }
+        
+        public func wait() async {
+            let wait = state.withLock { state in
+                state.value -= 1
+                return state.value < 0
+            }
+            
+            if wait {
+                await withCheckedContinuation { continuation in
+                    state.withLock { $0.waiting.append(continuation) }
+                }
+            }
+        }
+
+        public func signal() {
+            state.withLock { state in
+                state.value += 1
+                if state.waiting.isEmpty { return }
+                state.waiting.removeFirst().resume()
+            }
         }
     }
 }

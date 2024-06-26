@@ -82,10 +82,12 @@ import Combine
 /// ### Schema migrations
 ///
 /// If a table with the same name already exists in a database, a schema migration will be attempted for the following operations:
+///
 /// * Adding or dropping columns
 /// * Adding or dropping indexes
 /// * Changing column type or nullability
 /// * Changing the primary key
+///
 /// If the migration fails, an error will be thrown.
 ///
 /// Schema migrations are performed when the first `BlackbirdModel` database operation is performed for a given table.
@@ -147,6 +149,43 @@ import Combine
 /// }
 /// ```
 ///
+/// ## Full-text search
+///
+/// Adding support for [SQLite FTS5 full-text search](https://sqlite.org/fts5.html) is simple:
+///
+/// ```swift
+/// struct Post: BlackbirdModel {
+///     @BlackbirdColumn var id: Int
+///     @BlackbirdColumn var title: String
+///     @BlackbirdColumn var description: String
+///     @BlackbirdColumn var category: Int
+///     @BlackbirdColumn var popularity: Double
+///
+///     static var fullTextSearchableColumns: FullTextIndex = [
+///         \.$title       : .text(weight: 3.0),
+///         \.$description : .text,
+///         \.$category    : .filterOnly,
+///         \.$popularity  : .filterOnly,
+///     ]
+/// }
+///
+/// // Results automatically get snippets and highlighted search terms
+/// try await FTSModel.fullTextSearch(from: db, matching: .match("tech"))
+///
+/// // Use filterOnly columns as filters
+/// try await FTSModel.fullTextSearch(
+///     from: db,
+///     matching: .match("tech") && \.$category == 1,
+/// )
+///
+/// // Use a column value to adjust the ranking
+/// try await FTSModel.fullTextSearch(
+///     from: db,
+///     matching: .match("tech"),
+///     options: .init(scoreMultipleColumn: \.$popularity)
+/// )
+/// ```
+///
 /// ## Unsupported SQLite features
 ///
 /// `BlackbirdModel` assumes simple and straightforward SQLite usage.
@@ -184,6 +223,18 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     /// If unspecified, no additional unique indexes are created.
     static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { get }
 
+
+    typealias FullTextIndex = [BlackbirdColumnKeyPath: BlackbirdModelFullTextSearchableColumn]
+
+    /// A dictionary of column key-paths to ``BlackbirdModelFullTextSearchableColumn`` definitions for a [SQLite FTS5](https://sqlite.org/fts5.html) full-text index for this table.
+    ///
+    /// If unspecified or empty, no full-text index is created.
+    ///
+    /// Query with ``fullTextSearch(from:matching:limit:options:)``
+    ///
+    /// Any changes to this property may cause an index rebuild for existing databases on first run, which may be slow on large tables.
+    static var fullTextSearchableColumns: FullTextIndex { get }
+
     /// The number of entries to keep in the automatic query cache. Set to `0` to disable the cache. The default is `0`.
     ///
     /// Entries are retained in most-recently-accessed order.
@@ -214,7 +265,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { get }
 }
 
-public enum BlackbirdModelMigrationErrorAction {
+public enum BlackbirdModelMigrationErrorAction: Sendable {
     /// Throw a ``BlackbirdTableError/impossibleMigration(type:description:)`` error.
     case throwError
     
@@ -233,10 +284,13 @@ internal extension BlackbirdModel {
 }
 
 extension BlackbirdModel {
+    public typealias ChangePublisher = Blackbird.ModelChangePublisher<Self>
+
     public static var tableName: String { String(describing: Self.self) }
     public static var primaryKey: [BlackbirdColumnKeyPath] { [] }
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
+    public static var fullTextSearchableColumns: FullTextIndex { [:] }
     public static var cacheLimit: Int { 0 }
     public static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { .throwError }
 
@@ -293,7 +347,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database) -> Self.ChangePublisher {
         database.changeReporter.changePublisher(for: self.tableName)
         .map { Blackbird.ModelChange(type: Self.self, from: $0) }
         .eraseToAnyPublisher()
@@ -310,7 +364,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, columns: [Self.BlackbirdColumnKeyPath] = []) -> Self.ChangePublisher {
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
         
@@ -340,7 +394,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Self.ChangePublisher {
         let selfType = Self.self
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
@@ -368,7 +422,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, primaryKey: Blackbird.Value? = nil, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Self.ChangePublisher {
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
         
@@ -398,7 +452,7 @@ extension BlackbirdModel {
     ///
     /// > - The publisher may send from any thread.
     /// > - Changes may be over-reported.
-    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Blackbird.ModelChangePublisher<Self> {
+    public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Blackbird.Value]?, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Self.ChangePublisher {
         let selfType = Self.self
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
@@ -905,7 +959,9 @@ extension BlackbirdModel {
     ///
     /// - Parameters:
     ///   - database: The ``Blackbird/Database`` instance to resolve the schema in.
-    public static func resolveSchema(in database: Blackbird.Database) async throws {
+
+    @discardableResult
+    public static func resolveSchema(in database: Blackbird.Database) async throws -> BlackbirdModelSchemaResolution {
         try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core, isExplicitResolve: true) { try validateSchema(database: $0, core: $1) }
     }
     
@@ -952,7 +1008,7 @@ extension BlackbirdModel {
     public func writeIsolated(to database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
         let table = Self.table
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
+        _ = try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
 
         var columnNames: [String] = []
         var placeholders: [String] = []
@@ -1024,24 +1080,26 @@ extension BlackbirdModel {
         self._deleteCachedInstance(for: database)
     }
 
-    fileprivate static func _cacheableResult<T>(database: Blackbird.Database, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
+    fileprivate static func _cacheableResult<T: Sendable>(database: Blackbird.Database, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database) async throws -> T)) async throws -> T {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0 else { return try await resultFetcher(database) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
-        if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
         
+        if case .hit(let value) = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey), let cachedResult = value as? T { return cachedResult }
+
         let result = try await resultFetcher(database)
         database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }
 
-    fileprivate static func _cacheableResultIsolated<T>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
+    fileprivate static func _cacheableResultIsolated<T: Sendable>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
         let cacheLimit = Self.cacheLimit
         guard cacheLimit > 0 else { return try resultFetcher(database, core) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
-        if let cachedResult = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey) as? T { return cachedResult }
+        
+        if case .hit(let value) = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey), let cachedResult = value as? T { return cachedResult }
         
         let result = try resultFetcher(database, core)
         database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)

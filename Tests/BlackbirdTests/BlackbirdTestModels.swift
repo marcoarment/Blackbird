@@ -204,6 +204,12 @@ public struct TestModelWithUniqueIndex: BlackbirdModel {
     @BlackbirdColumn public var c: Date
 }
 
+public struct TestModelForUpdateExpressions: BlackbirdModel {
+    @BlackbirdColumn public var id: Int64
+    @BlackbirdColumn public var i: Int
+    @BlackbirdColumn public var d: Double
+}
+
 // MARK: - Schema change: Add primary-key column
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
@@ -298,4 +304,50 @@ struct DuplicateIndexesModel: BlackbirdModel {
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
+}
+
+// MARK: - Full-text search
+
+struct FTSModel: BlackbirdModel {
+    static var fullTextSearchableColumns: FullTextIndex = [
+        \.$title       : .text(weight: 3.0),
+        \.$description : .text,
+        \.$category    : .filterOnly,
+    ]
+
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var url: URL
+    @BlackbirdColumn var description: String
+    @BlackbirdColumn var keywords: String
+    @BlackbirdColumn var category: Int
+}
+
+struct FTSModelAfterMigration: BlackbirdModel {
+    static let tableName = "FTSModel"
+
+    static var fullTextSearchableColumns: FullTextIndex = [
+        \.$title       : .text(weight: 3.0),
+        \.$description : .text,
+        \.$category    : .filterOnly,
+        \.$keywords    : .text(weight: 0.5),
+    ]
+
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var url: URL
+    @BlackbirdColumn var description: String
+    @BlackbirdColumn var keywords: String
+    @BlackbirdColumn var category: Int
+}
+
+struct FTSModelAfterDeletion: BlackbirdModel {
+    static let tableName = "FTSModel"
+
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var url: URL
+    @BlackbirdColumn var description: String
+    @BlackbirdColumn var keywords: String
+    @BlackbirdColumn var category: Int
 }

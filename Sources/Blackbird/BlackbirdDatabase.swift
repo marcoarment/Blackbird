@@ -230,18 +230,21 @@ extension Blackbird {
 
             /// Sets the database to read-only. Any calls to ``BlackbirdModel`` write functions with a read-only database will terminate with a fatal error.
             public static let readOnly                       = Options(rawValue: 1 << 1)
-            
+
+            /// Monitor for changes to the database file from outside of this connection, such as from a different process or a different SQLite library within the same process.
+            public static let monitorForExternalChanges      = Options(rawValue: 1 << 2)
+
             /// Logs every query with `print()`. Useful for debugging.
-            public static let debugPrintEveryQuery           = Options(rawValue: 1 << 2)
+            public static let debugPrintEveryQuery           = Options(rawValue: 1 << 3)
 
             /// When using ``debugPrintEveryQuery``, parameterized query values will be included in the logged query strings instead of their placeholders. Useful for debugging.
-            public static let debugPrintQueryParameterValues = Options(rawValue: 1 << 3)
+            public static let debugPrintQueryParameterValues = Options(rawValue: 1 << 4)
 
             /// Logs every change reported by ``Blackbird/ChangePublisher`` instances for this database with `print()`. Useful for debugging.
-            public static let debugPrintEveryReportedChange  = Options(rawValue: 1 << 4)
-            
-            /// Monitor for changes to the database file from outside of this connection, such as from a different process or a different SQLite library within the same process.
-            public static let monitorForExternalChanges      = Options(rawValue: 1 << 5)
+            public static let debugPrintEveryReportedChange  = Options(rawValue: 1 << 5)
+
+            /// Logs cache hits and misses with `print()`. Useful for debugging.
+            public static let debugPrintCacheActivity        = Options(rawValue: 1 << 6)
 
             /// Require the calling of ``BlackbirdModel/resolveSchema(in:)`` before any queries to a `BlackbirdModel` type.
             ///
@@ -278,7 +281,7 @@ extension Blackbird {
             ///     try? Blackbird.Database.delete(atPath: …)
             /// }
             /// ```
-            public static let requireModelSchemaValidationBeforeUse = Options(rawValue: 1 << 6)
+            public static let requireModelSchemaValidationBeforeUse = Options(rawValue: 1 << 7)
         }
         
         /// Returns all filenames expected to be used by a database if created at the given file path.
@@ -399,7 +402,7 @@ extension Blackbird {
             
             self.maxQueryVariableCount = Int(sqlite3_limit(handle, SQLITE_LIMIT_VARIABLE_NUMBER, -1))
             
-            if SQLITE_OK != sqlite3_exec(handle, "PRAGMA journal_mode = WAL", nil, nil, nil) || SQLITE_OK != sqlite3_exec(handle, "PRAGMA synchronous = NORMAL", nil, nil, nil) {
+            if !normalizedOptions.contains(.readOnly), SQLITE_OK != sqlite3_exec(handle, "PRAGMA journal_mode = WAL", nil, nil, nil) || SQLITE_OK != sqlite3_exec(handle, "PRAGMA synchronous = NORMAL", nil, nil, nil) {
                 sqlite3_close(handle)
                 if let path = self.path { InstancePool.removeInstance(path: path) }
                 throw Error.unsupportedConfigurationAtPath(path: path)
@@ -474,7 +477,7 @@ extension Blackbird {
 
         @discardableResult public func query(_ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
 
-        @discardableResult public func query(_ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
+        @discardableResult public func query(_ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments: arguments) }
 
         public func setArtificialQueryDelay(_ delay: TimeInterval?) async { await core.setArtificialQueryDelay(delay) }
 
@@ -588,8 +591,13 @@ extension Blackbird {
                 }
             }
 
+            private let asyncTransactionSemaphore = Blackbird.Semaphore(value: 1)
+
             // Exactly like the function below, but accepts an async action
             public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> Blackbird.TransactionResult<R> {
+                await asyncTransactionSemaphore.wait()
+                defer { asyncTransactionSemaphore.signal() }
+
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
