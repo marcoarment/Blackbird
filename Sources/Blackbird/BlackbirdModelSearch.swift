@@ -124,15 +124,27 @@ public struct BlackbirdModelSearchOptions<T: BlackbirdModel>: Sendable {
     /// Can be used simultaneously with ``scoreMultipleColumn``. Scores will be multiplied by both values.
     let scoreMultiple: Double
     
+    let orderBy: [BlackbirdModelOrderClause<T>]
+    
     /// The default options: generate highlights and snippets, preload instances, and use only relevance-based ranking.
     public static var `default`: Self { .init() }
 
-    public init(highlights: HighlightMode = .generate(prefix: "<b>", suffix: "</b>"), snippets: SnippetMode = .generate(contextWords: 7, prefix: "<b>", suffix: "</b>", ellipsis: "…"), preloadInstances: Bool = true, scoreMultiple: Double = 1.0, scoreMultipleColumn: T.BlackbirdColumnKeyPath? = nil) {
+    public init(highlights: HighlightMode = .generate(prefix: "<b>", suffix: "</b>"), snippets: SnippetMode = .generate(contextWords: 7, prefix: "<b>", suffix: "</b>", ellipsis: "…"), preloadInstances: Bool = true, scoreMultiple: Double = 1.0, scoreMultipleColumn: T.BlackbirdColumnKeyPath? = nil, orderBy: BlackbirdModelOrderClause<T> ...) {
         self.highlights = highlights
         self.snippets = snippets
         self.preloadInstances = preloadInstances
         self.scoreMultiple = scoreMultiple
         self.scoreMultipleColumn = scoreMultipleColumn
+        self.orderBy = orderBy
+    }
+
+    public init(highlights: HighlightMode = .generate(prefix: "<b>", suffix: "</b>"), snippets: SnippetMode = .generate(contextWords: 7, prefix: "<b>", suffix: "</b>", ellipsis: "…"), preloadInstances: Bool = true, scoreMultiple: Double = 1.0, scoreMultipleColumn: T.BlackbirdColumnKeyPath? = nil, orderBy: [BlackbirdModelOrderClause<T>]) {
+        self.highlights = highlights
+        self.snippets = snippets
+        self.preloadInstances = preloadInstances
+        self.scoreMultiple = scoreMultiple
+        self.scoreMultipleColumn = scoreMultipleColumn
+        self.orderBy = orderBy
     }
 }
 
@@ -267,6 +279,8 @@ public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Senda
         var attrString = AttributedString()
         
         let scanner = Scanner(string: text)
+        scanner.charactersToBeSkipped = nil
+        
         while !scanner.isAtEnd {
             if let before = scanner.scanUpToString(prefix) { attrString.append(AttributedString(before)) }
 
@@ -399,7 +413,18 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
     init(matching: BlackbirdModelColumnExpression<T>, options: BlackbirdModelSearchOptions<T>, limit: Int?) {
         self.options = options
         table = SchemaGenerator.shared.table(for: T.self)
-        guard let fullTextIndex = table.fullTextIndex else { fatalError("[Blackbird] \(String(describing: T.self)) does not define any fullTextSearchableColumns.") }
+
+        guard let fullTextIndex = table.fullTextIndex else {
+            fatalError("[Blackbird] \(String(describing: T.self)) does not define any fullTextSearchableColumns.")
+        }
+
+        for orderBy in options.orderBy {
+            guard T.fullTextSearchableColumns[orderBy.column] != nil else {
+                let keyPathName = table.keyPathToColumnName(keyPath: orderBy.column)
+                fatalError("Column \\.$\(keyPathName) in full-text-search order-by clause is not included in `\(table.name).fullTextSearchableColumns`. Consider adding it as .filterOnly.")
+            }
+        }
+        
         let ftsTableName = Blackbird.Table.FullTextIndexSchema.ftsTableName(T.tableName)
         var clauses: [String] = []
         var arguments: [Blackbird.Value] = []
@@ -444,7 +469,13 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         if let whereClause { clauses.append("WHERE \(whereClause)") }
         arguments.append(contentsOf: whereArguments)
         
-        clauses.append("ORDER BY `\(scoreColumnName)` DESC")
+        if !options.orderBy.isEmpty {
+            let table = table
+            let orderBy = options.orderBy
+            clauses.append("ORDER BY \(orderBy.map { $0.orderByClause(table: table) }.joined(separator: ",")) ")
+        } else {
+            clauses.append("ORDER BY `\(scoreColumnName)` DESC")
+        }
 
         if let limit { clauses.append("LIMIT \(limit)") }
 
