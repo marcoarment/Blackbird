@@ -1286,6 +1286,9 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let modelsInBackupDb = try await TestModel.read(from: backupDb)
 
         XCTAssert(modelsInDb == modelsInBackupDb)
+
+        await db.close()
+        await backupDb.close()
     }
 
 
