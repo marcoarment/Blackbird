@@ -65,7 +65,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     override func tearDownWithError() throws {
         if sqliteFilename != "", sqliteFilename != ":memory:", FileManager.default.fileExists(atPath: sqliteFilename) {
             for path in Blackbird.Database.allFilePaths(for: sqliteFilename) {
-                try FileManager.default.removeItem(atPath: path)
+                try? FileManager.default.removeItem(atPath: path)
             }
         }
     }
