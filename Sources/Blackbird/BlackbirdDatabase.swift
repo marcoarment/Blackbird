@@ -213,6 +213,7 @@ extension Blackbird {
             case cannotOpenDatabaseAtPath(path: String, description: String)
             case unsupportedConfigurationAtPath(path: String)
             case queryError(query: String, description: String)
+            case backupError(description: String)
             case queryArgumentNameError(query: String, name: String)
             case queryArgumentValueError(query: String, description: String)
             case queryExecutionError(query: String, description: String)
@@ -481,6 +482,14 @@ extension Blackbird {
 
         public func setArtificialQueryDelay(_ delay: TimeInterval?) async { await core.setArtificialQueryDelay(delay) }
 
+        /// Creates a backup of the whole database.
+        ///
+        /// - Parameters:
+        ///   - targetPath: The path to the backup file to be created.
+        ///   - pagesPerStep: The number of [pages](https://www.sqlite.org/fileformat.html#pages) to copy in a single step (optional; defaults to 100).
+        ///
+        /// An error will be thrown if a file already exists at `targetPath`,  the backup database cannot be created or the backup process fails.
+        public func backup(to targetPath: String, pagesPerStep: Int32 = 100) async throws { try await core.backup(to: targetPath, pagesPerStep: pagesPerStep) }
 
         // MARK: - Core
         
@@ -855,6 +864,48 @@ extension Blackbird {
                     throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
                 }
                 return rows
+            }
+
+            public func backup(to targetPath: String, pagesPerStep: Int32, printProgress: Bool = false) async throws {
+                guard !FileManager.default.fileExists(atPath: targetPath) else {
+                    throw Blackbird.Database.Error.backupError(description: "File already exists at `\(targetPath)`")
+                }
+                
+                var targetDbHandle: OpaquePointer? = nil
+                let flags: Int32 = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                let openResult = sqlite3_open_v2(targetPath, &targetDbHandle, flags, nil)
+
+                guard let targetDbHandle else {
+                    throw Error.cannotOpenDatabaseAtPath(path: targetPath, description: "SQLite cannot allocate memory")
+                }
+                
+                guard openResult == SQLITE_OK else {
+                    let code = sqlite3_errcode(targetDbHandle)
+                    let msg = String(cString: sqlite3_errmsg(targetDbHandle), encoding: .utf8) ?? "(unknown)"
+                    sqlite3_close(targetDbHandle)
+                    throw Error.cannotOpenDatabaseAtPath(path: targetPath, description: "SQLite error code \(code): \(msg)")
+                }
+
+                guard let backup = sqlite3_backup_init(targetDbHandle, "main", dbHandle, "main") else {
+                    throw Blackbird.Database.Error.backupError(description: errorDesc(targetDbHandle))
+                }
+                
+                var stepResult = SQLITE_OK
+                while stepResult == SQLITE_OK || stepResult == SQLITE_BUSY || stepResult == SQLITE_LOCKED {
+                    stepResult = sqlite3_backup_step(backup, pagesPerStep)
+
+                    if printProgress {
+                        let remainingPages = sqlite3_backup_remaining(backup)
+                        let totalPages = sqlite3_backup_pagecount(backup)
+                        let backedUpPages = totalPages - remainingPages
+                        print("Backed up \(backedUpPages) pages of \(totalPages)\n")
+                    }
+                    
+                    await Task.yield()
+                }
+
+                sqlite3_backup_finish(backup)
+                sqlite3_close(targetDbHandle)
             }
         }
     }
