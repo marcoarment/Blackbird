@@ -898,10 +898,14 @@ extension Blackbird {
                         let remainingPages = sqlite3_backup_remaining(backup)
                         let totalPages = sqlite3_backup_pagecount(backup)
                         let backedUpPages = totalPages - remainingPages
-                        print("Backed up \(backedUpPages) pages of \(totalPages)\n")
+                        print("Backed up \(backedUpPages) pages of \(totalPages)")
                     }
                     
                     await Task.yield()
+                }
+                
+                guard stepResult == SQLITE_DONE else {
+                    throw Blackbird.Database.Error.backupError(description: errorDesc(targetDbHandle))
                 }
 
                 sqlite3_backup_finish(backup)
