@@ -878,7 +878,9 @@ extension Blackbird {
                 guard let targetDbHandle else {
                     throw Error.cannotOpenDatabaseAtPath(path: targetPath, description: "SQLite cannot allocate memory")
                 }
-                
+
+                defer { sqlite3_close(targetDbHandle) }
+
                 guard openResult == SQLITE_OK else {
                     let code = sqlite3_errcode(targetDbHandle)
                     let msg = String(cString: sqlite3_errmsg(targetDbHandle), encoding: .utf8) ?? "(unknown)"
@@ -889,6 +891,8 @@ extension Blackbird {
                 guard let backup = sqlite3_backup_init(targetDbHandle, "main", dbHandle, "main") else {
                     throw Blackbird.Database.Error.backupError(description: errorDesc(targetDbHandle))
                 }
+                
+                defer { sqlite3_backup_finish(backup) }
                 
                 var stepResult = SQLITE_OK
                 while stepResult == SQLITE_OK || stepResult == SQLITE_BUSY || stepResult == SQLITE_LOCKED {
@@ -903,13 +907,10 @@ extension Blackbird {
                     
                     await Task.yield()
                 }
-                
+
                 guard stepResult == SQLITE_DONE else {
                     throw Blackbird.Database.Error.backupError(description: errorDesc(targetDbHandle))
                 }
-
-                sqlite3_backup_finish(backup)
-                sqlite3_close(targetDbHandle)
             }
         }
     }
