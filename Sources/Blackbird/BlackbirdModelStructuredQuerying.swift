@@ -51,24 +51,34 @@ public extension String.StringInterpolation {
 /// - ``BlackbirdModel/read(from:matching:orderBy:limit:)``
 public struct BlackbirdModelOrderClause<T: BlackbirdModel>: Sendable, CustomDebugStringConvertible {
     public enum Direction: Sendable {
-        case ascending
-        case descending
+        case ascending(column: T.BlackbirdColumnKeyPath)
+        case descending(column: T.BlackbirdColumnKeyPath)
+        case random
     }
     
-    let column: T.BlackbirdColumnKeyPath
     let direction: Direction
     
-    public static func ascending(_ column: T.BlackbirdColumnKeyPath) -> BlackbirdModelOrderClause { BlackbirdModelOrderClause(column, direction: .ascending) }
-    public static func descending(_ column: T.BlackbirdColumnKeyPath) -> BlackbirdModelOrderClause { BlackbirdModelOrderClause(column, direction: .descending) }
+    public static func ascending(_ column: T.BlackbirdColumnKeyPath)  -> BlackbirdModelOrderClause { BlackbirdModelOrderClause(direction: .ascending(column: column)) }
+    public static func descending(_ column: T.BlackbirdColumnKeyPath) -> BlackbirdModelOrderClause { BlackbirdModelOrderClause(direction: .descending(column: column)) }
+    public static var random: BlackbirdModelOrderClause { BlackbirdModelOrderClause(direction: .random) }
     
-    init(_ column: T.BlackbirdColumnKeyPath, direction: Direction) {
-        self.column = column
+    init(direction: Direction) {
         self.direction = direction
     }
     
     func orderByClause(table: Blackbird.Table) -> String {
-        let columnName = table.keyPathToColumnName(keyPath: column)
-        return "`\(columnName)`\(direction == .descending ? " DESC" : "")"
+        switch direction {
+            case .ascending(let column):
+                let columnName = table.keyPathToColumnName(keyPath: column)
+                return "`\(columnName)`"
+
+            case .descending(let column):
+                let columnName = table.keyPathToColumnName(keyPath: column)
+                return "`\(columnName)` DESC"
+
+            case .random:
+                return "RANDOM()"
+        }
     }
 
     public var debugDescription: String { orderByClause(table: T.table) }

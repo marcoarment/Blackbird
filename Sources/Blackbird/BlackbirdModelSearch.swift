@@ -419,9 +419,21 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         }
 
         for orderBy in options.orderBy {
-            guard T.fullTextSearchableColumns[orderBy.column] != nil else {
-                let keyPathName = table.keyPathToColumnName(keyPath: orderBy.column)
-                fatalError("Column \\.$\(keyPathName) in full-text-search order-by clause is not included in `\(table.name).fullTextSearchableColumns`. Consider adding it as .filterOnly.")
+            switch orderBy.direction {
+                case .ascending(column: let column):
+                    guard T.fullTextSearchableColumns[column] != nil else {
+                        let keyPathName = table.keyPathToColumnName(keyPath: column)
+                        fatalError("Column \\.$\(keyPathName) in full-text-search order-by clause is not included in `\(table.name).fullTextSearchableColumns`. Consider adding it as .filterOnly.")
+                    }
+
+                case .descending(column: let column):
+                    guard T.fullTextSearchableColumns[column] != nil else {
+                        let keyPathName = table.keyPathToColumnName(keyPath: column)
+                        fatalError("Column \\.$\(keyPathName) in full-text-search order-by clause is not included in `\(table.name).fullTextSearchableColumns`. Consider adding it as .filterOnly.")
+                    }
+
+                case .random:
+                    break
             }
         }
         
