@@ -35,11 +35,9 @@ import Foundation
 @testable import Blackbird
 
 struct TestModel: BlackbirdModel {
-    static var indexes: [[BlackbirdColumnKeyPath]] = [
+    static let indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ]
     ]
-    
-    static var cacheLimit: Int = 0
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
@@ -48,17 +46,30 @@ struct TestModel: BlackbirdModel {
     var nonColumn: String = ""
 }
 
+struct TestModelWithCache: BlackbirdModel {
+    static let indexes: [[BlackbirdColumnKeyPath]] = [
+        [ \.$title ]
+    ]
+    
+    static let cacheLimit: Int = 100
+
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var url: URL
+}
+
+
 struct TestModelWithoutIDColumn: BlackbirdModel {
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
 
     @BlackbirdColumn var pk: Int
     @BlackbirdColumn var title: String
 }
 
 struct TestModelWithDescription: BlackbirdModel {
-    static var cacheLimit: Int = 0
+    static let cacheLimit: Int = 0
 
-    static var indexes: [[BlackbirdColumnKeyPath]] = [
+    static let indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ],
         [ \.$url ]
     ]
@@ -131,6 +142,8 @@ struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var typeDataNotNull: Data
     
     enum RepresentableIntEnum: Int, BlackbirdIntegerEnum {
+        typealias RawValue = Int
+        
         case zero = 0
         case one = 1
         case two = 2
@@ -140,6 +153,8 @@ struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var typeIntEnumNullWithValue: RepresentableIntEnum?
 
     enum RepresentableStringEnum: String, BlackbirdStringEnum {
+        typealias RawValue = String
+
         case empty = ""
         case zero = "zero"
         case one = "one"
@@ -150,6 +165,8 @@ struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var typeStringEnumNullWithValue: RepresentableStringEnum?
 
     enum RepresentableIntNonZero: Int, BlackbirdIntegerEnum {
+        typealias RawValue = Int
+        
         case one = 1
         case two = 2
     }
@@ -159,6 +176,8 @@ struct TypeTest: BlackbirdModel {
     @BlackbirdColumn var typeIntNonZeroEnumNullWithValue: RepresentableIntNonZero?
 
     enum RepresentableStringNonEmpty: String, BlackbirdStringEnum {
+        typealias RawValue = String
+
         case one = "one"
         case two = "two"
     }
@@ -175,7 +194,7 @@ struct TypeTest: BlackbirdModel {
 }
 
 struct MulticolumnPrimaryKeyTest: BlackbirdModel {
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
@@ -194,7 +213,7 @@ public struct TestModelWithOptionalColumns: BlackbirdModel {
 }
 
 public struct TestModelWithUniqueIndex: BlackbirdModel {
-    public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+    public static let uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$a, \.$b, \.$c ],
     ]
 
@@ -213,8 +232,8 @@ public struct TestModelForUpdateExpressions: BlackbirdModel {
 // MARK: - Schema change: Add primary-key column
 
 struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
-    static var tableName = "SchemaChangeAddPrimaryKeyColumn"
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID ]
+    static let tableName = "SchemaChangeAddPrimaryKeyColumn"
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID ]
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
@@ -222,8 +241,8 @@ struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
 }
 
 struct SchemaChangeAddPrimaryKeyColumnChanged: BlackbirdModel {
-    static var tableName = "SchemaChangeAddPrimaryKeyColumn"
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
+    static let tableName = "SchemaChangeAddPrimaryKeyColumn"
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
@@ -236,14 +255,14 @@ struct SchemaChangeAddPrimaryKeyColumnChanged: BlackbirdModel {
 // MARK: - Schema change: Add columns
 
 struct SchemaChangeAddColumnsInitial: BlackbirdModel {
-    static var tableName = "SchemaChangeAddColumns"
+    static let tableName = "SchemaChangeAddColumns"
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
 }
 
 struct SchemaChangeAddColumnsChanged: BlackbirdModel {
-    static var tableName = "SchemaChangeAddColumns"
+    static let tableName = "SchemaChangeAddColumns"
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
@@ -255,8 +274,8 @@ struct SchemaChangeAddColumnsChanged: BlackbirdModel {
 // MARK: - Schema change: Drop columns
 
 struct SchemaChangeRebuildTableInitial: BlackbirdModel {
-    static var tableName = "SchemaChangeRebuild"
-    static var primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
+    static let tableName = "SchemaChangeRebuild"
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$id, \.$title ]
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
@@ -264,7 +283,7 @@ struct SchemaChangeRebuildTableInitial: BlackbirdModel {
 }
 
 struct SchemaChangeRebuildTableChanged: BlackbirdModel {
-    static var tableName = "SchemaChangeRebuild"
+    static let tableName = "SchemaChangeRebuild"
     
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
@@ -275,15 +294,15 @@ struct SchemaChangeRebuildTableChanged: BlackbirdModel {
 // MARK: - Schema change: Add index
 
 struct SchemaChangeAddIndexInitial: BlackbirdModel {
-    static var tableName = "SchemaChangeAddIndex"
+    static let tableName = "SchemaChangeAddIndex"
 
     @BlackbirdColumn var id: Int64
     @BlackbirdColumn var title: String
 }
 
 struct SchemaChangeAddIndexChanged: BlackbirdModel {
-    static var tableName = "SchemaChangeAddIndex"
-    static var indexes: [[BlackbirdColumnKeyPath]] = [
+    static let tableName = "SchemaChangeAddIndex"
+    static let indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ]
     ]
 
@@ -294,11 +313,11 @@ struct SchemaChangeAddIndexChanged: BlackbirdModel {
 // MARK: - Invalid index definition
 
 struct DuplicateIndexesModel: BlackbirdModel {
-    static var indexes: [[BlackbirdColumnKeyPath]] = [
+    static let indexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ]
     ]
 
-    static var uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
+    static let uniqueIndexes: [[BlackbirdColumnKeyPath]] = [
         [ \.$title ]
     ]
 
@@ -309,7 +328,7 @@ struct DuplicateIndexesModel: BlackbirdModel {
 // MARK: - Full-text search
 
 struct FTSModel: BlackbirdModel {
-    static var fullTextSearchableColumns: FullTextIndex = [
+    static let fullTextSearchableColumns: FullTextIndex = [
         \.$title       : .text(weight: 3.0),
         \.$description : .text,
         \.$category    : .filterOnly,
@@ -326,7 +345,7 @@ struct FTSModel: BlackbirdModel {
 struct FTSModelAfterMigration: BlackbirdModel {
     static let tableName = "FTSModel"
 
-    static var fullTextSearchableColumns: FullTextIndex = [
+    static let fullTextSearchableColumns: FullTextIndex = [
         \.$title       : .text(weight: 3.0),
         \.$description : .text,
         \.$category    : .filterOnly,

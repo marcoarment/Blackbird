@@ -423,9 +423,6 @@ extension Blackbird {
                 fileChangeMonitor = nil
             }
 
-            core = Core(handle, changeReporter: changeReporter, cache: cache, fileChangeMonitor: fileChangeMonitor, options: options)
-            perfLog = performanceLog
-            
             sqlite3_update_hook(handle, { ctx, operation, dbName, tableName, rowid in
                 guard let ctx else { return }
                 let changeReporter = Unmanaged<ChangeReporter>.fromOpaque(ctx).takeUnretainedValue()
@@ -434,6 +431,9 @@ extension Blackbird {
                     changeReporter.reportChange(tableName: tableNameStr, rowID: rowid, changedColumns: nil)
                 }
             }, Unmanaged<ChangeReporter>.passUnretained(changeReporter).toOpaque())
+
+            core = Core(Core.SQLiteHandle(pointer: handle), changeReporter: changeReporter, cache: cache, fileChangeMonitor: fileChangeMonitor, options: options)
+            perfLog = performanceLog
 
             fileChangeMonitor?.onChange { [weak self] in
                 guard let self else { return }
@@ -495,15 +495,19 @@ extension Blackbird {
         
         /// An actor for protected concurrent access to a database.
         public actor Core: BlackbirdQueryable {
+            internal struct SQLiteHandle: @unchecked Sendable {
+                let pointer: OpaquePointer
+            }
+        
             private struct PreparedStatement {
-                let handle: OpaquePointer
+                let handle: SQLiteHandle
                 let isReadOnly: Bool
             }
         
             private var debugPrintEveryQuery = false
             private var debugPrintQueryParameterValues = false
 
-            internal var dbHandle: OpaquePointer
+            internal let dbHandle: SQLiteHandle
             private weak var changeReporter: ChangeReporter?
             private weak var fileChangeMonitor: FileChangeMonitor?
             private weak var cache: Cache?
@@ -516,7 +520,7 @@ extension Blackbird {
 
             private var perfLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database.Core")
 
-            internal init(_ dbHandle: OpaquePointer, changeReporter: ChangeReporter?, cache: Cache?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
+            internal init(_ dbHandle: SQLiteHandle, changeReporter: ChangeReporter?, cache: Cache?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
                 self.dbHandle = dbHandle
                 self.changeReporter = changeReporter
                 self.fileChangeMonitor = fileChangeMonitor
@@ -524,7 +528,7 @@ extension Blackbird {
                 self.debugPrintEveryQuery = options.contains(.debugPrintEveryQuery)
                 self.debugPrintQueryParameterValues = options.contains(.debugPrintQueryParameterValues)
                 
-                if options.contains(.monitorForExternalChanges), SQLITE_OK == sqlite3_prepare_v3(dbHandle, "PRAGMA data_version", -1, UInt32(SQLITE_PREPARE_PERSISTENT), &dataVersionStmt, nil) {
+                if options.contains(.monitorForExternalChanges), SQLITE_OK == sqlite3_prepare_v3(dbHandle.pointer, "PRAGMA data_version", -1, UInt32(SQLITE_PREPARE_PERSISTENT), &dataVersionStmt, nil) {
                     if SQLITE_ROW == sqlite3_step(dataVersionStmt) { previousDataVersion = sqlite3_column_int64(dataVersionStmt, 0) }
                     sqlite3_reset(dataVersionStmt)
                 }
@@ -532,8 +536,8 @@ extension Blackbird {
 
             deinit {
                 if !isClosed {
-                    for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle) }
-                    sqlite3_close(dbHandle)
+                    for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle.pointer) }
+                    sqlite3_close(dbHandle.pointer)
                     isClosed = true
                 }
             }
@@ -542,8 +546,8 @@ extension Blackbird {
                 if isClosed { return }
                 let spState = perfLog.begin(signpost: .closeDatabase)
                 defer { perfLog.end(state: spState) }
-                for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle) }
-                sqlite3_close(dbHandle)
+                for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle.pointer) }
+                sqlite3_close(dbHandle.pointer)
                 isClosed = true
             }
             
@@ -555,9 +559,9 @@ extension Blackbird {
             internal var changeCount: Int64 {
                 get {
                     if #available(macOS 12.3, iOS 15.4, tvOS 15.4, watchOS 8.5, *) {
-                        return Int64(sqlite3_total_changes64(dbHandle))
+                        return Int64(sqlite3_total_changes64(dbHandle.pointer))
                     } else {
-                        return Int64(sqlite3_total_changes(dbHandle))
+                        return Int64(sqlite3_total_changes(dbHandle.pointer))
                     }
                 }
             }
@@ -689,8 +693,8 @@ extension Blackbird {
                 }
                 
                 try _checkForUpdateHookBypass {
-                    let result = sqlite3_exec(dbHandle, query, nil, nil, nil)
-                    if result != SQLITE_OK { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
+                    let result = sqlite3_exec(dbHandle.pointer, query, nil, nil, nil)
+                    if result != SQLITE_OK { throw Error.queryError(query: query, description: errorDesc(dbHandle.pointer)) }
                 }
             }
             
@@ -740,7 +744,7 @@ extension Blackbird {
                 var idx = 1 // SQLite bind-parameter indexes start at 1, not 0!
                 for any in arguments {
                     let value = try Value.fromAny(any)
-                    try value.bind(database: self, statement: statementHandle, index: Int32(idx), for: query)
+                    try value.bind(database: self, statement: statementHandle.pointer, index: Int32(idx), for: query)
                     idx += 1
                 }
                 
@@ -756,7 +760,7 @@ extension Blackbird {
                 let statementHandle = statement.handle
                 for (name, any) in arguments {
                     let value = try Value.fromAny(any)
-                    try value.bind(database: self, statement: statementHandle, name: name, for: query)
+                    try value.bind(database: self, statement: statementHandle.pointer, name: name, for: query)
                 }
 
                 return try _checkForUpdateHookBypass(statement: statement) {
@@ -767,17 +771,17 @@ extension Blackbird {
             private func preparedStatement(_ query: String) throws -> PreparedStatement {
                 if let cached = cachedStatements[query] { return cached }
                 var statementHandle: OpaquePointer? = nil
-                let result = sqlite3_prepare_v3(dbHandle, query, -1, UInt32(SQLITE_PREPARE_PERSISTENT), &statementHandle, nil)
-                guard result == SQLITE_OK, let statementHandle else { throw Error.queryError(query: query, description: errorDesc(dbHandle)) }
+                let result = sqlite3_prepare_v3(dbHandle.pointer, query, -1, UInt32(SQLITE_PREPARE_PERSISTENT), &statementHandle, nil)
+                guard result == SQLITE_OK, let statementHandle else { throw Error.queryError(query: query, description: errorDesc(dbHandle.pointer)) }
                 
-                let statement = PreparedStatement(handle: statementHandle, isReadOnly: sqlite3_stmt_readonly(statementHandle) > 0)
+                let statement = PreparedStatement(handle: SQLiteHandle(pointer: statementHandle), isReadOnly: sqlite3_stmt_readonly(statementHandle) > 0)
                 cachedStatements[query] = statement
                 return statement
             }
             
             private func rowsByExecutingPreparedStatement(_ statement: PreparedStatement, from query: String) throws -> [Blackbird.Row] {
                 if debugPrintEveryQuery {
-                    if debugPrintQueryParameterValues, let cStr = sqlite3_expanded_sql(statement.handle), let expandedQuery = String(cString: cStr, encoding: .utf8) {
+                    if debugPrintQueryParameterValues, let cStr = sqlite3_expanded_sql(statement.handle.pointer), let expandedQuery = String(cString: cStr, encoding: .utf8) {
                         print("[Blackbird.Database] \(expandedQuery)")
                     } else {
                         print("[Blackbird.Database] \(query)")
@@ -802,29 +806,29 @@ extension Blackbird {
                     }
                 }
 
-                var result = sqlite3_step(statementHandle)
+                var result = sqlite3_step(statementHandle.pointer)
                 
                 guard result == SQLITE_ROW || result == SQLITE_DONE else {
-                    sqlite3_reset(statementHandle)
-                    sqlite3_clear_bindings(statementHandle)
+                    sqlite3_reset(statementHandle.pointer)
+                    sqlite3_clear_bindings(statementHandle.pointer)
                     switch result {
                         case SQLITE_CONSTRAINT: throw Error.uniqueConstraintFailed
-                        default: throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                        default: throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle.pointer))
                     }
                 }
 
-                let columnCount = sqlite3_column_count(statementHandle)
+                let columnCount = sqlite3_column_count(statementHandle.pointer)
                 if columnCount == 0 {
-                    guard sqlite3_reset(statementHandle) == SQLITE_OK, sqlite3_clear_bindings(statementHandle) == SQLITE_OK else {
-                        throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                    guard sqlite3_reset(statementHandle.pointer) == SQLITE_OK, sqlite3_clear_bindings(statementHandle.pointer) == SQLITE_OK else {
+                        throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle.pointer))
                     }
                     return []
                 }
                 
                 var columnNames: [String] = []
                 for i in 0 ..< columnCount {
-                    guard let charPtr = sqlite3_column_name(statementHandle, i), case let name = String(cString: charPtr) else {
-                        throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                    guard let charPtr = sqlite3_column_name(statementHandle.pointer, i), case let name = String(cString: charPtr) else {
+                        throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle.pointer))
                     }
                     columnNames.append(name)
                 }
@@ -833,35 +837,35 @@ extension Blackbird {
                 while result == SQLITE_ROW {
                     var row: Blackbird.Row = [:]
                     for i in 0 ..< Int(columnCount) {
-                        switch sqlite3_column_type(statementHandle, Int32(i)) {
+                        switch sqlite3_column_type(statementHandle.pointer, Int32(i)) {
                             case SQLITE_NULL:    row[columnNames[i]] = .null
-                            case SQLITE_INTEGER: row[columnNames[i]] = .integer(sqlite3_column_int64(statementHandle, Int32(i)))
-                            case SQLITE_FLOAT:   row[columnNames[i]] = .double(sqlite3_column_double(statementHandle, Int32(i)))
+                            case SQLITE_INTEGER: row[columnNames[i]] = .integer(sqlite3_column_int64(statementHandle.pointer, Int32(i)))
+                            case SQLITE_FLOAT:   row[columnNames[i]] = .double(sqlite3_column_double(statementHandle.pointer, Int32(i)))
 
                             case SQLITE_TEXT:
-                                guard let charPtr = sqlite3_column_text(statementHandle, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
+                                guard let charPtr = sqlite3_column_text(statementHandle.pointer, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
                                 row[columnNames[i]] = .text(String(cString: charPtr))
             
                             case SQLITE_BLOB:
-                                let byteLength = sqlite3_column_bytes(statementHandle, Int32(i))
+                                let byteLength = sqlite3_column_bytes(statementHandle.pointer, Int32(i))
                                 if byteLength > 0 {
-                                    guard let bytes = sqlite3_column_blob(statementHandle, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
+                                    guard let bytes = sqlite3_column_blob(statementHandle.pointer, Int32(i)) else { throw Error.queryResultValueError(query: query, column: columnNames[i]) }
                                     row[columnNames[i]] = .data(Data(bytes: bytes, count: Int(byteLength)))
                                 } else {
                                     row[columnNames[i]] = .data(Data())
                                 }
 
-                            default: throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                            default: throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle.pointer))
                         }
                     }
                     rows.append(row)
 
-                    result = sqlite3_step(statementHandle)
+                    result = sqlite3_step(statementHandle.pointer)
                 }
-                if result != SQLITE_DONE { throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle)) }
+                if result != SQLITE_DONE { throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle.pointer)) }
                 
-                guard sqlite3_reset(statementHandle) == SQLITE_OK, sqlite3_clear_bindings(statementHandle) == SQLITE_OK else {
-                    throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle))
+                guard sqlite3_reset(statementHandle.pointer) == SQLITE_OK, sqlite3_clear_bindings(statementHandle.pointer) == SQLITE_OK else {
+                    throw Error.queryExecutionError(query: query, description: errorDesc(dbHandle.pointer))
                 }
                 return rows
             }
@@ -888,7 +892,7 @@ extension Blackbird {
                     throw Error.cannotOpenDatabaseAtPath(path: targetPath, description: "SQLite error code \(code): \(msg)")
                 }
 
-                guard let backup = sqlite3_backup_init(targetDbHandle, "main", dbHandle, "main") else {
+                guard let backup = sqlite3_backup_init(targetDbHandle, "main", dbHandle.pointer, "main") else {
                     throw Blackbird.Database.Error.backupError(description: errorDesc(targetDbHandle))
                 }
                 

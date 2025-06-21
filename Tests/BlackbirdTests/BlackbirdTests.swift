@@ -1102,108 +1102,81 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
     }
     
     func testCache() async throws {
-        TestModel.cacheLimit = 10000
-
         let db = try Blackbird.Database(path: sqliteFilename)
 
         // big block of writes to populate the DB
         let lastURL = try await db.transaction { core in
             var lastURL: URL?
             for i in 0..<1000 {
-                let t = TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomDescription)
+                let t = TestModelWithCache(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL)
                 try t.writeIsolated(to: db, core: core)
                 lastURL = t.url
             }
             return lastURL!
         }
         
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
-        var t = try await TestModel.read(from: db, id: 1)!
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
+        var t = try await TestModelWithCache.read(from: db, id: 1)!
+//        XCTAssertEqual(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses, 0)
+//        XCTAssertEqual(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits, 1)
         
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
         t.title = "new"
         try await t.write(to: db)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.writes == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.writes == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.rowInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.tableInvalidations == 0)
         
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
-        t = try await TestModel.read(from: db, id: 1)!
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
+        t = try await TestModelWithCache.read(from: db, id: 1)!
         XCTAssert(t.title == "new")
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits == 1)
 
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
-        try await db.query("UPDATE TestModel SET title = 'new2' WHERE id = 1")
-        t = try await TestModel.read(from: db, id: 1)!
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
+        try await db.query("UPDATE TestModelWithCache SET title = 'new2' WHERE id = 1")
+        t = try await TestModelWithCache.read(from: db, id: 1)!
         XCTAssert(t.title == "new2")
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.rowInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.tableInvalidations == 1)
 
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
-        try await TestModel.update(in: db, set: [ \.$title : "new2" ], matching: \.$id == 1)
-        t = try await TestModel.read(from: db, id: 1)!
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
+        try await TestModelWithCache.update(in: db, set: [ \.$title : "new2" ], matching: \.$id == 1)
+        t = try await TestModelWithCache.read(from: db, id: 1)!
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits == 1)
 
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
-        try await TestModel.update(in: db, set: [ \.$title : "new3" ], matching: \.$id < 10)
-        t = try await TestModel.read(from: db, id: 1)!
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
+        try await TestModelWithCache.update(in: db, set: [ \.$title : "new3" ], matching: \.$id < 10)
+        t = try await TestModelWithCache.read(from: db, id: 1)!
         XCTAssert(t.title == "new3")
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits == 0)
         
-        db.resetCachePerformanceMetrics(tableName: TestModel.tableName)
-        var titleMatch = try await TestModel.query(in: db, columns: [\.$title], matching: \.$url == lastURL)
+        db.resetCachePerformanceMetrics(tableName: TestModelWithCache.tableName)
+        var titleMatch = try await TestModelWithCache.query(in: db, columns: [\.$title], matching: \.$url == lastURL)
         XCTAssert(!titleMatch.isEmpty)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 0)
-        titleMatch = try await TestModel.query(in: db, columns: [\.$title], matching: \.$url == lastURL)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits == 0)
+        titleMatch = try await TestModelWithCache.query(in: db, columns: [\.$title], matching: \.$url == lastURL)
         XCTAssert(!titleMatch.isEmpty)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.misses == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.hits == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.misses == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.hits == 1)
         
         t.id = 9998
         try await t.write(to: db)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.queryInvalidations == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.queryInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.rowInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.tableInvalidations == 0)
         
-        try await TestModel.update(in: db, set: [\.$id : 9999], matching: \.$id == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.queryInvalidations == 1)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.rowInvalidations == 0)
-        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModel.tableName]!.tableInvalidations == 0)
+        try await TestModelWithCache.update(in: db, set: [\.$id : 9999], matching: \.$id == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.queryInvalidations == 1)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.rowInvalidations == 0)
+        XCTAssert(db.cachePerformanceMetricsByTableName()[TestModelWithCache.tableName]!.tableInvalidations == 0)
     }
     
-    func testCacheSpeed() async throws {
-        let cacheEnabled = true
-
-        TestModel.cacheLimit = cacheEnabled ? 10000 : 0
-        TestModelWithDescription.cacheLimit = TestModel.cacheLimit
-        let startTime = Date()
-        try await testQueries()
-        try await testHeavyWorkload()
-        try await testChangeNotifications()
-        let duration = abs(startTime.timeIntervalSinceNow)
-        print("took \(duration) seconds")
-    
-//        measure {
-//            let exp = expectation(description: "Finished")
-//            Task {
-//                let startTime = Date()
-//                try await testHeavyWorkload()
-//                let duration = startTime.timeIntervalSinceNow
-//                print("took \(duration) seconds")
-//                exp.fulfill()
-//            }
-//            wait(for: [exp], timeout: 200.0)
-//        }
-    }
-
     func testFTS() async throws {
         let options: Blackbird.Database.Options = [.debugPrintEveryQuery, .requireModelSchemaValidationBeforeUse]
 

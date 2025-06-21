@@ -231,7 +231,7 @@ public class Blackbird {
                 case let .text(s):    result = sqlite3_bind_text(statement, index, s, -1, Blackbird.Value.copyValue)
                 case let .data(d):    result = d.withUnsafeBytes { bytes in sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), Blackbird.Value.copyValue) }
             }
-            if result != SQLITE_OK { throw Blackbird.Database.Error.queryArgumentValueError(query: query, description: database.errorDesc(database.dbHandle)) }
+            if result != SQLITE_OK { throw Blackbird.Database.Error.queryArgumentValueError(query: query, description: database.errorDesc(database.dbHandle.pointer)) }
         }
         
         internal func bind(database: isolated Blackbird.Database.Core, statement: OpaquePointer, name: String, for query: String) throws {

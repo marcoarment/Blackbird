@@ -186,7 +186,7 @@ extension Optional: BlackbirdColumnWrappable where Wrapped: BlackbirdColumnWrapp
 }
 
 // Bad hack to make Optional<BlackbirdIntegerEnum> conform to BlackbirdStorableAsInteger
-extension Optional: RawRepresentable where Wrapped: RawRepresentable {
+extension Optional: @retroactive RawRepresentable where Wrapped: RawRepresentable {
     public typealias RawValue = Wrapped.RawValue
     public init?(rawValue: Wrapped.RawValue) {
         if let w = Wrapped(rawValue: rawValue) { self = .some(w) } else { self = .none }
@@ -194,7 +194,7 @@ extension Optional: RawRepresentable where Wrapped: RawRepresentable {
     public var rawValue: Wrapped.RawValue { fatalError() }
 }
 
-extension Optional: CaseIterable where Wrapped: CaseIterable {
+extension Optional: @retroactive CaseIterable where Wrapped: CaseIterable {
     public static var allCases: [Optional<Wrapped>] { Wrapped.allCases.map { Optional<Wrapped>($0) } }
 }
 

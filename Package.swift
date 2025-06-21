@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 
 import PackageDescription
 
@@ -21,12 +21,10 @@ let package = Package(
         .target(
             name: "Blackbird",
             dependencies: [],
-            swiftSettings: [
-//                .enableExperimentalFeature("StrictConcurrency"),  // Uncomment for Sendable testing
-            ]
         ),
         .testTarget(
             name: "BlackbirdTests",
             dependencies: ["Blackbird"]),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

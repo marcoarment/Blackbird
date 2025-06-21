@@ -38,7 +38,7 @@ import SwiftUI
 extension Blackbird.Database: ObservableObject { }
 
 struct EnvironmentBlackbirdDatabaseKey: EnvironmentKey {
-    static var defaultValue: Blackbird.Database? = nil
+    static let defaultValue: Blackbird.Database? = nil
 }
 
 extension EnvironmentValues {

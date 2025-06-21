@@ -64,7 +64,7 @@ extension TestData {
     static var randomURL: URL            { Self.URLs.randomElement()! }
     static var randomDescription: String { Self.descriptions.randomElement()! }
 
-    static var titles = [
+    static let titles = [
         "The Daily",
         "This American Life",
         "Radiolab",
@@ -1067,7 +1067,7 @@ extension TestData {
         "Matt and Shane's Secret Podcast",
     ]
 
-    static var descriptions = [
+    static let descriptions = [
         "This is what the news should sound like. The biggest stories of our time, told by the best journalists in the world. Hosted by Michael Barbaro and Sabrina Tavernise. Twenty minutes a day, five days a week, ready by 6 a.m.",
         "This American Life is a weekly public radio show, heard by 2.2 million people on more than 500 stations. Another 2.5 million people download the weekly podcast. It is hosted by Ira Glass, produced in collaboration with Chicago Public Media, delivered to stations by PRX The Public Radio Exchange, and has won all of the major broadcasting awards.",
         "Radiolab is on a curiosity bender. We ask deep questions and use investigative journalism to get the answers. A given episode might whirl you through science, legal history, and into the home of someone halfway across the world. The show is known for innovative sound design, smashing information into music. It is hosted by Lulu Miller and Latif Nasser.",
@@ -2070,7 +2070,7 @@ extension TestData {
         "Grab onto this fast moving train and witness two comedians rise to victory and splendor. This is easily the funniest podcast out there. The rest are pretty meh.",
     ]
 
-    static var URLs = [
+    static let URLs = [
         URL(string: "https://feeds.simplecast.com/54nAGcIl")!,
         URL(string: "https://www.thisamericanlife.org/podcast/rss.xml")!,
         URL(string: "http://feeds.feedburner.com/radiolab")!,

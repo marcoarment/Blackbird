@@ -43,7 +43,8 @@ extension BlackbirdModel {
 
 @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
 @Observable
-public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Any> {
+@MainActor
+public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Sendable> {
     /// Whether this query is currently loading from the database, either initially or after an update.
     public var isLoading = false
     
@@ -122,6 +123,7 @@ extension BlackbirdModel {
 
 @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
 @Observable
+@MainActor
 public final class BlackbirdModelObserver<T: BlackbirdModel> {
     /// Whether this instance is currently loading from the database, either initially or after an update.
     public var isLoading = false
@@ -137,14 +139,16 @@ public final class BlackbirdModelObserver<T: BlackbirdModel> {
     @ObservationIgnored private var observer: AnyCancellable? = nil
     
     /// Initializer to track a single-column primary-key value.
+    nonisolated
     public convenience init(in database: Blackbird.Database? = nil, primaryKey: Sendable? = nil) {
         self.init(in: database, multicolumnPrimaryKey: [primaryKey])
     }
     
     /// Initializer to track a multi-column primary-key value.
+    nonisolated
     public init(in database: Blackbird.Database? = nil, multicolumnPrimaryKey: [Sendable]? = nil) {
         self.multicolumnPrimaryKey = multicolumnPrimaryKey?.map { try! Blackbird.Value.fromAny($0) } ?? nil
-        bind(to: database)
+        Task { await bind(to: database) }
     }
     
     /// Set or change the ``Blackbird/Database`` to read from and monitor for changes.

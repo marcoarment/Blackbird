@@ -66,7 +66,7 @@ extension BlackbirdCodingKey {
     @_silgen_name("swift_EnumCaseName") private static func _getEnumCaseNameInternal<T>(_ value: T) -> UnsafePointer<CChar>?
     fileprivate static func _getEnumCaseName<T>(for value: T) -> String? {
         guard let stringPtr = _getEnumCaseNameInternal(value) else { return nil }
-        return String(validatingUTF8: stringPtr)
+        return String(validatingCString: stringPtr)
     }
 }
 
