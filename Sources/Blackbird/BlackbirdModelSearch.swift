@@ -210,13 +210,13 @@ public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Senda
     /// - Returns: The specified instance, or `nil` if it no longer exists in the database.
     public func instance(from database: Blackbird.Database) async throws -> T? {
         if let preloadedInstance { return preloadedInstance }
-        return try await instanceIsolated(from: database, core: database.core)
+        return try await instance(from: database.core)
     }
     
     /// Synchronous version of ``instance(from:)`` for use in database transactions.
-    public func instanceIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws -> T? {
+    public func instance(from core: isolated Blackbird.Database.Core) throws -> T? {
         if let preloadedInstance { return preloadedInstance }
-        return try T.readIsolated(from: database, core: core, sqlWhere: "rowid = ?", arguments: [rowid]).first
+        return try T.read(from: core, sqlWhere: "rowid = ?", arguments: [rowid]).first
     }
     
     /// A subset of columns from this search result's model row.
@@ -225,12 +225,12 @@ public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Senda
     ///   - columns: The column key-paths to select.
     /// - Returns: A ``Blackbird/ModelRow`` of the model's type with only the specified columns present.
     public func row(from database: Blackbird.Database, columns: [T.BlackbirdColumnKeyPath]) async throws -> Blackbird.ModelRow<T>? {
-        return try await rowIsolated(from: database, core: database.core, columns: columns)
+        return try await row(from: database.core, columns: columns)
     }
 
     /// Synchronous version of ``row(from:columns:)`` for use in database transactions.
-    public func rowIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, columns: [T.BlackbirdColumnKeyPath]) throws -> Blackbird.ModelRow<T>? {
-        return try T.queryIsolated(in: database, core: core, columns: columns, matching: .literal("rowid = ?", rowid)).first
+    public func row(from core: isolated Blackbird.Database.Core, columns: [T.BlackbirdColumnKeyPath]) throws -> Blackbird.ModelRow<T>? {
+        return try T.query(in: core, columns: columns, matching: .literal("rowid = ?", rowid)).first
     }
 
     /// The text of the given column, with the highlighting prefix and suffix strings, if this column matched the search query.
@@ -318,11 +318,11 @@ extension BlackbirdModel {
     ///
     /// This is a heavy operation that may take noticeable time on large indexes.
     public static func optimizeFullTextIndex(in database: Blackbird.Database) async throws {
-        try await optimizeFullTextIndexIsolated(in: database, core: database.core)
+        try await optimizeFullTextIndex(core: database.core)
     }
 
     /// Synchronous version of ``optimizeFullTextIndex(in:)``.
-    public static func optimizeFullTextIndexIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
+    public static func optimizeFullTextIndex(core: isolated Blackbird.Database.Core) throws {
         if Self.fullTextSearchableColumns.isEmpty { return }
     
         let ftsTable = Blackbird.Table.FullTextIndexSchema.ftsTableName(Self.tableName)
@@ -341,13 +341,13 @@ extension BlackbirdModel {
     ///
     /// This requires that this model has at least one total column, and all columns referenced in the `matching` argument, specified in ``BlackbirdModel/fullTextSearchableColumns``.
     public static func fullTextSearch(from database: Blackbird.Database, matching: BlackbirdModelColumnExpression<Self>, limit: Int? = nil, options: BlackbirdModelSearchOptions<Self> = .init()) async throws -> [Self.SearchResult] {
-        try await fullTextSearchIsolated(from: database, core: database.core, matching: matching, limit: limit, options: options)
+        try await fullTextSearch(from: database.core, matching: matching, limit: limit, options: options)
     }
 
     /// Synchronous version of ``fullTextSearch(from:matching:limit:options:)``.
-    public static func fullTextSearchIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>, limit: Int? = nil, options: BlackbirdModelSearchOptions<Self> = .init()) throws -> [Self.SearchResult] {
+    public static func fullTextSearch(from core: isolated Blackbird.Database.Core, matching: BlackbirdModelColumnExpression<Self>, limit: Int? = nil, options: BlackbirdModelSearchOptions<Self> = .init()) throws -> [Self.SearchResult] {
         let decoded = DecodedStructuredFTSQuery<Self>(matching: matching, options: options, limit: limit)
-        return try decoded.query(in: database, core: core, scoreMultiplier: options.scoreMultiple)
+        return try decoded.query(in: core, scoreMultiplier: options.scoreMultiple)
     }
 
     internal static func fullTextQueryEscape(_ query: String, mode: BlackbirdFullTextQuerySyntaxMode) -> String {
@@ -499,17 +499,17 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
         self.cacheKey = cacheKey
     }
     
-    func query(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, scoreMultiplier: Double) throws -> [BlackbirdModelSearchResult<T>] {
+    func query(in core: isolated Blackbird.Database.Core, scoreMultiplier: Double) throws -> [BlackbirdModelSearchResult<T>] {
         var results: [BlackbirdModelSearchResult<T>] = []
-        for row in try T.queryIsolated(in: database, core: core, query, arguments: arguments) {
-            if let result = try result(database: database, core: core, ftsRow: row, scoreMultiplier: scoreMultiplier) {
+        for row in try T.query(in: core, query, arguments: arguments) {
+            if let result = try result(core: core, ftsRow: row, scoreMultiplier: scoreMultiplier) {
                 results.append(result)
             }
         }
         return results
     }
     
-    private func result(database: Blackbird.Database, core: isolated Blackbird.Database.Core, ftsRow: Blackbird.ModelRow<T>, scoreMultiplier: Double) throws -> BlackbirdModelSearchResult<T>? {
+    private func result(core: isolated Blackbird.Database.Core, ftsRow: Blackbird.ModelRow<T>, scoreMultiplier: Double) throws -> BlackbirdModelSearchResult<T>? {
         guard let rowid = ftsRow["rowid"], let score = ftsRow[scoreColumnName] else {
             fatalError("Unexpected result row format from FTS query on \(String(describing: T.self)) (missing rowid or score)")
         }
@@ -528,7 +528,7 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
             idx += 1
         }
         
-        let preloadedInstance = try options.preloadInstances ? T.readIsolated(from: database, core: core, sqlWhere: "rowid = ?", arguments: [rowid]).first : nil
+        let preloadedInstance = try options.preloadInstances ? T.read(from: core, sqlWhere: "rowid = ?", arguments: [rowid]).first : nil
         return BlackbirdModelSearchResult<T>(highlights: .init(highlightRow, table: table), highlightMode: options.highlights, snippets: .init(snippetRow, table: table), snippetMode: options.snippets, rowid: rowid, score: (score.doubleValue ?? 0) * scoreMultiplier, preloadedInstance: preloadedInstance)
     }
 }

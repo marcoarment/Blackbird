@@ -197,7 +197,7 @@ extension Blackbird {
     /// }
     /// ```
     ///
-    public final class Database: Identifiable, Hashable, Equatable, BlackbirdQueryable, Sendable {
+    public final class Database: Identifiable, Hashable, Equatable, BlackbirdQueryable, @unchecked Sendable /* due to the `core` instance variable being set in init */ {
         /// Process-unique identifiers for Database instances. Used internally.
         public typealias InstanceID = Int64
 
@@ -336,7 +336,9 @@ extension Blackbird {
         /// The maximum number of parameters (`?`) supported in database queries. (The value of `SQLITE_LIMIT_VARIABLE_NUMBER` of the backing SQLite instance.)
         public let maxQueryVariableCount: Int
 
-        internal let core: Core
+        internal var _core: Core? = nil
+        internal var core: Core { _core! } // Set in init, so it's always there… sorry for the bad hack
+        
         internal let changeReporter: ChangeReporter
         internal let cache: Cache
         internal let perfLog: PerformanceLogger
@@ -432,8 +434,8 @@ extension Blackbird {
                 }
             }, Unmanaged<ChangeReporter>.passUnretained(changeReporter).toOpaque())
 
-            core = Core(Core.SQLiteHandle(pointer: handle), changeReporter: changeReporter, cache: cache, fileChangeMonitor: fileChangeMonitor, options: options)
             perfLog = performanceLog
+            _core = Core(database: self, dbHandle: Core.SQLiteHandle(pointer: handle), changeReporter: changeReporter, cache: cache, fileChangeMonitor: fileChangeMonitor, options: options)
 
             fileChangeMonitor?.onChange { [weak self] in
                 guard let self else { return }
@@ -508,6 +510,13 @@ extension Blackbird {
             private var debugPrintQueryParameterValues = false
 
             internal let dbHandle: SQLiteHandle
+
+            private weak var _database: Database?
+            public func database() throws -> Database {
+                guard let _database else { throw Blackbird.Database.Error.databaseIsClosed }
+                return _database
+            }
+            
             private weak var changeReporter: ChangeReporter?
             private weak var fileChangeMonitor: FileChangeMonitor?
             private weak var cache: Cache?
@@ -520,7 +529,8 @@ extension Blackbird {
 
             private var perfLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database.Core")
 
-            internal init(_ dbHandle: SQLiteHandle, changeReporter: ChangeReporter?, cache: Cache?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
+            internal init(database: Database, dbHandle: SQLiteHandle, changeReporter: ChangeReporter?, cache: Cache?, fileChangeMonitor: FileChangeMonitor?, options: Database.Options) {
+                self._database = database
                 self.dbHandle = dbHandle
                 self.changeReporter = changeReporter
                 self.fileChangeMonitor = fileChangeMonitor

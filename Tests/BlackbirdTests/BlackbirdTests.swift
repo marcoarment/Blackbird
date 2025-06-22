@@ -153,7 +153,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await db.transaction { core in
             for i in 0..<count {
                 let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
-                try m.writeIsolated(to: db, core: core)
+                try m.write(to: core)
             }
         }
         db.debugPrintCachePerformanceMetrics()
@@ -190,7 +190,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await db.transaction { core in
             for i in 0..<count {
                 let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
-                try m.writeIsolated(to: db, core: core)
+                try m.write(to: core)
             }
         }
         
@@ -423,7 +423,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await db.transaction { core in
             for i in 0..<count {
                 let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
-                try m.writeIsolated(to: db, core: core)
+                try m.write(to: core)
             }
         }
 
@@ -463,7 +463,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await db.transaction { core in
             for i in 0..<1000 {
                 let t = TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL, nonColumn: TestData.randomDescription)
-                try t.writeIsolated(to: db, core: core)
+                try t.write(to: core)
             }
         }
 
@@ -533,7 +533,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let retVal1 = try await db.cancellableTransaction { core in
             var t = t
             t.title = "new title"
-            try t.writeIsolated(to: db, core: core)
+            try t.write(to: core)
             
             let title = try core.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
             XCTAssert(title == "new title")
@@ -556,7 +556,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         let retVal2 = try await db.cancellableTransaction { core in
             var t = t
             t.title = "new title"
-            try t.writeIsolated(to: db, core: core)
+            try t.write(to: core)
             
             let title = try core.query("SELECT title FROM TestModel WHERE id = ?", id).first!["title"]!.stringValue
             XCTAssert(title == "new title")
@@ -843,13 +843,13 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             for i in 0..<count {
                 expectedBatchedKeys.insert([.integer(Int64(i))])
                 let m = TestModelWithDescription(id: i, url: TestData.URLs[i], title: TestData.titles[i], description: TestData.descriptions[i])
-                try m.writeIsolated(to: db, core: core)
+                try m.write(to: core)
             }
             self._testChangeNotificationsExpectedChangedKeys = expectedBatchedKeys
             self._testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "url", "title", "description"])
         }
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
         
         // Individual change notifications
         var m = try await TestModelWithDescription.read(from: db, id: 64)!
@@ -858,97 +858,97 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["title"])
         try await m.write(to: db)
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table change notifications, with structured column info
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues(Array(0..<count).map { [try! Blackbird.Value.fromAny($0)] })
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], matching: .all)
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table delete notifications, with structured column info
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues(Array(0..<5).map { [try! Blackbird.Value.fromAny($0)] })
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.delete(from: db, matching: \.$id < 5)
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table change notifications, with structured column info and primary keys
         _testChangeNotificationsExpectedChangedKeys = [[7], [8], [9]]
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["url"])
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], forPrimaryKeys: [7, 8, 9])
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table change notifications, structured, but affecting 0 rows -- no change notification expected
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.update(in: db, set: [ \.$url : nil ], matching: .all)
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Unspecified/whole-table change notifications
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.query(in: db, "UPDATE $T SET url = NULL")
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Column-name merging
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(31) ], [ .integer(32) ]])
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["title", "description"])
         try await db.transaction { core in
-            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 31)!
+            var t1 = try TestModelWithDescription.read(from: core, id: 31)!
             t1.title = "Edited title!"
-            var t2 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 32)!
+            var t2 = try TestModelWithDescription.read(from: core, id: 32)!
             t2.description = "Edited description!"
             
-            try t1.writeIsolated(to: db, core: core)
-            try t2.writeIsolated(to: db, core: core)
+            try t1.write(to: core)
+            try t2.write(to: core)
         }
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Merging with insertions
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(40) ], [ .integer(Int64(count) + 1) ]])
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "title", "description", "url"])
         try await db.transaction { core in
-            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 40)!
+            var t1 = try TestModelWithDescription.read(from: core, id: 40)!
             t1.title = "Edited title!"
-            try t1.writeIsolated(to: db, core: core)
+            try t1.write(to: core)
             
             let t2 = TestModelWithDescription(id: count + 1, title: "New entry", description: "New description")
-            try t2.writeIsolated(to: db, core: core)
+            try t2.write(to: core)
         }
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Merging with deletions
         _testChangeNotificationsExpectedChangedKeys = Blackbird.PrimaryKeyValues([[ .integer(50) ], [ .integer(51) ]])
         _testChangeNotificationsExpectedChangedColumnNames = Blackbird.ColumnNames(["id", "title", "description", "url"])
         try await db.transaction { core in
-            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 50)!
+            var t1 = try TestModelWithDescription.read(from: core, id: 50)!
             t1.title = "Edited title!"
-            try t1.writeIsolated(to: db, core: core)
+            try t1.write(to: core)
 
-            let t2 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 51)!
-            try t2.deleteIsolated(from: db, core: core)
+            let t2 = try TestModelWithDescription.read(from: core, id: 51)!
+            try t2.delete(from: core)
         }
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
 
         // Merging with table-wide updates
         _testChangeNotificationsExpectedChangedKeys = nil
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await db.transaction { core in
-            var t1 = try TestModelWithDescription.readIsolated(from: db, core: core, id: 60)!
+            var t1 = try TestModelWithDescription.read(from: core, id: 60)!
             t1.title = "Edited title!"
-            try t1.writeIsolated(to: db, core: core)
+            try t1.write(to: core)
 
-            try TestModelWithDescription.queryIsolated(in: db, core: core, "UPDATE $T SET description = ? WHERE id = 61", "Test description")
+            try TestModelWithDescription.query(in: core, "UPDATE $T SET description = ? WHERE id = 61", "Test description")
         }
         expectedChangeNotificationsCallCount += 1
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
         
 
         // ------- Should be the last test in this func since it deletes the entire table -------
@@ -958,7 +958,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         _testChangeNotificationsExpectedChangedColumnNames = nil
         try await TestModelWithDescription.query(in: db, "DELETE FROM $T")
         expectedChangeNotificationsCallCount += 2 // will trigger a full-database change notification, so it'll report 2 table changes: TestModel and TestModelWithDescription
-        XCTAssert(_testChangeNotificationsCallCount == expectedChangeNotificationsCallCount)
+        XCTAssertEqual(_testChangeNotificationsCallCount, expectedChangeNotificationsCallCount)
     }
 
     func testKeyPathInterpolation() async throws {
@@ -1092,7 +1092,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             Task {
                 try! await db.transaction { core in
                     try? await Task.sleep(nanoseconds: UInt64(arc4random_uniform(10_000_000)))
-                    try! TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL).writeIsolated(to: db, core: core)
+                    try! TestModel(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL).write(to: core)
                 }
                 semaphore.signal()
             }
@@ -1109,7 +1109,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
             var lastURL: URL?
             for i in 0..<1000 {
                 let t = TestModelWithCache(id: Int64(i), title: TestData.randomTitle, url: TestData.randomURL)
-                try t.writeIsolated(to: db, core: core)
+                try t.write(to: core)
                 lastURL = t.url
             }
             return lastURL!
@@ -1191,7 +1191,7 @@ final class BlackbirdTestTests: XCTestCase, @unchecked Sendable {
         try await db1.transaction { core in
             for i in 0..<count {
                 let m = FTSModel(id: i, title: TestData.titles[i], url: TestData.URLs[i], description: TestData.descriptions[i], keywords: TestData.descriptions[(i + 2) % count].lowercased(), category: i % 10)
-                try m.writeIsolated(to: db1, core: core)
+                try m.write(to: core)
             }
         }
 

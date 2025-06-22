@@ -230,7 +230,7 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     ///
     /// If unspecified or empty, no full-text index is created.
     ///
-    /// Query with ``fullTextSearch(from:matching:limit:options:)``
+    /// Query with ``fullTextSearch(from:matching:limit:options:)-(Blackbird.Database,_,_,_)``
     ///
     /// Any changes to this property may cause an index rebuild for existing databases on first run, which may be slow on large tables.
     static var fullTextSearchableColumns: FullTextIndex { get }
@@ -476,7 +476,7 @@ extension BlackbirdModel {
     ///   - id: The value of the `id` column.
     /// - Returns: The first decoded instance in the table with the given `id`, or `nil` if a corresponding instance doesn't exist in the table.
     ///
-    /// For tables with other primary-key names, see ``read(from:primaryKey:)`` and ``read(from:multicolumnPrimaryKey:)-926f3``.
+    /// For tables with other primary-key names, see ``read(from:primaryKey:)-(Blackbird.Database,_)`` and ``read(from:multicolumnPrimaryKey:)-926f3``.
     public static func read(from database: Blackbird.Database, id: Sendable) async throws -> Self? {
         let primaryKeyPaths = self.primaryKey
         if let firstKeyPath = primaryKeyPaths.first, table.keyPathToColumnName(keyPath: firstKeyPath) != "id" || primaryKeyPaths.count > 1 {
@@ -489,15 +489,16 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``read(from:id:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, id: Sendable) throws -> Self? {
+    public static func read(from core: isolated Blackbird.Database.Core, id: Sendable) throws -> Self? {
         let primaryKeyPaths = self.primaryKey
         if let firstKeyPath = primaryKeyPaths.first, table.keyPathToColumnName(keyPath: firstKeyPath) != "id" || primaryKeyPaths.count > 1 {
             fatalError("read(from:id:) requires that the primary key be only \"id\"")
         }
 
+        let database = try core.database()
         let idValue = try Blackbird.Value.fromAny(id)
         if let cached = _cachedInstance(for: database, primaryKeyValue: idValue) { return cached }
-        return try self._readInternalIsolated(from: database, core: core, query: "SELECT * FROM $T WHERE id = ?", arguments: [idValue]).first
+        return try self._readInternal(from: core, query: "SELECT * FROM $T WHERE id = ?", arguments: [idValue]).first
     }
 
     /// Reads a single instance with the given primary-key value from a database.
@@ -510,11 +511,11 @@ extension BlackbirdModel {
     ///
     /// For tables with multi-column primary keys, use ``read(from:multicolumnPrimaryKey:)-926f3``.
     ///
-    /// For tables with a single-column primary key named `id`, ``read(from:id:)`` is more concise.
+    /// For tables with a single-column primary key named `id`, ``read(from:id:)-(Blackbird.Database,_)`` is more concise.
     public static func read(from database: Blackbird.Database, primaryKey: Sendable) async throws -> Self? { return try await self.read(from: database, multicolumnPrimaryKey: [primaryKey]) }
 
     /// Synchronous version of ``read(from:primaryKey:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, primaryKey: Sendable) throws -> Self? { return try self.readIsolated(from: database, core: core, multicolumnPrimaryKey: [primaryKey]) }
+    public static func read(from core: isolated Blackbird.Database.Core, primaryKey: Sendable) throws -> Self? { return try self.read(from: core, multicolumnPrimaryKey: [primaryKey]) }
 
 
     // SQLite limits the number of "?" arguments in a query. This splits the given values into chunks that fit well below that limit.
@@ -561,7 +562,8 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``read(from:primaryKeys:preserveOrder:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, primaryKeys: [Sendable], preserveOrder: Bool = false) throws -> [Self] {
+    public static func read(from core: isolated Blackbird.Database.Core, primaryKeys: [Sendable], preserveOrder: Bool = false) throws -> [Self] {
+        let database = try core.database()
         let pkName = table.primaryKeys.first!.name
         let primaryKeys = try primaryKeys.map { try Blackbird.Value.fromAny($0) }
         let cacheResult = _cachedInstances(for: database, primaryKeyValues: primaryKeys)
@@ -569,7 +571,7 @@ extension BlackbirdModel {
         
         for primaryKeyChunk in _queryVariableLimitChunks(for: database, cacheResult.missedKeys) {
             let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
-            let resultsChunk = try self.readIsolated(from: database, core: core, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
+            let resultsChunk = try self.read(from: core, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
             combinedResults.append(contentsOf: resultsChunk)
         }
         return preserveOrder ? _sortWithPrimaryKeyValueSequence(instances: combinedResults, primaryKeyValues: primaryKeys) : combinedResults
@@ -581,7 +583,7 @@ extension BlackbirdModel {
     ///   - multicolumnPrimaryKey: An array of values of the primary-key columns. Must match the number and order of primary-key values defined in the model's table.
     /// - Returns: The decoded instance in the table with the given primary key, or `nil` if a corresponding instance doesn't exist in the table.
     ///
-    /// For tables with single-column primary keys, ``read(from:primaryKey:)`` is more concise.
+    /// For tables with single-column primary keys, ``read(from:primaryKey:)-(Blackbird.Database,_)`` is more concise.
     public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [Sendable]) async throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
@@ -599,20 +601,21 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``read(from:multicolumnPrimaryKey:)-926f3`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [Sendable]) throws -> Self? {
+    public static func read(from core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [Sendable]) throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
 
+        let database = try core.database()
         let sqlWhere = table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND ")
 
         if multicolumnPrimaryKey.count == 1 {
             let pkValue = try Blackbird.Value.fromAny(multicolumnPrimaryKey.first!)
             if let cached = _cachedInstance(for: database, primaryKeyValue: pkValue) { return cached }
-            return try _readInternalIsolated(from: database, core: core, query: "SELECT * FROM $T WHERE \(sqlWhere)", arguments: [pkValue]).first
+            return try _readInternal(from: core, query: "SELECT * FROM $T WHERE \(sqlWhere)", arguments: [pkValue]).first
         }
 
-        return try self.readIsolated(from: database, core: core, sqlWhere: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
+        return try self.read(from: core, sqlWhere: table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND "), multicolumnPrimaryKey).first
     }
 
     /// Reads a single instance with the given primary key values from a database.
@@ -621,7 +624,7 @@ extension BlackbirdModel {
     ///   - multicolumnPrimaryKey: A dictionary of column names and values of the primary-key columns. Must match the number of primary-key values defined in the model's table.
     /// - Returns: The decoded instance in the table with the given primary key, or `nil` if a corresponding instance doesn't exist in the table.
     ///
-    /// For tables with single-column primary keys, ``read(from:primaryKey:)`` is more concise.
+    /// For tables with single-column primary keys, ``read(from:primaryKey:)-(Blackbird.Database,_)`` is more concise.
     public static func read(from database: Blackbird.Database, multicolumnPrimaryKey: [String: Sendable]) async throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
@@ -638,7 +641,7 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``read(from:multicolumnPrimaryKey:)-6pd09`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [String: Sendable]) throws -> Self? {
+    public static func read(from core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [String: Sendable]) throws -> Self? {
         if multicolumnPrimaryKey.count != table.primaryKeys.count {
             fatalError("Incorrect number of primary-key values provided (\(multicolumnPrimaryKey.count), need \(table.primaryKeys.count)) for table \(tableName)")
         }
@@ -650,7 +653,7 @@ extension BlackbirdModel {
             values.append(value)
         }
         
-        return try self.readIsolated(from: database, core: core, sqlWhere: andClauses.joined(separator: " AND "), arguments: values).first
+        return try self.read(from: core, sqlWhere: andClauses.joined(separator: " AND "), arguments: values).first
     }
 
     /// Reads instances from a database using an optional list of arguments.
@@ -707,9 +710,10 @@ extension BlackbirdModel {
         }
     }
 
-    internal static func _readInternalIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, query: String, arguments: [Sendable]) throws -> [Self] {
+    internal static func _readInternal(from core: isolated Blackbird.Database.Core, query: String, arguments: [Sendable]) throws -> [Self] {
         let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
-        return try self._queryInternalIsolated(in: database, core: core, query, arguments: arguments).map {
+        let database = try core.database()
+        return try self._queryInternal(in: core, query, arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
             instance._saveCachedInstance(for: database)
@@ -743,16 +747,17 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``read(from:sqlWhere:_:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, _ arguments: Sendable...) throws -> [Self] {
-        return try self.readIsolated(from: database, core: core, sqlWhere: sqlWhere, arguments: arguments)
+    public static func read(from core: isolated Blackbird.Database.Core, sqlWhere: String, _ arguments: Sendable...) throws -> [Self] {
+        return try self.read(from: core, sqlWhere: sqlWhere, arguments: arguments)
     }
 
     /// Synchronous version of ``read(from:sqlWhere:arguments:)-1cd9m`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [Sendable]) throws -> [Self] {
+    public static func read(from core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [Sendable]) throws -> [Self] {
+        let database = try core.database()
         let query = "SELECT * FROM $T WHERE \(sqlWhere)"
         let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
-        return try _cacheableResultIsolated(database: database, core: core, tableName: self.tableName, query: query, arguments: arguments) {
-            return try self._queryInternalIsolated(in: $0, core: $1, query, arguments: arguments).map {
+        return try _cacheableResult(core: core, tableName: self.tableName, query: query, arguments: arguments) {
+            return try self._queryInternal(in: $0, query, arguments: arguments).map {
                 let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
                 let instance = try Self(from: decoder)
                 instance._saveCachedInstance(for: database)
@@ -762,8 +767,9 @@ extension BlackbirdModel {
     }
 
     /// Synchronous version of ``read(from:sqlWhere:arguments:)-5y16m`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public static func readIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [String: Sendable]) throws -> [Self] {
-        return try queryIsolated(in: database, core: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
+    public static func read(from core: isolated Blackbird.Database.Core, sqlWhere: String, arguments: [String: Sendable]) throws -> [Self] {
+        let database = try core.database()
+        return try query(in: core, "SELECT * FROM $T WHERE \(sqlWhere)", arguments: arguments).map {
             let decoder = BlackbirdSQLiteDecoder(database: database, row: $0.row)
             let instance = try Self(from: decoder)
             instance._saveCachedInstance(for: database)
@@ -802,7 +808,7 @@ extension BlackbirdModel {
 
     internal static func _queryInternal(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: $0, core: $1) }
+        try await table.resolveWithDatabase(type: Self.self, database: database) { try validateSchema(core: $0) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
@@ -817,43 +823,44 @@ extension BlackbirdModel {
     @discardableResult
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core) { try validateSchema(database: $0, core: $1) }
+        try await table.resolveWithDatabase(type: Self.self, database: database) { try validateSchema(core: $0) }
         return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Synchronous version of ``query(in:_:_:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     @discardableResult
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, _ arguments: Sendable...) throws -> [Blackbird.ModelRow<Self>] {
-        return try self.queryIsolated(in: database, core: core, query, arguments: arguments)
+    public static func query(in core: isolated Blackbird.Database.Core, _ query: String, _ arguments: Sendable...) throws -> [Blackbird.ModelRow<Self>] {
+        return try self.query(in: core, query, arguments: arguments)
     }
 
     /// Synchronous version of ``query(in:_:arguments:)-1bv0o`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     @discardableResult
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+    public static func query(in core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let arguments = try arguments.map { try Blackbird.Value.fromAny($0) }
-        return try _cacheableResultIsolated(database: database, core: core, tableName: self.tableName, query: query, arguments: arguments) {
-            try self._queryInternalIsolated(in: $0, core: $1, query, arguments: arguments)
+        return try _cacheableResult(core: core, tableName: self.tableName, query: query, arguments: arguments) {
+            try self._queryInternal(in: $0, query, arguments: arguments)
         }
     }
 
-    internal static func _queryInternalIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+    internal static func _queryInternal(in core: isolated Blackbird.Database.Core, _ query: String, arguments: [Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
+        try table.resolveWithDatabase(type: Self.self, core: core) { try Self.validateSchema(core: $0) }
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Synchronous version of ``query(in:_:arguments:)-3dwoy`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
     @discardableResult
-    public static func queryIsolated(in database: Blackbird.Database, core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>] {
+    public static func query(in core: isolated Blackbird.Database.Core, _ query: String, arguments: [String: Sendable]) throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try validateSchema(database: $0, core: $1) }
+        try table.resolveWithDatabase(type: Self.self, core: core) { try validateSchema(core: $0) }
         return try core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
-    internal static func validateSchema(database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
+    internal static func validateSchema(core: isolated Blackbird.Database.Core) throws {
         var nonNullEnumColumnsToRawValues: [Blackbird.Column: Set<Blackbird.Value>] = [:]
         var nonNullURLColumns: [Blackbird.Column] = []
         let table = table
+        let database = try core.database()
         
         var testRow = Blackbird.Row()
         for column in table.columns {
@@ -962,7 +969,7 @@ extension BlackbirdModel {
 
     @discardableResult
     public static func resolveSchema(in database: Blackbird.Database) async throws -> BlackbirdModelSchemaResolution {
-        try await table.resolveWithDatabase(type: Self.self, database: database, core: database.core, isExplicitResolve: true) { try validateSchema(database: $0, core: $1) }
+        try await table.resolveWithDatabase(type: Self.self, database: database, isExplicitResolve: true) { try validateSchema(core: $0) }
     }
     
     /// The primary-key values of the current instance, as an array (to support multi-column primary keys).
@@ -996,19 +1003,19 @@ extension BlackbirdModel {
     /// Write this instance to a database.
     /// - Parameter database: The ``Blackbird/Database`` instance to write to.
     public func write(to database: Blackbird.Database) async throws {
-        try await writeIsolated(to: database, core: database.core)
+        try await write(to: database.core)
     }
     
     /// Write this instance to a database synchronously from an actor-isolated transaction.
     /// - Parameters:
-    ///   - database: The ``Blackbird/Database`` instance to write to.
     ///   - core: The isolated ``Blackbird/Database/Core`` provided to the transaction.
     ///
     /// For use only when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public func writeIsolated(to database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
+    public func write(to core: isolated Blackbird.Database.Core) throws {
         let table = Self.table
+        let database = try core.database()
         if database.options.contains(.readOnly) { fatalError("Cannot write BlackbirdModel to a read-only database") }
-        _ = try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
+        _ = try table.resolveWithDatabase(type: Self.self, core: core) { try Self.validateSchema(core: $0) }
 
         var columnNames: [String] = []
         var placeholders: [String] = []
@@ -1053,19 +1060,19 @@ extension BlackbirdModel {
     /// Delete this instance from a database.
     /// - Parameter database: The ``Blackbird/Database`` instance to delete from.
     public func delete(from database: Blackbird.Database) async throws {
-        try await deleteIsolated(from: database, core: database.core)
+        try await delete(from: database.core)
     }
 
     /// Delete this instance from a database synchronously from an actor-isolated transaction.
     /// - Parameters:
-    ///   - database: The ``Blackbird/Database`` instance to delete from.
     ///   - core: The isolated ``Blackbird/Database/Core`` provided to the transaction.
     ///
     /// For use only when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
-    public func deleteIsolated(from database: Blackbird.Database, core: isolated Blackbird.Database.Core) throws {
+    public func delete(from core: isolated Blackbird.Database.Core) throws {
+        let database = try core.database()
         if database.options.contains(.readOnly) { fatalError("Cannot delete BlackbirdModel from a read-only database") }
         let table = Self.table
-        try table.resolveWithDatabaseIsolated(type: Self.self, database: database, core: core) { try Self.validateSchema(database: $0, core: $1) }
+        try table.resolveWithDatabase(type: Self.self, core: core) { try Self.validateSchema(core: $0) }
 
         let values = try self.primaryKeyValues().map { try Blackbird.Value.fromAny($0) }
         let andClauses: [String] = table.primaryKeys.map { "`\($0.name)` = ?" }
@@ -1093,15 +1100,16 @@ extension BlackbirdModel {
         return result
     }
 
-    fileprivate static func _cacheableResultIsolated<T: Sendable>(database: Blackbird.Database, core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((Blackbird.Database, isolated Blackbird.Database.Core) throws -> T)) throws -> T {
+    fileprivate static func _cacheableResult<T: Sendable>(core: isolated Blackbird.Database.Core, tableName: String, query: String, arguments: [Blackbird.Value], resultFetcher: ((isolated Blackbird.Database.Core) throws -> T)) throws -> T {
         let cacheLimit = Self.cacheLimit
-        guard cacheLimit > 0 else { return try resultFetcher(database, core) }
+        guard cacheLimit > 0 else { return try resultFetcher(core) }
         var cacheKey: [Blackbird.Value] = [.text(query)]
         cacheKey.append(contentsOf: arguments)
-        
+
+        let database = try core.database()
         if case .hit(let value) = database.cache.readQueryResult(tableName: tableName, cacheKey: cacheKey), let cachedResult = value as? T { return cachedResult }
         
-        let result = try resultFetcher(database, core)
+        let result = try resultFetcher(core)
         database.cache.writeQueryResult(tableName: tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
         return result
     }

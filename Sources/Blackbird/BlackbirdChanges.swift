@@ -208,7 +208,7 @@ extension Blackbird.Database {
                 if let existing = tableChangePublishers[tableName] { return existing.eraseToAnyPublisher() }
                 let publisher = PassthroughSubject<Blackbird.Change, Never>()
                 tableChangePublishers[tableName] = publisher
-                return publisher.eraseToAnyPublisher()
+                return publisher.receive(on: DispatchQueue.main).eraseToAnyPublisher()
             }
         }
 
@@ -296,18 +296,20 @@ extension Blackbird.Database {
             accumulatedChangesByTable.removeAll()
             lock.unlock()
             
-            for (tableName, accumulatedChanges) in changesByTable {
-                if let keys = accumulatedChanges.primaryKeys {
-                    if debugPrintEveryReportedChange {
-                        print("[Blackbird.ChangeReporter] changed \(tableName) (\(keys.count) keys, fields: \(accumulatedChanges.columnNames?.joined(separator: ",") ?? "(all/unknown)"))")
+            DispatchQueue.main.async {
+                for (tableName, accumulatedChanges) in changesByTable {
+                    if let keys = accumulatedChanges.primaryKeys {
+                        if self.debugPrintEveryReportedChange {
+                            print("[Blackbird.ChangeReporter] changed \(tableName) (\(keys.count) keys, fields: \(accumulatedChanges.columnNames?.joined(separator: ",") ?? "(all/unknown)"))")
+                        }
+                        if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: keys, columnNames: accumulatedChanges.columnNames)) }
+                    } else {
+                        if self.debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (unknown keys, fields: \(accumulatedChanges.columnNames?.joined(separator: ",") ?? "(all/unknown)"))") }
+                        if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: nil, columnNames: accumulatedChanges.columnNames)) }
                     }
-                    if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: keys, columnNames: accumulatedChanges.columnNames)) }
-                } else {
-                    if debugPrintEveryReportedChange { print("[Blackbird.ChangeReporter] changed \(tableName) (unknown keys, fields: \(accumulatedChanges.columnNames?.joined(separator: ",") ?? "(all/unknown)"))") }
-                    if let publisher = publishers[tableName] { publisher.send(Blackbird.Change(table: tableName, primaryKeys: nil, columnNames: accumulatedChanges.columnNames)) }
                 }
             }
-        }        
+        }
     }
 }
 

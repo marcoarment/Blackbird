@@ -113,8 +113,8 @@ struct BlackbirdSwiftUITestApp: App {
                     let database = database
                     let firstPost = firstPost
                     try await database.transaction { core in
-                        try firstPost.writeIsolated(to: database, core: core)
-                        for _ in 0..<5 { try! Post(id: TestData.randomInt64(), title: TestData.randomTitle).writeIsolated(to: database, core: core) }
+                        try firstPost.write(to: database, core: core)
+                        for _ in 0..<5 { try! Post(id: TestData.randomInt64(), title: TestData.randomTitle).write(to: database, core: core) }
                     }
                     
                     // For testing "loading" states:

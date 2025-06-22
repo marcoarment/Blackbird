@@ -301,27 +301,28 @@ extension Blackbird {
         internal func createIndexStatements<T: BlackbirdModel>(type: T.Type) -> [String] { indexes.map { $0.definition(tableName: name) } }
         
         @discardableResult
-        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, core: Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) async throws -> BlackbirdModelSchemaResolution {
+        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, database: Database, isExplicitResolve: Bool = false, validator: (@Sendable (_ core: isolated Database.Core) throws -> Void)?) async throws -> BlackbirdModelSchemaResolution {
             if _isAlreadyResolved(type: type, in: database) { return [] }
             
             if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
                 fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
             }
             
-            return try await core.transaction {
-                try _resolveWithDatabaseIsolated(type: type, database: database, core: $0, validator: validator)
+            return try await database.core.transaction {
+                try _resolveWithDatabase(type: type, core: $0, validator: validator)
             }
         }
 
         @discardableResult
-        internal func resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
+        internal func resolveWithDatabase<T: BlackbirdModel>(type: T.Type, core: isolated Database.Core, isExplicitResolve: Bool = false, validator: (@Sendable (_ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
+            let database = try core.database()
             if _isAlreadyResolved(type: type, in: database) { return [] }
 
             if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
                 fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
             }
 
-            return try _resolveWithDatabaseIsolated(type: type, database: database, core: core, validator: validator)
+            return try _resolveWithDatabase(type: type, core: core, validator: validator)
         }
 
         internal func _isAlreadyResolved<T>(type: T.Type, in database: Database) -> Bool {
@@ -332,7 +333,8 @@ extension Blackbird {
             return alreadyResolved
         }
 
-        private func _resolveWithDatabaseIsolated<T: BlackbirdModel>(type: T.Type, database: Database, core: isolated Database.Core, validator: (@Sendable (_ database: Database, _ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
+        private func _resolveWithDatabase<T: BlackbirdModel>(type: T.Type, core: isolated Database.Core, validator: (@Sendable (_ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
+            let database = try core.database()
             var resolution: BlackbirdModelSchemaResolution = []
         
             // Table not created yet
@@ -415,7 +417,7 @@ extension Blackbird {
             }
 
             // allow calling model to verify before committing
-            if let validator { try validator(database, core) }
+            if let validator { try validator(core) }
 
             Self.resolvedTablesWithDatabases.withLock {
                 if $0[self] == nil { $0[self] = Set<Database.InstanceID>() }
