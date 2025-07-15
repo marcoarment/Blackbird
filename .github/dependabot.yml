@@ -1,0 +1,13 @@
+# Set update schedule for GitHub Actions
+version: 2
+
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+updates:
+  # Maintain dependencies for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # Add assignees automatically
+    assignees:
+      - "marcoarment"
