@@ -150,6 +150,10 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
             }
         }
 
+        if let eT = T.self as? any BlackbirdStorableAsData.Type, let data = value.dataValue {
+            return try JSONDecoder().decode(eT, from: data) as! T
+        }
+
         return try T(from: BlackbirdSQLiteDecoder(database: database, row: row, codingPath: codingPath))
     }
 
