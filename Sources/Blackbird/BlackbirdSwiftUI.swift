@@ -37,16 +37,9 @@ import SwiftUI
 // Required to use with the @StateObject wrapper
 extension Blackbird.Database: ObservableObject { }
 
-struct EnvironmentBlackbirdDatabaseKey: EnvironmentKey {
-    static let defaultValue: Blackbird.Database? = nil
-}
-
 extension EnvironmentValues {
     /// The ``Blackbird/Database`` to use with `@BlackbirdLive…` property wrappers.
-    public var blackbirdDatabase: Blackbird.Database? {
-        get { self[EnvironmentBlackbirdDatabaseKey.self] }
-        set { self[EnvironmentBlackbirdDatabaseKey.self] = newValue }
-    }
+    @Entry public var blackbirdDatabase: Blackbird.Database? = nil
 }
 
 extension Blackbird {
