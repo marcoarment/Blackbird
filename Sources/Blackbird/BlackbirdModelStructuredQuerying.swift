@@ -689,8 +689,8 @@ public struct BlackbirdModelColumnExpression<Model: BlackbirdModel>: Sendable, B
     }
 
     internal enum BinaryOperator: String, Sendable {
-        case equal = "="
-        case notEqual = "!="
+        case equal = "IS NOT DISTINCT FROM"
+        case notEqual = "IS DISTINCT FROM"
         case lessThan = "<"
         case greaterThan = ">"
         case lessThanOrEqual = "<="
