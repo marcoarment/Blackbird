@@ -280,7 +280,7 @@ public enum BlackbirdTableError: Swift.Error {
 
 public enum BlackbirdModelError: Swift.Error {
     /// The requested `modify` action was given a primary key that doesn't exist
-    case primaryKeyNotFound(value: [Any])
+    case primaryKeyNotFound(value: [Sendable])
 }
 
 internal extension BlackbirdModel {
