@@ -278,6 +278,10 @@ public enum BlackbirdTableError: Swift.Error {
     case impossibleMigration(type: any BlackbirdModel.Type, description: String)
 }
 
+public enum BlackbirdModelError: Swift.Error {
+    /// The requested `modify` action was given a primary key that doesn't exist
+    case primaryKeyNotFound(value: [Any])
+}
 
 internal extension BlackbirdModel {
     static var table: Blackbird.Table { SchemaGenerator.shared.table(for: Self.self) }
@@ -1003,9 +1007,49 @@ extension BlackbirdModel {
             action(column, label, value)
         }
     }
+
+    /// Update an instance atomically.
+    ///
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` instance to update.
+    ///   - primaryKey: The single-column primary-key value to update.
+    ///   - changes: A block, passed a ``Blackbird/Database/Core`` and the matching instance, in which changes can be made to `instance` and other synchronous database operations may be called on `core`. If an error is thrown from within the block, the transaction will be canceled and no changes will be written.
+    /// - Returns: The value returned by the `changes` block, if any.
+    /// - Throws: Any error thrown from the `changes` block, or ``BlackbirdModelError/primaryKeyNotFound(value:)`` if no row exists in the database with the given `primaryKey` value.
+    ///
+    /// This method is preferable to ``write(to:)-(Blackbird.Database)`` to avoid race conditions.
+    ///
+    public static func modify<R: Sendable>(in database: Blackbird.Database, primaryKey: Sendable, changes: (@Sendable (_ core: isolated Blackbird.Database.Core, _ instance: inout Self) throws -> R)) async throws -> R {
+        return try await database.transaction { core in
+            return try modify(in: core, primaryKey: primaryKey, changes: changes)
+        }
+    }
+
+    /// Multicolumn primary-key version of ``modify(in:primaryKey:changes:)-(Blackbird.Database,_,_)``.
+    public static func modify<R: Sendable>(in database: Blackbird.Database, multicolumnPrimaryKey: [Sendable], changes: (@Sendable (_ core: isolated Blackbird.Database.Core, _ instance: inout Self) throws -> R)) async throws -> R {
+        return try await database.transaction { core in
+            return try modify(in: core, multicolumnPrimaryKey: multicolumnPrimaryKey, changes: changes)
+        }
+    }
+
+    /// Synchronous version of ``modify(in:primaryKey:changes:)-(Blackbird.Database,_,_)``.
+    public static func modify<R: Sendable>(in core: isolated Blackbird.Database.Core, primaryKey: Sendable, changes: (@Sendable (_ core: isolated Blackbird.Database.Core, _ instance: inout Self) throws -> R)) throws -> R {
+        return try modify(in: core, multicolumnPrimaryKey: [primaryKey], changes: changes)
+    }
     
+    /// Synchronous, multicolumn primary-key version of ``modify(in:primaryKey:changes:)-(Blackbird.Database,_,_)``.
+    public static func modify<R: Sendable>(in core: isolated Blackbird.Database.Core, multicolumnPrimaryKey: [Sendable], changes: (@Sendable (_ core: isolated Blackbird.Database.Core, _ instance: inout Self) throws -> R)) throws -> R {
+        guard var instance = try read(from: core, multicolumnPrimaryKey: multicolumnPrimaryKey) else { throw BlackbirdModelError.primaryKeyNotFound(value: multicolumnPrimaryKey) }
+        let result = try changes(core, &instance)
+        let database = try core.database()
+        if !instance.changedColumns(in: database).isEmpty { try instance.write(to: core) }
+        return result
+    }
+
     /// Write this instance to a database.
     /// - Parameter database: The ``Blackbird/Database`` instance to write to.
+    ///
+    /// For updating existing instances in the database, ``modify(in:primaryKey:changes:)-(Blackbird.Database,_,_)`` is preferable to avoid race conditions.
     public func write(to database: Blackbird.Database) async throws {
         try await write(to: database.core)
     }
@@ -1015,6 +1059,8 @@ extension BlackbirdModel {
     ///   - core: The isolated ``Blackbird/Database/Core`` provided to the transaction.
     ///
     /// For use only when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
+    ///
+    /// For updating existing instances in the database, ``modify(in:primaryKey:changes:)-(Blackbird.Database.Core,_,_)`` is preferable to avoid race conditions.
     public func write(to core: isolated Blackbird.Database.Core) throws {
         let table = Self.table
         let database = try core.database()
