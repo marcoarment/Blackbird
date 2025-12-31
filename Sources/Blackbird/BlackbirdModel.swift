@@ -981,7 +981,7 @@ extension BlackbirdModel {
     }
     
     /// The primary-key values of the current instance, as an array (to support multi-column primary keys).
-    public func primaryKeyValues() throws -> [Sendable] {
+    public func primaryKeyValues() -> [Sendable] {
         if Self.primaryKey.isEmpty {
             let mirror = Mirror(reflecting: self)
             for child in mirror.children {
