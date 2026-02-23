@@ -199,7 +199,7 @@ extension Blackbird {
 
     public init(_ instance: T, updatesEnabled: Bool = true) {
         _instance = State(initialValue: instance)
-        instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: try! instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) })
+        instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) })
         instanceObserver.updatesEnabled = updatesEnabled
     }
 

@@ -118,7 +118,7 @@ public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Sendable> {
 extension BlackbirdModel {
     public typealias Observer = BlackbirdModelObserver<Self>
     
-    public var observer: Observer { Observer(multicolumnPrimaryKey: try! primaryKeyValues()) }
+    public var observer: Observer { Observer(multicolumnPrimaryKey: primaryKeyValues()) }
 }
 
 @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
