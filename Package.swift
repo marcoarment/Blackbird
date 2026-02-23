@@ -8,23 +8,24 @@ let package = Package(
         .macOS(.v12),
         .iOS(.v15),
         .watchOS(.v8),
-        .tvOS(.v15),
+        .tvOS(.v15)
     ],
     products: [
         .library(
             name: "Blackbird",
-            targets: ["Blackbird"]),
+            targets: ["Blackbird"]
+        )
     ],
-    dependencies: [
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "Blackbird",
-            dependencies: [],
+            dependencies: []
         ),
         .testTarget(
             name: "BlackbirdTests",
-            dependencies: ["Blackbird"]),
+            dependencies: ["Blackbird"]
+        )
     ],
     swiftLanguageModes: [.v6]
 )
