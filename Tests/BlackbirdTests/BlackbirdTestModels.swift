@@ -62,6 +62,8 @@ struct TestModelWithCache: BlackbirdModel {
 struct TestModelWithoutIDColumn: BlackbirdModel {
     static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$pk ]
 
+    var id: Int { pk }
+
     @BlackbirdColumn var pk: Int
     @BlackbirdColumn var title: String
 }
@@ -196,6 +198,8 @@ struct TypeTest: BlackbirdModel {
 struct MulticolumnPrimaryKeyTest: BlackbirdModel {
     static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
 
+    var id: String { "\(userID):\(feedID):\(episodeID)" }
+
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
     @BlackbirdColumn var episodeID: Int64
@@ -235,6 +239,8 @@ struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
     static let tableName = "SchemaChangeAddPrimaryKeyColumn"
     static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID ]
 
+    var id: String { "\(userID):\(feedID)" }
+
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64
     @BlackbirdColumn var subscribed: Bool
@@ -243,6 +249,8 @@ struct SchemaChangeAddPrimaryKeyColumnInitial: BlackbirdModel {
 struct SchemaChangeAddPrimaryKeyColumnChanged: BlackbirdModel {
     static let tableName = "SchemaChangeAddPrimaryKeyColumn"
     static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$userID, \.$feedID, \.$episodeID ]
+
+    var id: String { "\(userID):\(feedID):\(episodeID)" }
 
     @BlackbirdColumn var userID: Int64
     @BlackbirdColumn var feedID: Int64

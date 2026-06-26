@@ -298,6 +298,16 @@ extension BlackbirdModel {
     public static var cacheLimit: Int { 0 }
     public static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { .throwError }
 
+/*
+    Automatic conformance to Identifiable for models that don't have a column named "id".
+    
+    This has been removed (temporarily?) because the Mirror functionality has changed in Xcode 27
+    in a way that breaks this mechanism.
+    
+    Models without "id" columns now must implement Identifiable conformance. Sorry.
+    
+    // /////////////////////////
+
     // Identifiable
     public var id: [AnyHashable] {
         let primaryKeyPaths = Self.primaryKey
@@ -312,11 +322,17 @@ extension BlackbirdModel {
                 if child.label == "id", let value = child.value as? any Hashable {
                     return [AnyHashable(value)]
                 }
+                
+                if child.label == "_id", let value = child.value as? any ColumnWrapper {
+                    let wrappedValue = value.value as! any Hashable
+                    return [AnyHashable(wrappedValue)]
+                }
             }
             fatalError("\(String(describing: Self.self)): Cannot detect primary-key value for Identifiable. Specify a primaryKey.")
         }
     }
-    
+*/
+
     // Hashable
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
