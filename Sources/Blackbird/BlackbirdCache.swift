@@ -309,7 +309,17 @@ extension Blackbird.Database {
             }
         }
 
+        // While any transaction is open, cache population is suspended: entries written
+        // mid-transaction would expose uncommitted data to readers on other threads, which
+        // consult this cache without waiting for the database actor or the transaction
+        // barrier. Invalidation and deletion remain active so stale entries still clear.
+        private let openTransactionCount = Blackbird.Locked<Int>(0)
+
+        internal func beginTransaction() { openTransactionCount.withLock { $0 += 1 } }
+        internal func endTransaction()   { openTransactionCount.withLock { $0 -= 1 } }
+
         internal func writeModel(tableName: String, primaryKey: Blackbird.Value, instance: any BlackbirdModel, entryLimit: Int) {
+            if openTransactionCount.value > 0 { return }
             entriesByTableName.withLock {
                 let tableCache: TableCache
                 if let existingCache = $0[tableName] { tableCache = existingCache }
@@ -317,7 +327,7 @@ extension Blackbird.Database {
                     tableCache = TableCache()
                     $0[tableName] = tableCache
                 }
-                
+
                 tableCache.add(primaryKey: primaryKey, instance: instance, pruneToLimit: entryLimit)
             }
         }
@@ -348,6 +358,7 @@ extension Blackbird.Database {
         }
 
         internal func writeQueryResult(tableName: String, cacheKey: [Blackbird.Value], result: Sendable, entryLimit: Int) {
+            if openTransactionCount.value > 0 { return }
             entriesByTableName.withLock {
                 let tableCache: TableCache
                 if let existingCache = $0[tableName] { tableCache = existingCache }

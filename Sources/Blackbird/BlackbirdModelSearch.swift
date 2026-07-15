@@ -210,7 +210,7 @@ public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Senda
     /// - Returns: The specified instance, or `nil` if it no longer exists in the database.
     public func instance(from database: Blackbird.Database) async throws -> T? {
         if let preloadedInstance { return preloadedInstance }
-        return try await instance(from: database.core)
+        return try await database.core.performGated { try instance(from: $0) }
     }
     
     /// Synchronous version of ``instance(from:)`` for use in database transactions.
@@ -225,7 +225,7 @@ public struct BlackbirdModelSearchResult<T: BlackbirdModel>: Identifiable, Senda
     ///   - columns: The column key-paths to select.
     /// - Returns: A ``Blackbird/ModelRow`` of the model's type with only the specified columns present.
     public func row(from database: Blackbird.Database, columns: [T.BlackbirdColumnKeyPath]) async throws -> Blackbird.ModelRow<T>? {
-        return try await row(from: database.core, columns: columns)
+        return try await database.core.performGated { try row(from: $0, columns: columns) }
     }
 
     /// Synchronous version of ``row(from:columns:)`` for use in database transactions.
@@ -318,7 +318,7 @@ extension BlackbirdModel {
     ///
     /// This is a heavy operation that may take noticeable time on large indexes.
     public static func optimizeFullTextIndex(in database: Blackbird.Database) async throws {
-        try await optimizeFullTextIndex(core: database.core)
+        try await database.core.performGated { try optimizeFullTextIndex(core: $0) }
     }
 
     /// Synchronous version of ``optimizeFullTextIndex(in:)``.
@@ -341,7 +341,7 @@ extension BlackbirdModel {
     ///
     /// This requires that this model has at least one total column, and all columns referenced in the `matching` argument, specified in ``BlackbirdModel/fullTextSearchableColumns``.
     public static func fullTextSearch(from database: Blackbird.Database, matching: BlackbirdModelColumnExpression<Self>, limit: Int? = nil, options: BlackbirdModelSearchOptions<Self> = .init()) async throws -> [Self.SearchResult] {
-        try await fullTextSearch(from: database.core, matching: matching, limit: limit, options: options)
+        try await database.core.performGated { try fullTextSearch(from: $0, matching: matching, limit: limit, options: options) }
     }
 
     /// Synchronous version of ``fullTextSearch(from:matching:limit:options:)``.
@@ -353,43 +353,52 @@ extension BlackbirdModel {
     internal static func fullTextQueryEscape(_ query: String, mode: BlackbirdFullTextQuerySyntaxMode) -> String {
         if mode == .allowFullQuerySyntax { return query }
 
-        let tokenCharacters = CharacterSet.whitespacesAndNewlines.inverted
+        let whitespaceCharacters = CharacterSet.whitespacesAndNewlines
         let phraseDelimters = CharacterSet(charactersIn:
             "\"'“”‘’`«‹»›}\u{201E}\u{201A}\u{201C}\u{201F}\u{2018}\u{201B}\u{201D}\u{2019}\u{275B}\u{275C}\u{275F}\u{275D}\u{275E}\u{276E}\u{276F}\u{2E42}\u{301D}\u{301E}\u{301F}\u{FF02}"
         )
-        let scanner = Scanner(string: query)
-        
+
         var isQuotedPhrase = false
-        var currentPhraseWasQuoted = false
         var phrases: [BlackbirdFullTextQuerySyntaxPhrase] = []
         var currentPhraseWords: [String] = []
-        
-        let endPhrase = {
+        var currentWord = ""
+
+        let endWord = {
+            if !currentWord.isEmpty {
+                currentPhraseWords.append(currentWord)
+                currentWord = ""
+            }
+        }
+
+        let endPhrase = { (wasQuoted: Bool) in
+            endWord()
             let phrase = currentPhraseWords.joined(separator: " ")
             if !phrase.isEmpty {
-                phrases.append(BlackbirdFullTextQuerySyntaxPhrase(phrase: phrase, wasQuoted: currentPhraseWasQuoted))
+                phrases.append(BlackbirdFullTextQuerySyntaxPhrase(phrase: phrase, wasQuoted: wasQuoted))
             }
             currentPhraseWords.removeAll()
-            currentPhraseWasQuoted = false
         }
-        
-        while !scanner.isAtEnd {
-            let beforeStr = scanner.scanUpToCharacters(from: tokenCharacters)
-            if let beforeStr, !beforeStr.isEmpty, beforeStr.rangeOfCharacter(from: phraseDelimters) != nil {
-                isQuotedPhrase = !isQuotedPhrase
-                
-                if isQuotedPhrase { currentPhraseWasQuoted = true }
-                else { endPhrase() }
+
+        for scalar in query.unicodeScalars {
+            if phraseDelimters.contains(scalar) {
+                if isQuotedPhrase {
+                    isQuotedPhrase = false
+                    endPhrase(true)
+                } else if currentWord.isEmpty {
+                    endPhrase(false)
+                    isQuotedPhrase = true
+                } else {
+                    currentWord.unicodeScalars.append(scalar)
+                }
+            } else if whitespaceCharacters.contains(scalar) {
+                if isQuotedPhrase { endWord() } else { endPhrase(false) }
+            } else {
+                currentWord.unicodeScalars.append(scalar)
             }
-            
-            if let currentWord = scanner.scanCharacters(from: tokenCharacters), !currentWord.isEmpty {
-                currentPhraseWords.append(currentWord)
-            }
-            
-            if !isQuotedPhrase || scanner.isAtEnd { endPhrase() }
         }
-        
-        let escapedQuery = phrases.map { "\"\($0.phrase)\"" }.joined(separator: " ")
+        endPhrase(isQuotedPhrase)
+
+        let escapedQuery = phrases.map { "\"\($0.phrase.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: " ")
         if mode == .escapeQuerySyntaxAndPrefixMatchLastPhrase, let last = phrases.last, !last.wasQuoted {
             return "\(escapedQuery) *"
         } else {
@@ -500,16 +509,38 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
     }
     
     func query(in core: isolated Blackbird.Database.Core, scoreMultiplier: Double) throws -> [BlackbirdModelSearchResult<T>] {
+        let ftsRows = try T.query(in: core, query, arguments: arguments)
+
+        var preloadedInstancesByRowID: [Blackbird.Value: T] = [:]
+        if options.preloadInstances, !ftsRows.isEmpty {
+            let database = try core.database()
+            let rowids = ftsRows.compactMap { $0["rowid"] }
+            var index = 0
+            while index < rowids.count {
+                let chunk = Array(rowids[index ..< min(index + database.maxQueryVariableCount, rowids.count)])
+                index += chunk.count
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                // rowid is aliased explicitly: for tables with an INTEGER primary key, a bare
+                // `SELECT rowid` returns the column under its alias's name (e.g. `id`) instead
+                for row in try T.query(in: core, "SELECT rowid AS `_preload_rowid_`, * FROM $T WHERE rowid IN (\(placeholders))", arguments: chunk) {
+                    guard let rowid = row["_preload_rowid_"] else { continue }
+                    let instance = try T(from: BlackbirdSQLiteDecoder(database: database, row: row.row))
+                    instance._saveCachedInstance(for: database)
+                    preloadedInstancesByRowID[rowid] = instance
+                }
+            }
+        }
+
         var results: [BlackbirdModelSearchResult<T>] = []
-        for row in try T.query(in: core, query, arguments: arguments) {
-            if let result = try result(core: core, ftsRow: row, scoreMultiplier: scoreMultiplier) {
+        for row in ftsRows {
+            if let result = try result(ftsRow: row, scoreMultiplier: scoreMultiplier, preloadedInstancesByRowID: preloadedInstancesByRowID) {
                 results.append(result)
             }
         }
         return results
     }
-    
-    private func result(core: isolated Blackbird.Database.Core, ftsRow: Blackbird.ModelRow<T>, scoreMultiplier: Double) throws -> BlackbirdModelSearchResult<T>? {
+
+    private func result(ftsRow: Blackbird.ModelRow<T>, scoreMultiplier: Double, preloadedInstancesByRowID: [Blackbird.Value: T]) throws -> BlackbirdModelSearchResult<T>? {
         guard let rowid = ftsRow["rowid"], let score = ftsRow[scoreColumnName] else {
             fatalError("Unexpected result row format from FTS query on \(String(describing: T.self)) (missing rowid or score)")
         }
@@ -528,7 +559,7 @@ fileprivate struct DecodedStructuredFTSQuery<T: BlackbirdModel>: Sendable {
             idx += 1
         }
         
-        let preloadedInstance = try options.preloadInstances ? T.read(from: core, sqlWhere: "rowid = ?", arguments: [rowid]).first : nil
+        let preloadedInstance = options.preloadInstances ? preloadedInstancesByRowID[rowid] : nil
         return BlackbirdModelSearchResult<T>(highlights: .init(highlightRow, table: table), highlightMode: options.highlights, snippets: .init(snippetRow, table: table), snippetMode: options.snippets, rowid: rowid, score: (score.doubleValue ?? 0) * scoreMultiplier, preloadedInstance: preloadedInstance)
     }
 }
@@ -567,46 +598,61 @@ extension Blackbird.Table {
             return !(try core.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", arguments: [ftsTableName(contentTableName)])).isEmpty
         }
         
-        internal func recreateTriggers(core: isolated Blackbird.Database.Core) throws {
+        // The expected CREATE TRIGGER statements, keyed by trigger name. Compared verbatim
+        // against sqlite_master by needsRebuild, so any change here retroactively upgrades
+        // existing databases' triggers at their next schema resolution.
+        private func triggerDefinitions(core: isolated Blackbird.Database.Core) throws -> [String: String] {
             let insertTriggerName = Self.insertTriggerName(contentTableName)
             let updateTriggerName = Self.updateTriggerName(contentTableName)
             let deleteTriggerName = Self.deleteTriggerName(contentTableName)
-            
-            try core.query("DROP TRIGGER IF EXISTS `\(insertTriggerName)`")
-            try core.query("DROP TRIGGER IF EXISTS `\(updateTriggerName)`")
-            try core.query("DROP TRIGGER IF EXISTS `\(deleteTriggerName)`")
-
             let ftsTableName = Self.ftsTableName(contentTableName)
-            
+
             let rawFieldNames = sortedFieldNames
             let fieldNames = rawFieldNames.map { "`\($0)`" }.joined(separator: ",")
             let oldFieldNames = rawFieldNames.map { "OLD.`\($0)`" }.joined(separator: ",")
             let newFieldNames = rawFieldNames.map { "NEW.`\($0)`" }.joined(separator: ",")
-            
-            try core.query(
-                """
-                CREATE TRIGGER `\(insertTriggerName)` AFTER INSERT ON `\(contentTableName)` BEGIN
-                    INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) VALUES (NEW.rowid,\(newFieldNames));
-                END
-                """
-            )
 
-            try core.query(
-                """
-                CREATE TRIGGER `\(updateTriggerName)` AFTER UPDATE OF \(fieldNames) ON `\(contentTableName)` BEGIN
-                    INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(fieldNames)) VALUES ('delete',OLD.rowid,\(oldFieldNames));
-                    INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) VALUES (NEW.rowid,\(newFieldNames));
-                END
-                """
-            )
+            let primaryKeyNames = try core.query("PRAGMA table_info('\(contentTableName)')")
+                .filter { ($0["pk"]?.intValue ?? 0) > 0 }
+                .sorted { ($0["pk"]?.intValue ?? 0) < ($1["pk"]?.intValue ?? 0) }
+                .compactMap { $0["name"]?.stringValue }
+            var updateOfRawFieldNames = rawFieldNames
+            for primaryKeyName in primaryKeyNames where !updateOfRawFieldNames.contains(primaryKeyName) {
+                updateOfRawFieldNames.append(primaryKeyName)
+            }
+            let updateOfFieldNames = updateOfRawFieldNames.map { "`\($0)`" }.joined(separator: ",")
 
-            try core.query(
-                """
-                CREATE TRIGGER `\(deleteTriggerName)` AFTER DELETE ON `\(contentTableName)` BEGIN
-                    INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(fieldNames)) VALUES ('delete',OLD.rowid,\(oldFieldNames));
-                END
-                """
-            )
+            return [
+                insertTriggerName:
+                    """
+                    CREATE TRIGGER `\(insertTriggerName)` AFTER INSERT ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) VALUES (NEW.rowid,\(newFieldNames));
+                    END
+                    """,
+                updateTriggerName:
+                    """
+                    CREATE TRIGGER `\(updateTriggerName)` AFTER UPDATE OF \(updateOfFieldNames) ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(fieldNames)) VALUES ('delete',OLD.rowid,\(oldFieldNames));
+                        INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) VALUES (NEW.rowid,\(newFieldNames));
+                    END
+                    """,
+                deleteTriggerName:
+                    """
+                    CREATE TRIGGER `\(deleteTriggerName)` AFTER DELETE ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(fieldNames)) VALUES ('delete',OLD.rowid,\(oldFieldNames));
+                    END
+                    """,
+            ]
+        }
+
+        internal func recreateTriggers(core: isolated Blackbird.Database.Core) throws {
+            try core.query("DROP TRIGGER IF EXISTS `\(Self.insertTriggerName(contentTableName))`")
+            try core.query("DROP TRIGGER IF EXISTS `\(Self.updateTriggerName(contentTableName))`")
+            try core.query("DROP TRIGGER IF EXISTS `\(Self.deleteTriggerName(contentTableName))`")
+
+            for (_, triggerSQL) in try triggerDefinitions(core: core) {
+                try core.query(triggerSQL)
+            }
         }
 
         internal func rebuild(core: isolated Blackbird.Database.Core) throws {
@@ -622,17 +668,20 @@ extension Blackbird.Table {
             let createdWithSQL = try core.query("SELECT sql FROM sqlite_master WHERE name = '\(ftsTableName)'").first?["sql"]?.stringValue ?? ""
             if createdWithSQL != ftsTableDefinition { return true }
 
-            let triggerNames = Set(try core.query("SELECT name FROM sqlite_master WHERE type = 'trigger'").compactMap {
-                if let name = $0["name"]?.stringValue, name.hasPrefix(contentTableName) { return name }
-                return nil
-            })
+            // Compared by SQL, not just name, so databases with outdated trigger
+            // definitions (e.g. from before primary-key columns were added to the
+            // update trigger) get rebuilt on their next schema resolution.
+            var existingTriggerSQL: [String: String] = [:]
+            for row in try core.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'") {
+                guard let name = row["name"]?.stringValue, let sql = row["sql"]?.stringValue else { continue }
+                existingTriggerSQL[name] = sql
+            }
 
-            let needsTriggers =
-                !triggerNames.contains(Self.insertTriggerName(contentTableName)) ||
-                !triggerNames.contains(Self.updateTriggerName(contentTableName)) ||
-                !triggerNames.contains(Self.deleteTriggerName(contentTableName))
+            for (triggerName, expectedSQL) in try triggerDefinitions(core: core) {
+                if existingTriggerSQL[triggerName] != expectedSQL { return true }
+            }
 
-            return needsTriggers
+            return false
         }
         
         internal init(contentTableName: String, fields: [String: BlackbirdModelFullTextSearchableColumn], tokenizer: String? = nil) {

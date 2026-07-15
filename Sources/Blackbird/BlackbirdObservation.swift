@@ -87,17 +87,29 @@ public final class BlackbirdModelQueryObserver<T: BlackbirdModel, R: Sendable> {
         observer = nil
         result = nil
         
-        observer = T.changePublisher(in: database, multicolumnPrimaryKey: multicolumnPrimaryKeyForInvalidation, columns: columnsForInvalidation ?? []).sink { _ in
-            Task.detached { [weak self] in await self?.update() }
+        observer = T.changePublisher(in: database, multicolumnPrimaryKey: multicolumnPrimaryKeyForInvalidation, columns: columnsForInvalidation ?? []).sink { [weak self] _ in
+            self?.enqueueUpdate()
         }
-        Task.detached { [weak self] in await self?.update() }
+        enqueueUpdate()
     }
 
     let updateSemaphore = Blackbird.Semaphore(value: 1)
+    let updateQueued = Blackbird.Locked(false)
+
+    private nonisolated func enqueueUpdate() {
+        let wasQueued = updateQueued.withLock { queued in
+            defer { queued = true }
+            return queued
+        }
+        if wasQueued { return }
+        Task.detached { [weak self] in await self?.update() }
+    }
+
     private func update() async {
         await updateSemaphore.wait()
         defer { updateSemaphore.signal() }
-    
+        updateQueued.value = false
+
         await MainActor.run {
             self.isLoading = true
         }
@@ -179,17 +191,29 @@ public final class BlackbirdModelObserver<T: BlackbirdModel> {
         
         guard let database, let multicolumnPrimaryKey else { return }
         
-        observer = T.changePublisher(in: database, multicolumnPrimaryKey: multicolumnPrimaryKey).sink { _ in
-            Task.detached { [weak self] in await self?.update() }
+        observer = T.changePublisher(in: database, multicolumnPrimaryKey: multicolumnPrimaryKey).sink { [weak self] _ in
+            self?.enqueueUpdate()
         }
+        enqueueUpdate()
+    }
+
+    let updateSemaphore = Blackbird.Semaphore(value: 1)
+    let updateQueued = Blackbird.Locked(false)
+
+    private nonisolated func enqueueUpdate() {
+        let wasQueued = updateQueued.withLock { queued in
+            defer { queued = true }
+            return queued
+        }
+        if wasQueued { return }
         Task.detached { [weak self] in await self?.update() }
     }
-    
-    let updateSemaphore = Blackbird.Semaphore(value: 1)
+
     private func update() async {
         await updateSemaphore.wait()
         defer { updateSemaphore.signal() }
-    
+        updateQueued.value = false
+
         await MainActor.run {
             self.isLoading = true
         }

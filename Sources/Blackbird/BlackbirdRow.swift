@@ -101,7 +101,7 @@ extension Blackbird {
 
         public func value(keyPath: PartialKeyPath<T>) -> Blackbird.Value? {
             let columnName = table.keyPathToColumnName(keyPath: keyPath)
-            guard let value = dictionary[columnName] else { fatalError("\(String(describing: T.self)).\(columnName) value not present in Blackbird.Row dictionary") }
+            guard let value = dictionary[columnName] else { return nil }
             return value
         }
 

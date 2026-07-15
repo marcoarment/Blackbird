@@ -101,15 +101,20 @@ fileprivate struct BlackbirdSQLiteSingleValueDecodingContainer: SingleValueDecod
     func decode(_ type: Double.Type) throws -> Double { (try value()).doubleValue ?? 0 }
     func decode(_ type: Float.Type) throws -> Float   { Float((try value()).doubleValue ?? 0) }
     func decode(_ type: Int.Type) throws -> Int       { (try value()).intValue ?? 0 }
-    func decode(_ type: Int8.Type) throws -> Int8     { Int8((try value()).intValue ?? 0) }
-    func decode(_ type: Int16.Type) throws -> Int16   { Int16((try value()).intValue ?? 0) }
-    func decode(_ type: Int32.Type) throws -> Int32   { Int32((try value()).intValue ?? 0) }
+    func decode(_ type: Int8.Type) throws -> Int8     { try integerValue(Int8.self, from: (try value()).intValue ?? 0) }
+    func decode(_ type: Int16.Type) throws -> Int16   { try integerValue(Int16.self, from: (try value()).intValue ?? 0) }
+    func decode(_ type: Int32.Type) throws -> Int32   { try integerValue(Int32.self, from: (try value()).intValue ?? 0) }
     func decode(_ type: Int64.Type) throws -> Int64   { (try value()).int64Value ?? 0 }
-    func decode(_ type: UInt.Type) throws -> UInt     { UInt((try value()).int64Value ?? 0) }
-    func decode(_ type: UInt8.Type) throws -> UInt8   { UInt8((try value()).intValue ?? 0) }
-    func decode(_ type: UInt16.Type) throws -> UInt16 { UInt16((try value()).intValue ?? 0) }
-    func decode(_ type: UInt32.Type) throws -> UInt32 { UInt32((try value()).int64Value ?? 0) }
-    func decode(_ type: UInt64.Type) throws -> UInt64 { UInt64((try value()).int64Value ?? 0) }
+    func decode(_ type: UInt.Type) throws -> UInt     { try integerValue(UInt.self, from: (try value()).int64Value ?? 0) }
+    func decode(_ type: UInt8.Type) throws -> UInt8   { try integerValue(UInt8.self, from: (try value()).intValue ?? 0) }
+    func decode(_ type: UInt16.Type) throws -> UInt16 { try integerValue(UInt16.self, from: (try value()).intValue ?? 0) }
+    func decode(_ type: UInt32.Type) throws -> UInt32 { try integerValue(UInt32.self, from: (try value()).int64Value ?? 0) }
+    func decode(_ type: UInt64.Type) throws -> UInt64 { try integerValue(UInt64.self, from: (try value()).int64Value ?? 0) }
+
+    private func integerValue<I: FixedWidthInteger, S: FixedWidthInteger>(_ type: I.Type, from source: S) throws -> I {
+        guard let converted = I(exactly: source) else { throw BlackbirdSQLiteDecoder.Error.invalidValue(codingPath.first?.stringValue ?? "(unknown key)", value: String(source)) }
+        return converted
+    }
 
     func decode<T>(_ type: T.Type) throws -> T where T: Decodable {
         let value = try value()
@@ -195,15 +200,20 @@ fileprivate class BlackbirdSQLiteKeyedDecodingContainer<K: CodingKey>: KeyedDeco
     func decode(_ type: Double.Type, forKey key: K) throws -> Double  { row[key.stringValue]?.doubleValue ?? 0 }
     func decode(_ type: Float.Type, forKey key: K) throws -> Float    { Float(row[key.stringValue]?.doubleValue ?? 0) }
     func decode(_ type: Int.Type, forKey key: K) throws -> Int        { row[key.stringValue]?.intValue ?? 0 }
-    func decode(_ type: Int8.Type, forKey key: K) throws -> Int8      { Int8(row[key.stringValue]?.intValue ?? 0) }
-    func decode(_ type: Int16.Type, forKey key: K) throws -> Int16    { Int16(row[key.stringValue]?.intValue ?? 0) }
-    func decode(_ type: Int32.Type, forKey key: K) throws -> Int32    { Int32(row[key.stringValue]?.intValue ?? 0) }
+    func decode(_ type: Int8.Type, forKey key: K) throws -> Int8      { try integerValue(Int8.self, from: row[key.stringValue]?.intValue ?? 0, key: key) }
+    func decode(_ type: Int16.Type, forKey key: K) throws -> Int16    { try integerValue(Int16.self, from: row[key.stringValue]?.intValue ?? 0, key: key) }
+    func decode(_ type: Int32.Type, forKey key: K) throws -> Int32    { try integerValue(Int32.self, from: row[key.stringValue]?.intValue ?? 0, key: key) }
     func decode(_ type: Int64.Type, forKey key: K) throws -> Int64    { row[key.stringValue]?.int64Value ?? 0 }
-    func decode(_ type: UInt.Type, forKey key: K) throws -> UInt      { UInt(row[key.stringValue]?.int64Value ?? 0) }
-    func decode(_ type: UInt8.Type, forKey key: K) throws -> UInt8    { UInt8(row[key.stringValue]?.intValue ?? 0) }
-    func decode(_ type: UInt16.Type, forKey key: K) throws -> UInt16  { UInt16(row[key.stringValue]?.intValue ?? 0) }
-    func decode(_ type: UInt32.Type, forKey key: K) throws -> UInt32  { UInt32(row[key.stringValue]?.int64Value ?? 0) }
-    func decode(_ type: UInt64.Type, forKey key: K) throws -> UInt64  { UInt64(row[key.stringValue]?.int64Value ?? 0) }
+    func decode(_ type: UInt.Type, forKey key: K) throws -> UInt      { try integerValue(UInt.self, from: row[key.stringValue]?.int64Value ?? 0, key: key) }
+    func decode(_ type: UInt8.Type, forKey key: K) throws -> UInt8    { try integerValue(UInt8.self, from: row[key.stringValue]?.intValue ?? 0, key: key) }
+    func decode(_ type: UInt16.Type, forKey key: K) throws -> UInt16  { try integerValue(UInt16.self, from: row[key.stringValue]?.intValue ?? 0, key: key) }
+    func decode(_ type: UInt32.Type, forKey key: K) throws -> UInt32  { try integerValue(UInt32.self, from: row[key.stringValue]?.int64Value ?? 0, key: key) }
+    func decode(_ type: UInt64.Type, forKey key: K) throws -> UInt64  { try integerValue(UInt64.self, from: row[key.stringValue]?.int64Value ?? 0, key: key) }
+
+    private func integerValue<I: FixedWidthInteger, S: FixedWidthInteger>(_ type: I.Type, from source: S, key: K) throws -> I {
+        guard let converted = I(exactly: source) else { throw BlackbirdSQLiteDecoder.Error.invalidValue(key.stringValue, value: String(source)) }
+        return converted
+    }
     func decode(_: Data.Type, forKey key: K) throws -> Data           { row[key.stringValue]?.dataValue ?? Data() }
 
     func decode(_: Date.Type, forKey key: K) throws -> Date {

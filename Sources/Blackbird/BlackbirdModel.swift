@@ -336,14 +336,23 @@ extension BlackbirdModel {
     // Hashable
     public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
-    /// Look up ``Blackbird/ColumnInfo`` instances from key-paths to `@BlackbirdColumn` variables.
-    public static func columnInfoFromKeyPaths(_ keyPaths: [PartialKeyPath<Self>]) -> [PartialKeyPath<Self>: Blackbird.ColumnInfo] {
-        let table = Self.table
-        var infos: [PartialKeyPath<Self>: Blackbird.ColumnInfo] = [:]
-        for keyPath in keyPaths {
-            infos[keyPath] = table.keyPathToColumnInfo(keyPath: keyPath)
+    /// Look up ``Blackbird/ColumnInfo`` from a key-path to a `@BlackbirdColumn` variable.
+    public static func columnInfoFromKeyPath(_ keyPath: PartialKeyPath<Self>) -> Blackbird.ColumnInfo {
+        Self.table.keyPathToColumnInfo(keyPath: keyPath)
+    }
+
+    /// Creates an instance from a raw table row. Used by Skybridge to apply server records.
+    ///
+    /// Columns missing from the row are treated as `NULL`. Every column of the returned
+    /// instance is considered changed, so writing it persists all of its values.
+    internal static func instance(from row: Blackbird.Row, in database: Blackbird.Database) throws -> Self {
+        var fullRow = row
+        for column in table.columns where fullRow[column.name] == nil { fullRow[column.name] = .null }
+        let instance = try Self(from: BlackbirdSQLiteDecoder(database: database, row: fullRow))
+        for child in Mirror(reflecting: instance).children {
+            if let column = child.value as? any ColumnWrapper { column.markHasChanged() }
         }
-        return infos
+        return instance
     }
 
     /// The set of column names, as strings, that have changed since its last save to the specified database.
@@ -388,12 +397,12 @@ extension BlackbirdModel {
         let primaryKey: Blackbird.Value? = if let primaryKey { try! Blackbird.Value.fromAny(primaryKey) } else { nil }
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
-        
+        let columnNames = Blackbird.ColumnNames(columns.map { table.keyPathToColumnName(keyPath: $0) })
+
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let primaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains([primaryKey]) { return false }
-            
-            if !columns.isEmpty, let changedColumns = change.columnNames {
-                let columnNames = Blackbird.ColumnNames(columns.map { table.keyPathToColumnName(keyPath: $0) })
+
+            if !columnNames.isEmpty, let changedColumns = change.columnNames {
                 if columnNames.isDisjoint(with: changedColumns) { return false }
             }
 
@@ -418,11 +427,11 @@ extension BlackbirdModel {
     public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Sendable]?, columns: [Self.BlackbirdColumnKeyPath] = []) -> Self.ChangePublisher {
         let selfType = Self.self
         let multicolumnPrimaryKey = multicolumnPrimaryKey?.map { try! Blackbird.Value.fromAny($0) }
+        let columnNames = Blackbird.ColumnNames(columns.map { table.keyPathToColumnName(keyPath: $0) })
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
-            
-            if !columns.isEmpty, let changedColumns = change.columnNames {
-                let columnNames = Blackbird.ColumnNames(columns.map { table.keyPathToColumnName(keyPath: $0) })
+
+            if !columnNames.isEmpty, let changedColumns = change.columnNames {
                 if columnNames.isDisjoint(with: changedColumns) { return false }
             }
 
@@ -448,13 +457,13 @@ extension BlackbirdModel {
         let primaryKey: Blackbird.Value? = if let primaryKey { try! Blackbird.Value.fromAny(primaryKey) } else { nil }
         if primaryKey != nil, table.primaryKeys.count > 1 { fatalError("\(String(describing: Self.self)).changePublisher: Single-column primary key value specified on table with a multi-column primary key") }
         let selfType = Self.self
-        
+        let ignoredColumnNames = Blackbird.ColumnNames(ignoredColumns.map { table.keyPathToColumnName(keyPath: $0) })
+
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let primaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains([primaryKey]) { return false }
-            
-            if !ignoredColumns.isEmpty, let changedColumns = change.columnNames {
-                let columnNames = Blackbird.ColumnNames(ignoredColumns.map { table.keyPathToColumnName(keyPath: $0) })
-                if changedColumns.isSubset(of: columnNames) { return false }
+
+            if !ignoredColumnNames.isEmpty, let changedColumns = change.columnNames {
+                if changedColumns.isSubset(of: ignoredColumnNames) { return false }
             }
 
             return true
@@ -478,12 +487,12 @@ extension BlackbirdModel {
     public static func changePublisher(in database: Blackbird.Database, multicolumnPrimaryKey: [Sendable]?, ignoredColumns: [Self.BlackbirdColumnKeyPath]) -> Self.ChangePublisher {
         let selfType = Self.self
         let multicolumnPrimaryKey = multicolumnPrimaryKey?.map { try! Blackbird.Value.fromAny($0) }
+        let ignoredColumnNames = Blackbird.ColumnNames(ignoredColumns.map { table.keyPathToColumnName(keyPath: $0) })
         return database.changeReporter.changePublisher(for: self.tableName).filter { change in
             if let multicolumnPrimaryKey, let changedKeys = change.primaryKeys, !changedKeys.contains(multicolumnPrimaryKey) { return false }
-            
-            if !ignoredColumns.isEmpty, let changedColumns = change.columnNames {
-                let columnNames = Blackbird.ColumnNames(ignoredColumns.map { table.keyPathToColumnName(keyPath: $0) })
-                if changedColumns.isSubset(of: columnNames) { return false }
+
+            if !ignoredColumnNames.isEmpty, let changedColumns = change.columnNames {
+                if changedColumns.isSubset(of: ignoredColumnNames) { return false }
             }
 
             return true
@@ -579,7 +588,7 @@ extension BlackbirdModel {
         
         for primaryKeyChunk in _queryVariableLimitChunks(for: database, cacheResult.missedKeys) {
             let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
-            let resultsChunk = try await self.read(from: database, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
+            let resultsChunk = try await self.read(from: database, sqlWhere: "`\(pkName)` IN (\(placeholderStr))", primaryKeyChunk)
             combinedResults.append(contentsOf: resultsChunk)
         }
         return preserveOrder ? _sortWithPrimaryKeyValueSequence(instances: combinedResults, primaryKeyValues: primaryKeys) : combinedResults
@@ -595,7 +604,7 @@ extension BlackbirdModel {
         
         for primaryKeyChunk in _queryVariableLimitChunks(for: database, cacheResult.missedKeys) {
             let placeholderStr = Array(repeating: "?", count: primaryKeyChunk.count).joined(separator: ",")
-            let resultsChunk = try self.read(from: core, sqlWhere: "\(pkName) IN (\(placeholderStr))", primaryKeyChunk)
+            let resultsChunk = try self.read(from: core, sqlWhere: "`\(pkName)` IN (\(placeholderStr))", primaryKeyChunk)
             combinedResults.append(contentsOf: resultsChunk)
         }
         return preserveOrder ? _sortWithPrimaryKeyValueSequence(instances: combinedResults, primaryKeyValues: primaryKeys) : combinedResults
@@ -833,7 +842,7 @@ extension BlackbirdModel {
     internal static func _queryInternal(in database: Blackbird.Database, _ query: String, arguments: [Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try await table.resolveWithDatabase(type: Self.self, database: database) { try validateSchema(core: $0) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
+        return try await database.core.performGated { try $0.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments) }.map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Executes arbitrary SQL with a placeholder available for this type's table name.
@@ -848,7 +857,7 @@ extension BlackbirdModel {
     public static func query(in database: Blackbird.Database, _ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.ModelRow<Self>] {
         let table = Self.table
         try await table.resolveWithDatabase(type: Self.self, database: database) { try validateSchema(core: $0) }
-        return try await database.core.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments).map { Blackbird.ModelRow<Self>($0, table: table) }
+        return try await database.core.performGated { try $0.query(query.replacingOccurrences(of: "$T", with: table.name), arguments: arguments) }.map { Blackbird.ModelRow<Self>($0, table: table) }
     }
 
     /// Synchronous version of ``query(in:_:_:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -1067,7 +1076,7 @@ extension BlackbirdModel {
     ///
     /// For updating existing instances in the database, ``modify(in:primaryKey:changes:)-(Blackbird.Database,_,_)`` is preferable to avoid race conditions.
     public func write(to database: Blackbird.Database) async throws {
-        try await write(to: database.core)
+        try await database.core.performGated { try self.write(to: $0) }
     }
     
     /// Write this instance to a database synchronously from an actor-isolated transaction.
@@ -1114,19 +1123,23 @@ extension BlackbirdModel {
         let sql = "INSERT INTO `\(table.name)` (`\(columnNames.joined(separator: "`,`"))`) VALUES (\(placeholders.joined(separator: ","))) \(table.upsertClause)"
 
         database.changeReporter.ignoreWritesToTable(Self.tableName)
-        defer {
+        do {
+            try core.query(sql, arguments: values)
+        } catch {
+            // Report nothing and don't cache: the write didn't happen.
             database.changeReporter.stopIgnoringWrites()
-            database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: [primaryKeyValues], changedColumns: changedColumnNames)
-            self._saveCachedInstance(for: database)
+            throw error
         }
-        try core.query(sql, arguments: values)
+        database.changeReporter.stopIgnoringWrites()
+        database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: [primaryKeyValues], changedColumns: changedColumnNames)
+        self._saveCachedInstance(for: database)
         for column in changedColumns { column.clearHasChanged(in: database) }
     }
 
     /// Delete this instance from a database.
     /// - Parameter database: The ``Blackbird/Database`` instance to delete from.
     public func delete(from database: Blackbird.Database) async throws {
-        try await delete(from: database.core)
+        try await database.core.performGated { try self.delete(from: $0) }
     }
 
     /// Delete this instance from a database synchronously from an actor-isolated transaction.

@@ -171,6 +171,9 @@ fileprivate struct DecodedStructuredQuery: Sendable {
             if let whereClause { clauses.append("WHERE \(whereClause)") }
             arguments.append(contentsOf: whereArguments)
         } else if let forMulticolumnPrimaryKey {
+            if forMulticolumnPrimaryKey.count != table.primaryKeys.count {
+                fatalError("\(String(describing: T.self)): Invalid number of primary-key values: expected \(table.primaryKeys.count), got \(forMulticolumnPrimaryKey.count)")
+            }
             let whereArguments = forMulticolumnPrimaryKey.map { try! Blackbird.Value.fromAny($0) }
             self.whereClause = table.primaryKeys.map { "`\($0.name)` = ?" }.joined(separator: " AND ")
             self.whereArguments = whereArguments
@@ -211,7 +214,7 @@ extension BlackbirdModel {
         
         let logActivity = database.options.contains(.debugPrintCacheActivity)
 
-        if let cachedResult = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey) as? T {
+        if case .hit(let value) = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey), let cachedResult = value as? T {
             if logActivity { print("[BlackbirdModel] ++ Cache hit: \(cacheKey)") }
             return cachedResult
         }
@@ -227,7 +230,7 @@ extension BlackbirdModel {
         guard cacheLimit > 0, let cacheKey = decoded.cacheKey else { return try resultFetcher(core) }
         
         let database = try core.database()
-        if let cachedResult = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey) as? T { return cachedResult }
+        if case .hit(let value) = database.cache.readQueryResult(tableName: decoded.tableName, cacheKey: cacheKey), let cachedResult = value as? T { return cachedResult }
         
         let result = try resultFetcher(core)
         database.cache.writeQueryResult(tableName: decoded.tableName, cacheKey: cacheKey, result: result, entryLimit: cacheLimit)
@@ -402,12 +405,12 @@ extension BlackbirdModel {
     /// If matching against specific primary-key values, use ``update(in:set:forPrimaryKeys:)-(Blackbird.Database,[BlackbirdColumnKeyPath:BlackbirdColumnExpression<Self>],_)`` instead.
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable?], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
-        try await update(in: database.core, set: changes, matching: matching)
+        try await database.core.performGated { try update(in: $0, set: changes, matching: matching) }
     }
 
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], matching: BlackbirdModelColumnExpression<Self>) async throws {
         if changes.isEmpty { return }
-        try await update(in: database.core, set: changes, matching: matching)
+        try await database.core.performGated { try update(in: $0, set: changes, matching: matching) }
     }
 
     public static func update(in core: isolated Blackbird.Database.Core, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], matching: BlackbirdModelColumnExpression<Self>) throws {
@@ -428,9 +431,13 @@ extension BlackbirdModel {
         defer {
             let changedRowIDs = database.changeReporter.stopIgnoringWrites()
             let changeCount = core.changeCount - changeCountBefore
+            // Sanity-checked against the statement's direct change count, which unlike
+            // changeCount excludes rows written by triggers (e.g. FTS index updates) —
+            // those would otherwise force a whole-table (nil keys) report every time.
+            let directChangeCount = core.lastStatementChangeCount
             var primaryKeys = try? primaryKeysFromRowIDs(in: core, rowIDs: changedRowIDs)
-            if primaryKeys != nil, primaryKeys!.count != changeCount { primaryKeys = nil }
-            
+            if primaryKeys != nil, primaryKeys!.count != directChangeCount { primaryKeys = nil }
+
             if changeCount > 0 {
                 database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: primaryKeys, changedColumns: decoded.changedColumns)
             }
@@ -475,12 +482,12 @@ extension BlackbirdModel {
     /// For tables with multi-column primary keys, use ``update(in:set:forMulticolumnPrimaryKeys:)-(Blackbird.Database,[BlackbirdColumnKeyPath:BlackbirdColumnExpression<Self>],_)``.
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable?], forPrimaryKeys: [Sendable]) async throws {
         if changes.isEmpty { return }
-        try await update(in: database.core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
+        try await database.core.performGated { try update(in: $0, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] }) }
     }
 
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], forPrimaryKeys: [Sendable]) async throws {
         if changes.isEmpty { return }
-        try await update(in: database.core, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] })
+        try await database.core.performGated { try update(in: $0, set: changes, forMulticolumnPrimaryKeys: forPrimaryKeys.map { [$0] }) }
     }
 
     /// Changes a subset of the table's rows by multi-column primary-key values, using column key-paths for this model type.
@@ -506,12 +513,12 @@ extension BlackbirdModel {
     /// For tables with single-column primary keys, ``update(in:set:forPrimaryKeys:)-(Blackbird.Database,[BlackbirdColumnKeyPath:BlackbirdColumnExpression<Self>],_)`` may also be used.
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: Sendable?], forMulticolumnPrimaryKeys: [[Sendable]]) async throws {
         if changes.isEmpty { return }
-        try await update(in: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
+        try await database.core.performGated { try update(in: $0, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys) }
     }
 
     public static func update(in database: Blackbird.Database, set changes: [BlackbirdColumnKeyPath: BlackbirdColumnExpression<Self>], forMulticolumnPrimaryKeys: [[Sendable]]) async throws {
         if changes.isEmpty { return }
-        try await update(in: database.core, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys)
+        try await database.core.performGated { try update(in: $0, set: changes, forMulticolumnPrimaryKeys: forMulticolumnPrimaryKeys) }
     }
 
     /// Synchronous version of ``update(in:set:forPrimaryKeys:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -532,6 +539,7 @@ extension BlackbirdModel {
         let database = try core.database()
         if database.options.contains(.readOnly) { fatalError("Cannot update BlackbirdModels in a read-only database") }
         if changes.isEmpty { return }
+        if primaryKeyValues.isEmpty { return }
         let primaryKeyValues = Array(primaryKeyValues)
         let table = Self.table
         _ = try table.resolveWithDatabase(type: Self.self, core: core) { try Self.validateSchema(core: $0) }
@@ -586,7 +594,7 @@ extension BlackbirdModel {
     /// // "DELETE FROM Post WHERE id = 123"
     /// ```
     public static func delete(from database: Blackbird.Database, matching: BlackbirdModelColumnExpression<Self>) async throws {
-        try await delete(from: database.core, matching: matching)
+        try await database.core.performGated { try delete(from: $0, matching: matching) }
     }
 
     /// Synchronous version of ``delete(from:matching:)`` for use when the database actor is isolated within calls to ``Blackbird/Database/transaction(_:)`` or ``Blackbird/Database/cancellableTransaction(_:)``.
@@ -613,8 +621,11 @@ extension BlackbirdModel {
         defer {
             database.changeReporter.stopIgnoringWrites()
             let changeCount = core.changeCount - changeCountBefore
-            if affectedPrimaryKeys != nil, affectedPrimaryKeys!.count != changeCount { affectedPrimaryKeys = nil }
-            
+            // Compared against the statement's direct change count, which unlike changeCount
+            // excludes rows written by triggers (e.g. FTS index updates)
+            let directChangeCount = core.lastStatementChangeCount
+            if affectedPrimaryKeys != nil, affectedPrimaryKeys!.count != directChangeCount { affectedPrimaryKeys = nil }
+
             if changeCount > 0 {
                 database.changeReporter.reportChange(tableName: Self.tableName, primaryKeys: affectedPrimaryKeys, changedColumns: nil)
             }
@@ -884,7 +895,7 @@ internal struct BlackbirdColumnLiteralExpression: BlackbirdQueryExpression {
     let arguments: [Sendable]
     
     func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
-        return (whereClause: "\(literal)", values: arguments.map { try! Blackbird.Value.fromAny($0) })
+        return (whereClause: "(\(literal))", values: arguments.map { try! Blackbird.Value.fromAny($0) })
     }
 }
 
@@ -941,13 +952,14 @@ internal struct BlackbirdCombiningExpression<T: BlackbirdModel>: BlackbirdQueryE
     func compile(table: Blackbird.Table, queryingFullTextIndex: Bool) -> (whereClause: String?, values: [Blackbird.Value]) {
         let l = lhs.compile(table: table, queryingFullTextIndex: queryingFullTextIndex)
         let r = rhs.compile(table: table, queryingFullTextIndex: queryingFullTextIndex)
-        
-        var combinedValues = l.values
-        combinedValues.append(contentsOf: r.values)
-        
+
+        if sqlOperator == .or, l.whereClause == nil || r.whereClause == nil { return (whereClause: nil, values: []) }
+        if l.whereClause == nil, r.whereClause == nil { return (whereClause: nil, values: []) }
+
+        var combinedValues: [Blackbird.Value] = []
         var wheres: [String] = []
-        if let whereL = l.whereClause { wheres.append(whereL) }
-        if let whereR = r.whereClause { wheres.append(whereR) }
+        if let whereL = l.whereClause { wheres.append(whereL) ; combinedValues.append(contentsOf: l.values) }
+        if let whereR = r.whereClause { wheres.append(whereR) ; combinedValues.append(contentsOf: r.values) }
         return (whereClause: "(\(wheres.joined(separator: " \(sqlOperator.rawValue) ")))", values: combinedValues)
     }
 }
@@ -965,7 +977,11 @@ internal struct BlackbirdColumnFTSMatchExpression<T: BlackbirdModel>: BlackbirdQ
         else { columnOrFTSTableName = Blackbird.Table.FullTextIndexSchema.ftsTableName(T.tableName) }
         
         let escapedQuery = T.fullTextQueryEscape(pattern, mode: syntaxMode)
-        
+
+        // An empty query (e.g. blank or whitespace/quote-only user input) would compile to
+        // MATCH '', an FTS5 syntax error; an empty search simply matches nothing.
+        if escapedQuery.isEmpty { return (whereClause: "0", values: []) }
+
         return (whereClause: "`\(columnOrFTSTableName)` MATCH ?", values: [.text(escapedQuery)])
     }
 }

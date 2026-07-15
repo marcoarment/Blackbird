@@ -258,6 +258,7 @@ extension Blackbird {
             case queryResultValueError(query: String, column: String, sqliteError: SQLiteError)
             case uniqueConstraintFailed
             case databaseIsClosed
+            case anotherTransactionInProgress
         }
         
         /// Options for customizing database behavior.
@@ -451,7 +452,9 @@ extension Blackbird {
             }
             
             self.maxQueryVariableCount = Int(sqlite3_limit(handle, SQLITE_LIMIT_VARIABLE_NUMBER, -1))
-            
+
+            sqlite3_busy_timeout(handle, 5000)
+
             if !normalizedOptions.contains(.readOnly) {
                 for modeQuery in [
                     "PRAGMA journal_mode = WAL",
@@ -525,7 +528,7 @@ extension Blackbird {
         
         // MARK: - Forwarded Core functions
         
-        public func execute(_ query: String) async throws { try await core.execute(query) }
+        public func execute(_ query: String) async throws { try await core.performGated { try $0.execute(query) } }
 
         @discardableResult
         public func transaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> R) ) async throws -> R { try await core.transaction(action) }
@@ -533,13 +536,13 @@ extension Blackbird {
         @discardableResult
         public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Core) async throws -> R) ) async throws -> Blackbird.TransactionResult<R> { try await core.cancellableTransaction(action) }
 
-        @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.query(query, [Sendable]()) }
+        @discardableResult public func query(_ query: String) async throws -> [Blackbird.Row] { return try await core.performGated { try $0.query(query, [Sendable]()) } }
 
-        @discardableResult public func query(_ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
+        @discardableResult public func query(_ query: String, _ arguments: Sendable...) async throws -> [Blackbird.Row] { return try await core.performGated { try $0.query(query, arguments) } }
 
-        @discardableResult public func query(_ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments) }
+        @discardableResult public func query(_ query: String, arguments: [Sendable]) async throws -> [Blackbird.Row] { return try await core.performGated { try $0.query(query, arguments) } }
 
-        @discardableResult public func query(_ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] { return try await core.query(query, arguments: arguments) }
+        @discardableResult public func query(_ query: String, arguments: [String: Sendable]) async throws -> [Blackbird.Row] { return try await core.performGated { try $0.query(query, arguments: arguments) } }
 
         public func setArtificialQueryDelay(_ delay: TimeInterval?) async { await core.setArtificialQueryDelay(delay) }
 
@@ -583,7 +586,7 @@ extension Blackbird {
             private var isClosed = false
             private var nextTransactionID: Int64 = 0
 
-            private var dataVersionStmt: OpaquePointer? = nil
+            private var dataVersionStmt: SQLiteHandle? = nil
             private var previousDataVersion: Int64 = 0
 
             private var perfLog = PerformanceLogger(subsystem: Blackbird.loggingSubsystem, category: "Database.Core")
@@ -597,26 +600,32 @@ extension Blackbird {
                 self.debugPrintEveryQuery = options.contains(.debugPrintEveryQuery)
                 self.debugPrintQueryParameterValues = options.contains(.debugPrintQueryParameterValues)
                 
-                if options.contains(.monitorForExternalChanges), SQLITE_OK == sqlite3_prepare_v3(dbHandle.pointer, "PRAGMA data_version", -1, UInt32(SQLITE_PREPARE_PERSISTENT), &dataVersionStmt, nil) {
-                    if SQLITE_ROW == sqlite3_step(dataVersionStmt) { previousDataVersion = sqlite3_column_int64(dataVersionStmt, 0) }
-                    sqlite3_reset(dataVersionStmt)
+                var dataVersionStmtHandle: OpaquePointer? = nil
+                if options.contains(.monitorForExternalChanges), SQLITE_OK == sqlite3_prepare_v3(dbHandle.pointer, "PRAGMA data_version", -1, UInt32(SQLITE_PREPARE_PERSISTENT), &dataVersionStmtHandle, nil), let dataVersionStmtHandle {
+                    dataVersionStmt = SQLiteHandle(pointer: dataVersionStmtHandle)
+                    if SQLITE_ROW == sqlite3_step(dataVersionStmtHandle) { previousDataVersion = sqlite3_column_int64(dataVersionStmtHandle, 0) }
+                    sqlite3_reset(dataVersionStmtHandle)
                 }
             }
 
             deinit {
                 if !isClosed {
                     for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle.pointer) }
-                    sqlite3_close(dbHandle.pointer)
+                    if let dataVersionStmt { sqlite3_finalize(dataVersionStmt.pointer) }
+                    sqlite3_close_v2(dbHandle.pointer)
                     isClosed = true
                 }
             }
-            
+
             fileprivate func close() {
                 if isClosed { return }
                 let spState = perfLog.begin(signpost: .closeDatabase)
                 defer { perfLog.end(state: spState) }
                 for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle.pointer) }
-                sqlite3_close(dbHandle.pointer)
+                cachedStatements.removeAll()
+                if let dataVersionStmt { sqlite3_finalize(dataVersionStmt.pointer) }
+                dataVersionStmt = nil
+                sqlite3_close_v2(dbHandle.pointer)
                 isClosed = true
             }
             
@@ -634,14 +643,26 @@ extension Blackbird {
                     }
                 }
             }
+
+            // The number of rows directly changed by the most recent statement, excluding
+            // rows changed by triggers (unlike changeCount above).
+            internal var lastStatementChangeCount: Int64 {
+                get {
+                    if #available(macOS 12.3, iOS 15.4, tvOS 15.4, watchOS 8.5, *) {
+                        return Int64(sqlite3_changes64(dbHandle.pointer))
+                    } else {
+                        return Int64(sqlite3_changes(dbHandle.pointer))
+                    }
+                }
+            }
                         
             internal func checkForExternalDatabaseChange() {
                 guard let dataVersionStmt else { return }
                 if debugPrintEveryQuery { print("[Blackbird.Database] PRAGMA data_version") }
                 
                 var newVersion: Int64 = 0
-                if SQLITE_ROW == sqlite3_step(dataVersionStmt) { newVersion = sqlite3_column_int64(dataVersionStmt, 0) }
-                sqlite3_reset(dataVersionStmt)
+                if SQLITE_ROW == sqlite3_step(dataVersionStmt.pointer) { newVersion = sqlite3_column_int64(dataVersionStmt.pointer, 0) }
+                sqlite3_reset(dataVersionStmt.pointer)
 
                 if newVersion != previousDataVersion {
                     previousDataVersion = newVersion
@@ -657,7 +678,7 @@ extension Blackbird {
 
                 switch result {
                     case .committed(let r): return r
-                    case .rolledBack: fatalError("should never get here")
+                    case .rolledBack: throw Blackbird.Error.cancelTransaction
                 }
             }
 
@@ -669,23 +690,71 @@ extension Blackbird {
 
                 switch result {
                     case .committed(let r): return r
-                    case .rolledBack: fatalError("should never get here")
+                    case .rolledBack: throw Blackbird.Error.cancelTransaction
                 }
             }
 
             private let asyncTransactionSemaphore = Blackbird.Semaphore(value: 1)
 
+            // Identifies the task currently executing an async transaction's action, so its own
+            // database calls pass the barrier below while other tasks' calls wait outside.
+            //
+            // Note that per standard task-local inheritance, structured children AND unstructured
+            // `Task { }` tasks spawned inside the action inherit this ID: their database work joins
+            // the transaction (and rolls back with it). That's required for awaited children — they
+            // would otherwise deadlock the transaction — and means fire-and-forget work that must be
+            // independent of the transaction needs `Task.detached`.
+            @TaskLocal private static var currentTransactionID: Int64? = nil
+
+            private var activeAsyncTransactionID: Int64? = nil
+            private var asyncTransactionEndWaiters: [CheckedContinuation<Void, Never>] = []
+
+            // The number of transactions currently open on this connection, including
+            // a suspended async transaction. Used to defer state that must only be
+            // recorded once the outermost transaction has durably committed.
+            internal private(set) var transactionDepth = 0
+
+            private func waitForAsyncTransactionBarrier() async {
+                while let active = activeAsyncTransactionID, Core.currentTransactionID != active {
+                    await withCheckedContinuation { asyncTransactionEndWaiters.append($0) }
+                }
+            }
+
+            private func endAsyncTransactionBarrier() {
+                activeAsyncTransactionID = nil
+                let waiters = asyncTransactionEndWaiters
+                asyncTransactionEndWaiters = []
+                for waiter in waiters { waiter.resume() }
+            }
+
+            // Runs an action on the actor after any in-progress async transaction (from another
+            // task) has finished, so unrelated queries can't land inside its open savepoint and
+            // be silently rolled back with it.
+            internal func performGated<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> R)) async rethrows -> R {
+                await waitForAsyncTransactionBarrier()
+                return try action(self)
+            }
+
             // Exactly like the function below, but accepts an async action
             public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) async throws -> R) ) async throws -> Blackbird.TransactionResult<R> {
-                await asyncTransactionSemaphore.wait()
-                defer { asyncTransactionSemaphore.signal() }
+                // A transaction opened from within another transaction's action runs as a
+                // plain nested savepoint; the outer transaction's machinery already applies.
+                let isNested = Core.currentTransactionID != nil
+                if !isNested { await asyncTransactionSemaphore.wait() }
+                defer { if !isNested { asyncTransactionSemaphore.signal() } }
 
                 if isClosed { throw Error.databaseIsClosed }
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
                 changeReporter?.beginTransaction(transactionID)
                 fileChangeMonitor?.beginExpectedChange(transactionID)
+                if !isNested { activeAsyncTransactionID = transactionID }
+                transactionDepth += 1
+                cache?.beginTransaction()
                 defer {
+                    cache?.endTransaction()
+                    transactionDepth -= 1
+                    if !isNested { endAsyncTransactionBarrier() }
                     changeReporter?.endTransaction(transactionID)
                     fileChangeMonitor?.endExpectedChange(transactionID)
                     checkForExternalDatabaseChange()
@@ -696,28 +765,49 @@ extension Blackbird {
 
                 try execute("SAVEPOINT \"\(transactionID)\"")
                 do {
-                    let result: R = try await action(self)
+                    let result: R
+                    if isNested {
+                        result = try await action(self)
+                    } else {
+                        result = try await Core.$currentTransactionID.withValue(transactionID) { try await action(self) }
+                    }
                     try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
                     return .committed(result)
                 } catch Blackbird.Error.cancelTransaction {
-                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
-                    cache?.invalidate()
+                    try rollBackAndReleaseSavepoint(transactionID)
                     return .rolledBack
                 } catch {
-                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
-                    cache?.invalidate()
+                    try? rollBackAndReleaseSavepoint(transactionID)
                     throw error
                 }
+            }
+
+            // ROLLBACK TO does not end the transaction opened by an outermost SAVEPOINT:
+            // the savepoint must also be RELEASEd, or the connection stays inside an open
+            // transaction forever and every subsequent write is lost when it closes.
+            private func rollBackAndReleaseSavepoint(_ transactionID: Int64) throws {
+                defer { cache?.invalidate() }
+                try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
+                try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
             }
             
             // Exactly like the function above, but requires action to be synchronous
             public func cancellableTransaction<R: Sendable>(_ action: (@Sendable (_ core: isolated Blackbird.Database.Core) throws -> R) ) throws -> Blackbird.TransactionResult<R> {
                 if isClosed { throw Error.databaseIsClosed }
+
+                // Another task's async transaction is suspended mid-action: this transaction
+                // would silently nest inside its open savepoint and be subject to its rollback.
+                if let active = activeAsyncTransactionID, Core.currentTransactionID != active { throw Error.anotherTransactionInProgress }
+
                 let transactionID = nextTransactionID
                 nextTransactionID += 1
                 changeReporter?.beginTransaction(transactionID)
                 fileChangeMonitor?.beginExpectedChange(transactionID)
+                transactionDepth += 1
+                cache?.beginTransaction()
                 defer {
+                    cache?.endTransaction()
+                    transactionDepth -= 1
                     changeReporter?.endTransaction(transactionID)
                     fileChangeMonitor?.endExpectedChange(transactionID)
                     checkForExternalDatabaseChange()
@@ -732,12 +822,10 @@ extension Blackbird {
                     try execute("RELEASE SAVEPOINT \"\(transactionID)\"")
                     return .committed(result)
                 } catch Blackbird.Error.cancelTransaction {
-                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
-                    cache?.invalidate()
+                    try rollBackAndReleaseSavepoint(transactionID)
                     return .rolledBack
                 } catch {
-                    try execute("ROLLBACK TO SAVEPOINT \"\(transactionID)\"")
-                    cache?.invalidate()
+                    try? rollBackAndReleaseSavepoint(transactionID)
                     throw error
                 }
             }
@@ -817,13 +905,21 @@ extension Blackbird {
                 if isClosed { throw Error.databaseIsClosed }
                 let statement = try preparedStatement(query)
                 let statementHandle = statement.handle
-                var idx = 1 // SQLite bind-parameter indexes start at 1, not 0!
-                for any in arguments {
-                    let value = try Value.fromAny(any)
-                    try value.bind(database: self, statement: statementHandle.pointer, index: Int32(idx), for: query)
-                    idx += 1
+                do {
+                    var idx = 1 // SQLite bind-parameter indexes start at 1, not 0!
+                    for any in arguments {
+                        let value = try Value.fromAny(any)
+                        try value.bind(database: self, statement: statementHandle.pointer, index: Int32(idx), for: query)
+                        idx += 1
+                    }
+                } catch {
+                    // A failed bind must not leave earlier bindings on the cached statement,
+                    // where they'd silently leak into its next execution
+                    sqlite3_reset(statementHandle.pointer)
+                    sqlite3_clear_bindings(statementHandle.pointer)
+                    throw error
                 }
-                
+
                 return try _checkForUpdateHookBypass(statement: statement) {
                     try rowsByExecutingPreparedStatement(statement, from: query)
                 }
@@ -834,9 +930,17 @@ extension Blackbird {
                 if isClosed { throw Error.databaseIsClosed }
                 let statement = try preparedStatement(query)
                 let statementHandle = statement.handle
-                for (name, any) in arguments {
-                    let value = try Value.fromAny(any)
-                    try value.bind(database: self, statement: statementHandle.pointer, name: name, for: query)
+                do {
+                    for (name, any) in arguments {
+                        let value = try Value.fromAny(any)
+                        try value.bind(database: self, statement: statementHandle.pointer, name: name, for: query)
+                    }
+                } catch {
+                    // A failed bind must not leave earlier bindings on the cached statement,
+                    // where they'd silently leak into its next execution
+                    sqlite3_reset(statementHandle.pointer)
+                    sqlite3_clear_bindings(statementHandle.pointer)
+                    throw error
                 }
 
                 return try _checkForUpdateHookBypass(statement: statement) {
@@ -844,8 +948,14 @@ extension Blackbird {
                 }
             }
 
+            private static let maxCachedStatements = 500
+
             private func preparedStatement(_ query: String) throws -> PreparedStatement {
                 if let cached = cachedStatements[query] { return cached }
+                if cachedStatements.count >= Self.maxCachedStatements {
+                    for (_, statement) in cachedStatements { sqlite3_finalize(statement.handle.pointer) }
+                    cachedStatements.removeAll()
+                }
                 var statementHandle: OpaquePointer? = nil
                 let result = sqlite3_prepare_v3(dbHandle.pointer, query, -1, UInt32(SQLITE_PREPARE_PERSISTENT), &statementHandle, nil)
                 guard result == SQLITE_OK, let statementHandle else {
@@ -889,7 +999,7 @@ extension Blackbird {
                 }
 
                 var result = sqlite3_step(statementHandle.pointer)
-                
+
                 guard result == SQLITE_ROW || result == SQLITE_DONE else {
                     sqlite3_reset(statementHandle.pointer)
                     sqlite3_clear_bindings(statementHandle.pointer)
@@ -900,6 +1010,16 @@ extension Blackbird {
                             description: errorDesc(dbHandle.pointer),
                             sqliteError: .init(handle: dbHandle)
                         )
+                    }
+                }
+
+                // If an error throws out below mid-iteration, the cached statement must still be
+                // reset, or its next use would misbehave (bind errors, or resumed iteration).
+                var finishedIterating = false
+                defer {
+                    if !finishedIterating {
+                        sqlite3_reset(statementHandle.pointer)
+                        sqlite3_clear_bindings(statementHandle.pointer)
                     }
                 }
 
@@ -944,7 +1064,10 @@ extension Blackbird {
                                         sqliteError: .init(handle: dbHandle)
                                     )
                                 }
-                                row[columnNames[i]] = .text(String(cString: charPtr))
+                                // Read by byte count, not as a C string, which would
+                                // silently truncate text containing interior NUL characters
+                                let textByteCount = Int(sqlite3_column_bytes(statementHandle.pointer, Int32(i)))
+                                row[columnNames[i]] = .text(String(decoding: UnsafeBufferPointer(start: charPtr, count: textByteCount), as: UTF8.self))
             
                             case SQLITE_BLOB:
                                 let byteLength = sqlite3_column_bytes(statementHandle.pointer, Int32(i))
@@ -981,7 +1104,8 @@ extension Blackbird {
                         sqliteError: .init(handle: dbHandle)
                     )
                 }
-                
+
+                finishedIterating = true
                 guard sqlite3_reset(statementHandle.pointer) == SQLITE_OK, sqlite3_clear_bindings(statementHandle.pointer) == SQLITE_OK else {
                     throw Error.queryExecutionError(
                         query: query,

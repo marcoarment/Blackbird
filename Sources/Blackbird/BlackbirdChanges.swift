@@ -204,11 +204,13 @@ extension Blackbird.Database {
         }
 
         internal func changePublisher(for tableName: String) -> Blackbird.ChangePublisher {
+            // flush() always sends from the main queue, so no receive(on:) hop is needed —
+            // and every subscriber gets the identical pipeline and delivery timing.
             lock.withLock {
                 if let existing = tableChangePublishers[tableName] { return existing.eraseToAnyPublisher() }
                 let publisher = PassthroughSubject<Blackbird.Change, Never>()
                 tableChangePublishers[tableName] = publisher
-                return publisher.receive(on: DispatchQueue.main).eraseToAnyPublisher()
+                return publisher.eraseToAnyPublisher()
             }
         }
 
@@ -279,7 +281,16 @@ extension Blackbird.Database {
                         else { cache.invalidate(tableName: tableName) }
                     }
                 } else {
-                    accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange(columnsIfKnown: changedColumns)
+                    var columnsIfKnown = changedColumns
+                    if let existing = accumulatedChangesByTable[tableName] {
+                        // Don't discard column names already accumulated for this table
+                        if let existingColumnNames = existing.columnNames, let changedColumns {
+                            columnsIfKnown = existingColumnNames.union(changedColumns)
+                        } else {
+                            columnsIfKnown = nil
+                        }
+                    }
+                    accumulatedChangesByTable[tableName] = AccumulatedChanges.entireTableChange(columnsIfKnown: columnsIfKnown)
                     cache.invalidate(tableName: tableName)
                 }
 
@@ -336,14 +347,15 @@ extension Blackbird {
 
         private struct State: Sendable {
             fileprivate var cachedResults: T? = nil
+            fileprivate var generation: UInt64 = 0
             fileprivate var tableName: String? = nil
             fileprivate var database: Blackbird.Database? = nil
             fileprivate var generator: CachedResultGenerator<T>? = nil
             fileprivate var tableChangePublisher: AnyCancellable? = nil
         }
-        
+
         private let config = Locked(State())
-        
+
         public init(initialValue: T? = nil) {
             valuePublisher = CurrentValueSubject<T?, Never>(initialValue)
         }
@@ -356,30 +368,34 @@ extension Blackbird {
             self.changeDatabase(database)
             enqueueUpdate()
         }
-        
-        private func update(_ cachedResults: T?) async throws {
+
+        private func update() async throws {
             let state = config.value
-            let results: T?
-            if let cachedResults = state.cachedResults {
-                results = cachedResults
-            } else {
-                results = (state.generator != nil && state.database != nil ? try await state.generator!(state.database!) : nil)
-                config.withLock { $0.cachedResults = results }
-                valuePublisher.send(results)
-            }
+            if state.cachedResults != nil { return }
+
+            let results: T? = (state.generator != nil && state.database != nil ? try await state.generator!(state.database!) : nil)
+
+            // A change that arrived while the generator was running invalidates these results:
+            // don't cache them, or the newer change's refetch would see a cache hit and be lost.
+            config.withLock { if $0.generation == state.generation { $0.cachedResults = results } }
+            valuePublisher.send(results)
         }
-        
+
         private func changeDatabase(_ newDatabase: Database?) {
             config.withLock {
                 if newDatabase == $0.database { return }
-                
+
                 $0.database = newDatabase
                 $0.cachedResults = nil
+                $0.generation &+= 1
 
                 if let database = $0.database, let tableName = $0.tableName {
                     $0.tableChangePublisher = database.changeReporter.changePublisher(for: tableName).sink { [weak self] _ in
                         guard let self else { return }
-                        self.config.withLock { $0.cachedResults = nil }
+                        self.config.withLock {
+                            $0.cachedResults = nil
+                            $0.generation &+= 1
+                        }
                         self.enqueueUpdate()
                     }
                 } else {
@@ -387,11 +403,10 @@ extension Blackbird {
                 }
             }
         }
-        
+
         private func enqueueUpdate() {
-            let cachedResults = config.withLock { $0.cachedResults }
             Task.detached { [weak self] in
-                do { try await self?.update(cachedResults) }
+                do { try await self?.update() }
                 catch { print("[Blackbird.CachedResultPublisher<\(String(describing: T.self))>] ⚠️ Error updating: \(error.localizedDescription)") }
             }
         }

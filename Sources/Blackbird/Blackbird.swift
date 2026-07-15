@@ -82,7 +82,13 @@ public class Blackbird {
         }
 
         public func hash(into hasher: inout Hasher) {
-            hasher.combine(sqliteLiteral())
+            switch self {
+                case .null:           hasher.combine(0)
+                case let .integer(i): hasher.combine(1); hasher.combine(i)
+                case let .double(d):  hasher.combine(2); hasher.combine(d)
+                case let .text(s):    hasher.combine(3); hasher.combine(s)
+                case let .data(b):    hasher.combine(4); hasher.combine(b)
+            }
         }
         
         public static func fromAny(_ value: Any?) throws -> Value {
@@ -128,18 +134,19 @@ public class Blackbird {
         public static func fromSQLiteLiteral(_ literalString: String) -> Self? {
             if literalString == "NULL" { return .null }
             
-            if literalString.hasPrefix("'"), literalString.hasSuffix("'") {
+            if literalString.count >= 2, literalString.hasPrefix("'"), literalString.hasSuffix("'") {
                 let start = literalString.index(literalString.startIndex, offsetBy: 1)
                 let end = literalString.index(literalString.endIndex, offsetBy: -1)
                 return .text(literalString[start..<end].replacingOccurrences(of: "''", with: "'"))
             }
 
-            if literalString.hasPrefix("X'"), literalString.hasSuffix("'") {
+            if literalString.count >= 3, literalString.hasPrefix("X'"), literalString.hasSuffix("'") {
                 let start = literalString.index(literalString.startIndex, offsetBy: 2)
                 let end = literalString.index(literalString.endIndex, offsetBy: -1)
                 let hex = literalString[start..<end].replacingOccurrences(of: "''", with: "'")
                 
                 let hexChars = hex.map { $0 }
+                guard hexChars.count % 2 == 0 else { return nil }
                 let hexPairs = stride(from: 0, to: hexChars.count, by: 2).map { String(hexChars[$0]) + String(hexChars[$0 + 1]) }
                 let bytes = hexPairs.compactMap { UInt8($0, radix: 16) }
                 return .data(Data(bytes))
@@ -153,8 +160,8 @@ public class Blackbird {
         public var boolValue: Bool? {
             switch self {
                 case .null:           return nil
-                case let .integer(i): return i > 0
-                case let .double(d):  return d > 0
+                case let .integer(i): return i != 0
+                case let .double(d):  return d != 0
                 case let .text(s):    return (Int(s) ?? 0) != 0
                 case let .data(b):    if let str = String(data: b, encoding: .utf8), let i = Int(str) { return i != 0 } else { return nil }
             }
@@ -184,7 +191,7 @@ public class Blackbird {
             switch self {
                 case .null:           return nil
                 case let .integer(i): return Int(i)
-                case let .double(d):  return Int(d)
+                case let .double(d):  return Int(exactly: d.rounded(.towardZero))
                 case let .text(s):    return Int(s)
                 case let .data(b):    if let str = String(data: b, encoding: .utf8) { return Int(str) } else { return nil }
             }
@@ -194,7 +201,7 @@ public class Blackbird {
             switch self {
                 case .null:           return nil
                 case let .integer(i): return Int64(i)
-                case let .double(d):  return Int64(d)
+                case let .double(d):  return Int64(exactly: d.rounded(.towardZero))
                 case let .text(s):    return Int64(s)
                 case let .data(b):    if let str = String(data: b, encoding: .utf8) { return Int64(str) } else { return nil }
             }
@@ -228,7 +235,11 @@ public class Blackbird {
                 case     .null:       result = sqlite3_bind_null(statement, index)
                 case let .integer(i): result = sqlite3_bind_int64(statement, index, i)
                 case let .double(d):  result = sqlite3_bind_double(statement, index, d)
-                case let .text(s):    result = sqlite3_bind_text(statement, index, s, -1, Blackbird.Value.copyValue)
+                case let .text(s):
+                    // Bound with an explicit byte count: a -1 (C-string) length would
+                    // silently truncate strings containing interior NUL characters.
+                    let utf8 = s.utf8CString
+                    result = utf8.withUnsafeBufferPointer { sqlite3_bind_text(statement, index, $0.baseAddress, Int32($0.count - 1), Blackbird.Value.copyValue) }
                 case let .data(d):    result = d.withUnsafeBytes { bytes in sqlite3_bind_blob(statement, index, bytes.baseAddress, Int32(bytes.count), Blackbird.Value.copyValue) }
             }
             if result != SQLITE_OK { throw Blackbird.Database.Error.queryArgumentValueError(query: query, description: database.errorDesc(database.dbHandle.pointer)) }
@@ -403,15 +414,19 @@ extension Blackbird {
         public init(value: Int = 0) { state = Locked(State(value: value)) }
         
         public func wait() async {
-            let wait = state.withLock { state in
-                state.value -= 1
-                return state.value < 0
-            }
-            
-            if wait {
-                await withCheckedContinuation { continuation in
-                    state.withLock { $0.waiting.append(continuation) }
+            // The decrement and the continuation enqueue must be a single atomic operation:
+            // a signal() landing between them would see an empty waiting list and the wakeup
+            // would be lost, parking this task (and the semaphore) forever.
+            await withCheckedContinuation { continuation in
+                let resumeNow: Bool = state.withLock { state in
+                    state.value -= 1
+                    if state.value < 0 {
+                        state.waiting.append(continuation)
+                        return false
+                    }
+                    return true
                 }
+                if resumeNow { continuation.resume() }
             }
         }
 

@@ -151,7 +151,7 @@ extension Blackbird {
         
         internal func definition(tableName: String) -> String {
             if columnNames.isEmpty { fatalError("Indexes require at least one column") }
-            return "CREATE \(unique ? "UNIQUE " : "")INDEX `\(tableName)+index+\(name)` ON \(tableName) (\(columnNames.joined(separator: ",")))"
+            return "CREATE \(unique ? "UNIQUE " : "")INDEX `\(tableName)+index+\(name)` ON `\(tableName)` (`\(columnNames.joined(separator: "`,`"))`)"
         }
         
         public init(columnNames: [String], unique: Bool = false) {
@@ -240,7 +240,10 @@ extension Blackbird {
         // Enable "upsert" (REPLACE INTO) behavior ONLY for primary-key conflicts, not any other UNIQUE constraints
         private static func generateUpsertClause(columnNames: [String], primaryKeyColumnNames: [String]) -> String {
             let upsertReplacements = columnNames.filter { !primaryKeyColumnNames.contains($0) }.map { "`\($0)` = excluded.`\($0)`" }
-            return upsertReplacements.isEmpty ? "" : "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"
+            // Tables whose every column is part of the primary key have nothing to update
+            // on conflict, but re-writing an existing row must still succeed as a no-op.
+            if upsertReplacements.isEmpty { return "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO NOTHING" }
+            return "ON CONFLICT (`\(primaryKeyColumnNames.joined(separator: "`,`"))`) DO UPDATE SET \(upsertReplacements.joined(separator: ","))"
         }
         
         internal init?(isolatedCore core: isolated Database.Core, tableName: String, type: any BlackbirdModel.Type) throws {
@@ -307,10 +310,12 @@ extension Blackbird {
             if !isExplicitResolve, database.options.contains(.requireModelSchemaValidationBeforeUse) {
                 fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
             }
-            
-            return try await database.core.transaction {
+
+            let resolution = try await database.core.transaction {
                 try _resolveWithDatabase(type: type, core: $0, validator: validator)
             }
+            if await database.core.transactionDepth == 0 { markResolved(database: database) }
+            return resolution
         }
 
         @discardableResult
@@ -322,7 +327,10 @@ extension Blackbird {
                 fatalError("BlackbirdModel \(String(describing: type)) is being queried before calling resolveSchema(in:) in a database with the .requireModelSchemaValidationBeforeUse option enabled")
             }
 
-            return try _resolveWithDatabase(type: type, core: core, validator: validator)
+            // Wrapped in a transaction so the validator can veto (and roll back) any migration
+            let resolution = try core.transaction { try _resolveWithDatabase(type: type, core: $0, validator: validator) }
+            if core.transactionDepth == 0 { markResolved(database: database) }
+            return resolution
         }
 
         internal func _isAlreadyResolved<T>(type: T.Type, in database: Database) -> Bool {
@@ -334,7 +342,6 @@ extension Blackbird {
         }
 
         private func _resolveWithDatabase<T: BlackbirdModel>(type: T.Type, core: isolated Database.Core, validator: (@Sendable (_ core: isolated Database.Core) throws -> Void)?) throws -> BlackbirdModelSchemaResolution {
-            let database = try core.database()
             var resolution: BlackbirdModelSchemaResolution = []
         
             // Table not created yet
@@ -363,6 +370,10 @@ extension Blackbird {
             let needsFTSRebuild = try fullTextIndex?.needsRebuild(core: core) ?? false
             let needsFTSDelete = try fullTextIndex == nil && FullTextIndexSchema.ftsTableExists(core: core, contentTableName: name)
 
+            // Matches the full-rebuild condition below, evaluated against the post-drop column set:
+            // rebuilding drops the FTS triggers with the table, so the FTS index must be rebuilt too.
+            let willRebuildTable = primaryKeysChanged || !Set(schemaInDB.columns.filter { columnNames.contains($0.name) }).subtracting(columns).isEmpty
+
             if needsSchemaChanges || needsFTSRebuild || needsFTSDelete {
                 try core.transaction { core in
                     // drop indexes and columns
@@ -370,15 +381,23 @@ extension Blackbird {
                     for indexToDrop in currentIndexes.subtracting(targetIndexes) { try core.execute("DROP INDEX `\(name)+index+\(indexToDrop.name)`") }
                     for columnNameToDrop in schemaInDB.columnNames.subtracting(columnNames) { try core.execute("ALTER TABLE `\(name)` DROP COLUMN `\(columnNameToDrop)`") }
                     schemaInDB = try Table(isolatedCore: core, tableName: name, type: type)!
-                    
+
                     if primaryKeysChanged || !Set(schemaInDB.columns).subtracting(columns).isEmpty {
                         // At least one column has changed type -- do a full rebuild
                         let tempTableName = "_\(name)+temp+\(Int32.random(in: 0..<Int32.max))"
                         try core.execute(createTableStatement(type: type, overrideTableName: tempTableName))
 
                         let commonColumnNames = Set(schemaInDB.columnNames).intersection(columnNames)
-                        let commonColumnsOrderedNameList = schemaInDB.columns.filter { commonColumnNames.contains($0.name) }.map { $0.name }
+                        var commonColumnsOrderedNameList = schemaInDB.columns.filter { commonColumnNames.contains($0.name) }.map { $0.name }
                         if !commonColumnsOrderedNameList.isEmpty {
+                            // Preserve rowids: external-content FTS entries and other rowid references
+                            // would otherwise map to the wrong rows after any rowid-gap compaction.
+                            // (Skipped when the new table aliases rowid to a copied INTEGER primary key,
+                            // which SQLite would reject as a duplicate target column.)
+                            var rowidAliasedToCopiedColumn = false
+                            if primaryKeys.count == 1, let pk = primaryKeys.first, case .integer = pk.columnType, commonColumnNames.contains(pk.name) { rowidAliasedToCopiedColumn = true }
+                            if !rowidAliasedToCopiedColumn { commonColumnsOrderedNameList.insert("_rowid_", at: 0) }
+
                             let fieldList = "`\(commonColumnsOrderedNameList.joined(separator: "`,`"))`"
                             try core.execute("INSERT INTO `\(tempTableName)` (\(fieldList)) SELECT \(fieldList) FROM `\(name)`")
                         }
@@ -395,13 +414,13 @@ extension Blackbird {
                                 description: "Cannot add non-NULL URL column `\(columnToAdd.name)` since default values for existing rows cannot be specified"
                             )
                         }
-                        
+
                         try core.execute("ALTER TABLE `\(name)` ADD COLUMN \(columnToAdd.definition())")
                     }
 
                     for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: name)) }
 
-                    if needsFTSRebuild { try fullTextIndex?.rebuild(core: core) }
+                    if needsFTSRebuild || willRebuildTable { try fullTextIndex?.rebuild(core: core) }
 
                     if needsFTSDelete {
                         try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.insertTriggerName(name))`")
@@ -419,17 +438,22 @@ extension Blackbird {
             // allow calling model to verify before committing
             if let validator { try validator(core) }
 
+            return resolution
+        }
+
+        // Memoized separately from _resolveWithDatabase, and only once no transaction is
+        // open: schema changes executed inside a transaction that later rolls back would
+        // otherwise stay marked as resolved, permanently breaking the table's queries.
+        private func markResolved(database: Database) {
             Self.resolvedTablesWithDatabases.withLock {
                 if $0[self] == nil { $0[self] = Set<Database.InstanceID>() }
                 $0[self]!.insert(database.id)
             }
-            
+
             Self.resolvedTableNamesInDatabases.withLock {
                 if $0[database.id] == nil { $0[database.id] = Set<String>() }
                 $0[database.id]!.insert(name)
             }
-            
-            return resolution
         }
     }
 }
