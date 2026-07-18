@@ -39,30 +39,58 @@ import os.log
 
 /// A BlackbirdModel type that ``BlackbirdSkybridge`` can sync to CloudKit.
 ///
-/// Conforming types must declare these two bookkeeping columns, which Skybridge manages:
+/// Conforming types must declare one bookkeeping column, which Skybridge manages:
 ///
-///     @BlackbirdColumn var syncLastModifiedDate: Date?
-///     @BlackbirdColumn var ckRecordData: Data?
+///     @BlackbirdColumn var skybridgeMetadata: Data?
 ///
-/// Syncing is opt-in per column: only the columns listed in ``skybridgeSyncedColumns``
-/// are sent to CloudKit.
+/// Syncing is opt-out per column: every column is sent to CloudKit except the
+/// primary key (which is embedded in the record name), `skybridgeMetadata`, and
+/// any columns listed in ``skybridgeExcludedColumns``.
 ///
-/// Requirements: an explicitly declared, single-column, non-Data `primaryKey`
-/// (which becomes the CloudKit record name), and column names that are valid
-/// CloudKit field names. Columns not listed in ``skybridgeSyncedColumns`` should
-/// be optional or have sensible defaults, since rows created from server records
-/// decode them as `NULL`.
+/// Because new columns sync by default, adding a column to a conforming type is
+/// a sync-schema decision: its name must be a valid CloudKit field name, its
+/// values must fit CloudKit's record size limits, and it should be optional or
+/// have a sensible default, since rows created from server records that predate
+/// it decode it as `NULL`. Columns that must stay device-local belong in
+/// ``skybridgeExcludedColumns``.
+///
+/// Requirements: an explicitly declared, single-column, non-Data `primaryKey`.
 public protocol BlackbirdSkybridgeSyncable: BlackbirdModel {
-    /// An archive of the CKRecord as last synced with the server. Managed by Skybridge.
-    var ckRecordData: Data? { get set }
+    /// Opaque sync bookkeeping (the last-synced record archive and the
+    /// last-write-wins conflict timestamp). Managed by Skybridge.
+    var skybridgeMetadata: Data? { get set }
+
+    /// Columns that should NOT be sent to CloudKit, e.g. `[ \.$localDraft ]`. Default: none.
+    static var skybridgeExcludedColumns: [BlackbirdColumnKeyPath] { get }
+}
+
+extension BlackbirdSkybridgeSyncable {
+    public static var skybridgeExcludedColumns: [BlackbirdColumnKeyPath] { [] }
+}
+
+private let skybridgeMetadataColumnName = "skybridgeMetadata"
+
+/// The decoded contents of a row's `skybridgeMetadata` column.
+internal struct SkybridgeMetadata: Codable, Sendable {
+    /// An archive of the CKRecord as last synced with the server.
+    var ckRecordData: Data? = nil
 
     /// The local-edit timestamp used for last-write-wins conflict resolution.
-    /// Skybridge sets it automatically when it detects a local change, but writers
-    /// may set it themselves for more-precise conflict timestamps.
-    var syncLastModifiedDate: Date? { get set }
+    var syncLastModifiedDate: Date? = nil
 
-    /// Columns that should be sent to CloudKit, e.g. `[ \.$title, \.$dueDate ]`.
-    static var skybridgeSyncedColumns: [BlackbirdColumnKeyPath] { get }
+    var isEmpty: Bool { ckRecordData == nil && syncLastModifiedDate == nil }
+
+    static func decode(_ data: Data?) -> SkybridgeMetadata {
+        guard let data else { return SkybridgeMetadata() }
+        return (try? PropertyListDecoder().decode(SkybridgeMetadata.self, from: data)) ?? SkybridgeMetadata()
+    }
+
+    func encoded() -> Data? {
+        if isEmpty { return nil }
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try? encoder.encode(self)
+    }
 }
 
 /// Reads a `@BlackbirdColumn` wrapper's value without knowing its generic type.
@@ -76,10 +104,19 @@ extension BlackbirdColumn: SkybridgeColumnReading {
 extension BlackbirdSkybridgeSyncable {
     // Helpers for Skybridge. Those without Self in their signatures are callable
     // on `any BlackbirdSkybridgeSyncable.Type` values without opening the existential.
+    // Internal (not fileprivate) only where tests exercise them.
 
-    fileprivate static func skybridgeSyncedColumnInfo() -> [(keyPath: PartialKeyPath<Self>, name: String)] {
-        skybridgeSyncedColumns.map { ($0, columnInfoFromKeyPath($0).name) }
+    internal static func skybridgeSyncedColumnNames() -> [String] {
+        let excludedNames = Set(skybridgeExcludedColumns.map { columnInfoFromKeyPath($0).name })
+        let primaryKeyNames = Set(primaryKey.map { columnInfoFromKeyPath($0).name })
+        return table.columns.map(\.name).filter {
+            $0 != skybridgeMetadataColumnName && !excludedNames.contains($0) && !primaryKeyNames.contains($0)
+        }
     }
+
+    internal var skybridgeDecodedMetadata: SkybridgeMetadata { SkybridgeMetadata.decode(skybridgeMetadata) }
+
+    internal mutating func setSkybridgeMetadata(_ metadata: SkybridgeMetadata) { skybridgeMetadata = metadata.encoded() }
 
     fileprivate static func skybridgePrimaryKeyInfo() -> Blackbird.ColumnInfo {
         guard primaryKey.count == 1, let keyPath = primaryKey.first else {
@@ -92,7 +129,10 @@ extension BlackbirdSkybridgeSyncable {
         if skybridgePrimaryKeyInfo().type == Data.self {
             fatalError("Skybridge: \(tableName) has an unsupported Data primary key")
         }
-        _ = skybridgeSyncedColumnInfo() // traps on key-paths that aren't @BlackbirdColumn columns
+        if !table.columnNames.contains(skybridgeMetadataColumnName) {
+            fatalError("Skybridge: \(tableName) must declare `@BlackbirdColumn var skybridgeMetadata: Data?`")
+        }
+        _ = skybridgeSyncedColumnNames() // traps on excluded key-paths that aren't @BlackbirdColumn columns
     }
 
     fileprivate static func skybridgePrimaryKeyValue(fromString string: String) -> Blackbird.Value? {
@@ -137,14 +177,6 @@ internal struct BlackbirdSkybridgeState: BlackbirdModel {
 public actor BlackbirdSkybridge {
     private enum Field {
         static let lastModified = "skybridge_lastModified"
-    }
-
-    // The protocol's bookkeeping properties, as column names. These can't be
-    // derived from key-paths because a protocol can't require the `$`-prefixed
-    // column wrappers, only the wrapped properties.
-    private enum Column {
-        static let ckRecordData = "ckRecordData"
-        static let syncLastModifiedDate = "syncLastModifiedDate"
     }
 
     private static let logger = Logger(subsystem: Blackbird.loggingSubsystem, category: "Skybridge")
@@ -282,15 +314,17 @@ public actor BlackbirdSkybridge {
         let action: ReconcileAction = (try? await database.transaction { core in
             guard var instance = try T.read(from: core, primaryKey: primaryKey) else { return ReconcileAction.deleteFromServer }
 
-            let lastSyncedRecord = instance.ckRecordData.flatMap { Self.decodeRecord($0) }
+            var metadata = instance.skybridgeDecodedMetadata
+            let lastSyncedRecord = metadata.ckRecordData.flatMap { Self.decodeRecord($0) }
             if let lastSyncedRecord, Self.recordMatches(lastSyncedRecord, instance: instance) { return ReconcileAction.ignore }
 
             // A genuine local edit: bump the last-write-wins timestamp if the
             // writer didn't. (The rewrite re-enters here once, then no-ops.)
             let lastSyncedModified = lastSyncedRecord?.encryptedValues[Field.lastModified] as? Date
-            let localModified = instance.syncLastModifiedDate
+            let localModified = metadata.syncLastModifiedDate
             if localModified == nil || (lastSyncedModified != nil && localModified! <= lastSyncedModified!) {
-                instance.syncLastModifiedDate = Date()
+                metadata.syncLastModifiedDate = Date()
+                instance.setSkybridgeMetadata(metadata)
                 try instance.write(to: core)
             }
             return ReconcileAction.upload
@@ -321,8 +355,8 @@ public actor BlackbirdSkybridge {
         let recordID = record.recordID
 
         // Extracted before the transaction: CKRecord isn't Sendable.
-        let serverValues: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnInfo().map {
-            ($0.name, Self.blackbirdValue(from: record.encryptedValues[$0.name]))
+        let serverValues: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnNames().map {
+            ($0, Self.blackbirdValue(from: record.encryptedValues[$0]))
         }
 
         do {
@@ -330,19 +364,22 @@ public actor BlackbirdSkybridge {
             let localWins: Bool = try await database.transaction { core in
                 let existing = try T.read(from: core, primaryKey: primaryKey)
 
-                if var existing, let localModified = existing.syncLastModifiedDate, localModified > serverModified {
-                    // Local wins: keep local values, adopt the server record as the new base, re-send.
-                    existing.ckRecordData = archive
-                    try existing.write(to: core)
-                    return true
+                if var existing {
+                    var metadata = existing.skybridgeDecodedMetadata
+                    if let localModified = metadata.syncLastModifiedDate, localModified > serverModified {
+                        // Local wins: keep local values, adopt the server record as the new base, re-send.
+                        metadata.ckRecordData = archive
+                        existing.setSkybridgeMetadata(metadata)
+                        try existing.write(to: core)
+                        return true
+                    }
                 }
 
                 // Server wins (or no local row): overlay the server values onto the row and write it back.
                 var row: Blackbird.Row = existing.map { Self.rowRepresentation(of: $0) } ?? [:]
                 row[T.skybridgePrimaryKeyInfo().name] = primaryKey
                 for (name, value) in serverValues { row[name] = value }
-                row[Column.syncLastModifiedDate] = .double(serverModified.timeIntervalSince1970)
-                row[Column.ckRecordData] = .data(archive)
+                row[skybridgeMetadataColumnName] = SkybridgeMetadata(ckRecordData: archive, syncLastModifiedDate: serverModified).encoded().map { .data($0) } ?? .null
 
                 let updated = try T.instance(from: row, in: database)
                 try updated.write(to: core)
@@ -367,7 +404,9 @@ public actor BlackbirdSkybridge {
         guard let database else { return false }
         do {
             try await T.modify(in: database, primaryKey: primaryKey) { _, instance in
-                instance.ckRecordData = archive
+                var metadata = instance.skybridgeDecodedMetadata
+                metadata.ckRecordData = archive
+                instance.setSkybridgeMetadata(metadata)
             }
             return true
         } catch {
@@ -455,9 +494,11 @@ public actor BlackbirdSkybridge {
         for instance in (try? await T.read(from: database, matching: .all)) ?? [] {
             let primaryKey = Self.primaryKeyValue(of: instance)
             guard let primaryKeyString = primaryKey.stringValue else { continue }
-            if clearingServerRecords, instance.ckRecordData != nil {
+            if clearingServerRecords, instance.skybridgeDecodedMetadata.ckRecordData != nil {
                 try? await T.modify(in: database, primaryKey: primaryKey) { _, instance in
-                    instance.ckRecordData = nil
+                    var metadata = instance.skybridgeDecodedMetadata
+                    metadata.ckRecordData = nil
+                    instance.setSkybridgeMetadata(metadata)
                 }
             }
             engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID(tableName: T.tableName, primaryKeyString: primaryKeyString))])
@@ -480,7 +521,11 @@ public actor BlackbirdSkybridge {
         // assigned and persisted here, before it's stamped into the uploaded record:
         // otherwise the post-save echo check would see a mismatch and re-upload every row.
         let instance: T? = try? await T.modify(in: database, primaryKey: primaryKey) { _, instance in
-            if instance.syncLastModifiedDate == nil { instance.syncLastModifiedDate = Date() }
+            var metadata = instance.skybridgeDecodedMetadata
+            if metadata.syncLastModifiedDate == nil {
+                metadata.syncLastModifiedDate = Date()
+                instance.setSkybridgeMetadata(metadata)
+            }
             return instance
         }
         guard let instance else { return nil }
@@ -488,21 +533,24 @@ public actor BlackbirdSkybridge {
     }
 
     private static func record<T: BlackbirdSkybridgeSyncable>(for instance: T, recordID: CKRecord.ID) -> CKRecord {
-        let record = instance.ckRecordData.flatMap { decodeRecord($0) } ?? CKRecord(recordType: T.tableName, recordID: recordID)
-        for (keyPath, name) in T.skybridgeSyncedColumnInfo() {
-            setValue(columnValue(of: instance, at: keyPath), on: record, forKey: name)
+        let metadata = instance.skybridgeDecodedMetadata
+        let record = metadata.ckRecordData.flatMap { decodeRecord($0) } ?? CKRecord(recordType: T.tableName, recordID: recordID)
+        let row = rowRepresentation(of: instance)
+        for name in T.skybridgeSyncedColumnNames() {
+            setValue(row[name] ?? .null, on: record, forKey: name)
         }
-        record.encryptedValues[Field.lastModified] = instance.syncLastModifiedDate ?? Date()
+        record.encryptedValues[Field.lastModified] = metadata.syncLastModifiedDate ?? Date()
         return record
     }
 
     private static func recordMatches<T: BlackbirdSkybridgeSyncable>(_ record: CKRecord, instance: T) -> Bool {
-        for (keyPath, name) in T.skybridgeSyncedColumnInfo() {
-            if !valuesEquivalent(columnValue(of: instance, at: keyPath), blackbirdValue(from: record.encryptedValues[name])) { return false }
+        let row = rowRepresentation(of: instance)
+        for name in T.skybridgeSyncedColumnNames() {
+            if !valuesEquivalent(row[name] ?? .null, blackbirdValue(from: record.encryptedValues[name])) { return false }
         }
         // Falls back to modificationDate like applyServerRecord does, so a record from a
         // client that doesn't set the field can't re-upload once per receiving device.
-        return datesEquivalent(instance.syncLastModifiedDate, (record.encryptedValues[Field.lastModified] as? Date) ?? record.modificationDate)
+        return datesEquivalent(instance.skybridgeDecodedMetadata.syncLastModifiedDate, (record.encryptedValues[Field.lastModified] as? Date) ?? record.modificationDate)
     }
 
     private static func columnValue<T: BlackbirdSkybridgeSyncable>(of instance: T, at keyPath: PartialKeyPath<T>) -> Blackbird.Value {

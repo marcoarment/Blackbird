@@ -77,6 +77,21 @@ struct RegressionFTSRebuildChanged: BlackbirdModel {
     @BlackbirdColumn var flags: String // changed type from Int: forces a full table rebuild
 }
 
+#if canImport(CloudKit)
+struct RegressionSkybridgeModel: BlackbirdModel, BlackbirdSkybridgeSyncable {
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$key ]
+    static let skybridgeExcludedColumns: [BlackbirdColumnKeyPath] = [ \.$localOnly ]
+
+    var id: String { key }
+
+    @BlackbirdColumn var key: String
+    @BlackbirdColumn var title: String?
+    @BlackbirdColumn var dueDate: Date?
+    @BlackbirdColumn var localOnly: String?
+    @BlackbirdColumn var skybridgeMetadata: Data?
+}
+#endif
+
 // MARK: - Tests
 
 final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
@@ -684,6 +699,44 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
         XCTAssertNil(results.first!.snippet(\.$keywords)) // keywords is not FTS-indexed in FTSModel
         await db.close()
     }
+
+    // MARK: Skybridge
+
+#if canImport(CloudKit)
+    // Opt-out column selection: everything syncs except the primary key,
+    // skybridgeMetadata, and explicitly excluded columns.
+    func testSkybridgeSyncedColumnNames() throws {
+        let names = RegressionSkybridgeModel.skybridgeSyncedColumnNames()
+        XCTAssertEqual(Set(names), ["title", "dueDate"])
+    }
+
+    func testSkybridgeMetadataRoundTrip() throws {
+        // Empty metadata encodes as nil, so untouched rows stay clean
+        XCTAssertNil(SkybridgeMetadata().encoded())
+
+        var instance = RegressionSkybridgeModel(key: "k", title: nil, dueDate: nil, localOnly: nil, skybridgeMetadata: nil)
+        XCTAssertNil(instance.skybridgeDecodedMetadata.ckRecordData)
+        XCTAssertNil(instance.skybridgeDecodedMetadata.syncLastModifiedDate)
+
+        let date = Date(timeIntervalSince1970: 1_234_567.89)
+        let archive = Data([0xDE, 0xAD, 0xBE, 0xEF])
+        instance.setSkybridgeMetadata(SkybridgeMetadata(ckRecordData: archive, syncLastModifiedDate: date))
+        XCTAssertNotNil(instance.skybridgeMetadata)
+
+        let decoded = instance.skybridgeDecodedMetadata
+        XCTAssertEqual(decoded.ckRecordData, archive)
+        XCTAssertEqual(decoded.syncLastModifiedDate, date)
+
+        // Clearing both fields collapses the column back to nil
+        instance.setSkybridgeMetadata(SkybridgeMetadata())
+        XCTAssertNil(instance.skybridgeMetadata)
+
+        // Garbage data decodes as empty metadata rather than throwing or crashing
+        let garbage = SkybridgeMetadata.decode(Data([0x00, 0x01, 0x02]))
+        XCTAssertNil(garbage.ckRecordData)
+        XCTAssertNil(garbage.syncLastModifiedDate)
+    }
+#endif
 
     // MARK: Miscellaneous
 
