@@ -235,6 +235,19 @@ public protocol BlackbirdModel: Codable, Equatable, Identifiable, Hashable, Send
     /// Any changes to this property may cause an index rebuild for existing databases on first run, which may be slow on large tables.
     static var fullTextSearchableColumns: FullTextIndex { get }
 
+    /// Whether full-text index rebuilds required during schema resolution are performed incrementally. The default is `false`.
+    ///
+    /// When `false`, a required index rebuild re-indexes the entire table synchronously during schema resolution,
+    /// which may take a long time for large tables — often at app launch, before the database is usable.
+    ///
+    /// When `true`, schema resolution instead empties the index, queues every row for re-indexing, and returns
+    /// quickly. The app must then complete the rebuild by periodically calling
+    /// ``continueIncrementalFullTextIndexRebuild(in:timeLimit:batchSize:)`` — e.g. from a background task —
+    /// until it reports completion. Until then, full-text searches return results only from rows indexed so far
+    /// (rows written while the rebuild is in progress are always searchable). The queued state survives closing
+    /// and reopening the database, so interrupted rebuilds resume instead of starting over.
+    static var fullTextIndexRebuildsIncrementally: Bool { get }
+
     /// The number of entries to keep in the automatic query cache. Set to `0` to disable the cache. The default is `0`.
     ///
     /// Entries are retained in most-recently-accessed order.
@@ -295,6 +308,7 @@ extension BlackbirdModel {
     public static var indexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var uniqueIndexes: [[BlackbirdColumnKeyPath]] { [] }
     public static var fullTextSearchableColumns: FullTextIndex { [:] }
+    public static var fullTextIndexRebuildsIncrementally: Bool { false }
     public static var cacheLimit: Int { 0 }
     public static var invalidRowDataMigrationResolution: BlackbirdModelMigrationErrorAction { .throwError }
 

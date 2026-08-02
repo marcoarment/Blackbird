@@ -311,6 +311,20 @@ fileprivate struct BlackbirdFullTextQuerySyntaxPhrase {
     let wasQuoted: Bool
 }
 
+/// The outcome of a `continueIncrementalFullTextIndexRebuild` call on a ``BlackbirdModel``.
+public enum BlackbirdFullTextIndexRebuildProgress: Sendable, Equatable {
+    /// No incremental rebuild is in progress.
+    case notInProgress
+
+    /// The rebuild completed during this call. The index is now complete, and normal
+    /// index-maintenance triggers are restored.
+    case done(rowsIndexed: Int64)
+
+    /// The time budget elapsed with rows still waiting to be indexed; call again later to
+    /// continue from where this call left off.
+    case timeLimitReached(rowsIndexed: Int64, rowsRemaining: Int64)
+}
+
 extension BlackbirdModel {
     public typealias SearchResult = BlackbirdModelSearchResult<Self>
 
@@ -331,6 +345,69 @@ extension BlackbirdModel {
         try core.query("PRAGMA incremental_vacuum(16)")
     }
     
+    public typealias FullTextIndexRebuildProgress = BlackbirdFullTextIndexRebuildProgress
+
+    /// Begins an incremental rebuild of this model's full-text index.
+    ///
+    /// The index is emptied and every existing row is queued for re-indexing in batches by
+    /// subsequent ``continueIncrementalFullTextIndexRebuild(in:timeLimit:batchSize:)`` calls,
+    /// so no single database operation ever re-indexes the whole table the way a full rebuild
+    /// does. Rows inserted, changed, or deleted while the rebuild is in progress are reflected
+    /// in the index immediately, and the queued state survives closing and reopening the
+    /// database, so an interrupted rebuild resumes instead of starting over.
+    ///
+    /// Searches performed during the rebuild return results only from rows indexed so far.
+    ///
+    /// Rarely needs to be called directly: schema resolution starts one automatically when a
+    /// model with ``BlackbirdModel/fullTextIndexRebuildsIncrementally`` set to `true` requires
+    /// an index rebuild. Calling it directly is useful to repair index contents in place (e.g.
+    /// after rows were changed while index maintenance was broken), since it works regardless
+    /// of that setting. Calling it while a rebuild is already in progress restarts the rebuild.
+    public static func beginIncrementalFullTextIndexRebuild(in database: Blackbird.Database) async throws {
+        guard let fullTextIndex = SchemaGenerator.shared.table(for: Self.self).fullTextIndex else { return }
+        try await database.core.performGated { try fullTextIndex.startIncrementalRebuild(core: $0) }
+    }
+
+    /// Continues an in-progress incremental rebuild of this model's full-text index, indexing
+    /// batches of rows until it finishes or the given time limit elapses.
+    ///
+    /// Each batch runs as its own short transaction, so other database work interleaves between
+    /// batches instead of blocking for the rebuild's duration. Call periodically — e.g. from a
+    /// background task — until it returns ``FullTextIndexRebuildProgress/done(rowsIndexed:)``.
+    ///
+    /// - Parameters:
+    ///   - database: The ``Blackbird/Database`` to operate on.
+    ///   - timeLimit: The maximum time to spend indexing, in seconds.
+    ///   - batchSize: The number of rows to index per transaction.
+    /// - Returns: A ``FullTextIndexRebuildProgress`` describing what was done.
+    @discardableResult
+    public static func continueIncrementalFullTextIndexRebuild(in database: Blackbird.Database, timeLimit: TimeInterval = 2.0, batchSize: Int = 500) async throws -> FullTextIndexRebuildProgress {
+        guard let fullTextIndex = SchemaGenerator.shared.table(for: Self.self).fullTextIndex else { return .notInProgress }
+
+        let startNanoseconds = DispatchTime.now().uptimeNanoseconds
+        var rowsIndexed: Int64 = 0
+        var wasInProgress = false
+
+        while true {
+            let batchResult: (rowsIndexed: Int64, rowsRemaining: Int64)? = try await database.core.performGated { core in
+                guard try fullTextIndex.incrementalRebuildInProgress(core: core) else { return nil }
+                return try fullTextIndex.performIncrementalRebuildBatch(core: core, batchSize: batchSize)
+            }
+
+            guard let batchResult else { return wasInProgress ? .done(rowsIndexed: rowsIndexed) : .notInProgress }
+            wasInProgress = true
+            rowsIndexed += batchResult.rowsIndexed
+
+            if batchResult.rowsRemaining <= 0 {
+                try await database.core.performGated { try fullTextIndex.finishIncrementalRebuild(core: $0) }
+                return .done(rowsIndexed: rowsIndexed)
+            }
+
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startNanoseconds) / 1_000_000_000
+            if elapsed > timeLimit { return .timeLimitReached(rowsIndexed: rowsIndexed, rowsRemaining: batchResult.rowsRemaining) }
+        }
+    }
+
     /// Search this model's full-text index.
     /// - Parameters:
     ///   - database: The database to query.
@@ -585,6 +662,19 @@ extension Blackbird.Table {
         internal static func insertTriggerName(_ contentTableName: String) -> String { "\(contentTableName)+FTSInsert" }
         internal static func updateTriggerName(_ contentTableName: String) -> String { "\(contentTableName)+FTSUpdate" }
         internal static func deleteTriggerName(_ contentTableName: String) -> String { "\(contentTableName)+FTSDelete" }
+        internal static func updateTriggerPendingName(_ contentTableName: String) -> String { "\(contentTableName)+FTSUpdatePending" }
+        internal static func deleteTriggerPendingName(_ contentTableName: String) -> String { "\(contentTableName)+FTSDeletePending" }
+        internal static func rebuildPendingTableName(_ contentTableName: String) -> String { "\(contentTableName)+FTSRebuildPending" }
+
+        internal static func allTriggerNames(_ contentTableName: String) -> [String] {
+            [
+                insertTriggerName(contentTableName),
+                updateTriggerName(contentTableName),
+                updateTriggerPendingName(contentTableName),
+                deleteTriggerName(contentTableName),
+                deleteTriggerPendingName(contentTableName),
+            ]
+        }
         
         internal var ftsTableDefinition: String {
             let fieldDefinitions = sortedFieldNames.map {
@@ -598,19 +688,15 @@ extension Blackbird.Table {
             return !(try core.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", arguments: [ftsTableName(contentTableName)])).isEmpty
         }
         
-        // The expected CREATE TRIGGER statements, keyed by trigger name. Compared verbatim
-        // against sqlite_master by needsRebuild, so any change here retroactively upgrades
-        // existing databases' triggers at their next schema resolution.
-        private func triggerDefinitions(core: isolated Blackbird.Database.Core) throws -> [String: String] {
-            let insertTriggerName = Self.insertTriggerName(contentTableName)
-            let updateTriggerName = Self.updateTriggerName(contentTableName)
-            let deleteTriggerName = Self.deleteTriggerName(contentTableName)
-            let ftsTableName = Self.ftsTableName(contentTableName)
+        private struct TriggerFieldLists {
+            let fieldNames: String
+            let oldFieldNames: String
+            let newFieldNames: String
+            let updateOfFieldNames: String
+        }
 
+        private func triggerFieldLists(core: isolated Blackbird.Database.Core) throws -> TriggerFieldLists {
             let rawFieldNames = sortedFieldNames
-            let fieldNames = rawFieldNames.map { "`\($0)`" }.joined(separator: ",")
-            let oldFieldNames = rawFieldNames.map { "OLD.`\($0)`" }.joined(separator: ",")
-            let newFieldNames = rawFieldNames.map { "NEW.`\($0)`" }.joined(separator: ",")
 
             let primaryKeyNames = try core.query("PRAGMA table_info('\(contentTableName)')")
                 .filter { ($0["pk"]?.intValue ?? 0) > 0 }
@@ -620,35 +706,103 @@ extension Blackbird.Table {
             for primaryKeyName in primaryKeyNames where !updateOfRawFieldNames.contains(primaryKeyName) {
                 updateOfRawFieldNames.append(primaryKeyName)
             }
-            let updateOfFieldNames = updateOfRawFieldNames.map { "`\($0)`" }.joined(separator: ",")
+
+            return TriggerFieldLists(
+                fieldNames: rawFieldNames.map { "`\($0)`" }.joined(separator: ","),
+                oldFieldNames: rawFieldNames.map { "OLD.`\($0)`" }.joined(separator: ","),
+                newFieldNames: rawFieldNames.map { "NEW.`\($0)`" }.joined(separator: ","),
+                updateOfFieldNames: updateOfRawFieldNames.map { "`\($0)`" }.joined(separator: ",")
+            )
+        }
+
+        // The expected CREATE TRIGGER statements, keyed by trigger name. Compared verbatim
+        // against sqlite_master by resolutionState(core:), so any change here retroactively
+        // upgrades existing databases' triggers at their next schema resolution — without
+        // rebuilding the index, since trigger definitions only affect future maintenance.
+        private func triggerDefinitions(core: isolated Blackbird.Database.Core) throws -> [String: String] {
+            let insertTriggerName = Self.insertTriggerName(contentTableName)
+            let updateTriggerName = Self.updateTriggerName(contentTableName)
+            let deleteTriggerName = Self.deleteTriggerName(contentTableName)
+            let ftsTableName = Self.ftsTableName(contentTableName)
+            let f = try triggerFieldLists(core: core)
 
             return [
                 insertTriggerName:
                     """
                     CREATE TRIGGER `\(insertTriggerName)` AFTER INSERT ON `\(contentTableName)` BEGIN
-                        INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) VALUES (NEW.rowid,\(newFieldNames));
+                        INSERT INTO `\(ftsTableName)`(rowid,\(f.fieldNames)) VALUES (NEW.rowid,\(f.newFieldNames));
                     END
                     """,
                 updateTriggerName:
                     """
-                    CREATE TRIGGER `\(updateTriggerName)` AFTER UPDATE OF \(updateOfFieldNames) ON `\(contentTableName)` BEGIN
-                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(fieldNames)) VALUES ('delete',OLD.rowid,\(oldFieldNames));
-                        INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) VALUES (NEW.rowid,\(newFieldNames));
+                    CREATE TRIGGER `\(updateTriggerName)` AFTER UPDATE OF \(f.updateOfFieldNames) ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(f.fieldNames)) VALUES ('delete',OLD.rowid,\(f.oldFieldNames));
+                        INSERT INTO `\(ftsTableName)`(rowid,\(f.fieldNames)) VALUES (NEW.rowid,\(f.newFieldNames));
                     END
                     """,
                 deleteTriggerName:
                     """
                     CREATE TRIGGER `\(deleteTriggerName)` AFTER DELETE ON `\(contentTableName)` BEGIN
-                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(fieldNames)) VALUES ('delete',OLD.rowid,\(oldFieldNames));
+                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(f.fieldNames)) VALUES ('delete',OLD.rowid,\(f.oldFieldNames));
                     END
                     """,
             ]
         }
 
+        // The trigger set active during an incremental rebuild. Rows still listed in the pending
+        // table aren't in the index yet, so they must not issue FTS 'delete' commands — deleting
+        // entries that were never inserted corrupts external-content FTS5 indexes. Instead,
+        // changed pending rows are indexed immediately and removed from the pending queue
+        // (or just dequeued, when deleted), so the index stays exact for every row that has
+        // either been backfilled or touched since the rebuild began.
+        //
+        // The pending-row condition lives INSIDE each trigger body (`INSERT … SELECT … WHERE NOT
+        // EXISTS`), deliberately not as a pair of triggers with complementary WHEN clauses:
+        // SQLite evaluates each trigger's WHEN immediately before firing it, so a first trigger
+        // that dequeues the row would flip a second trigger's `WHEN NOT EXISTS` to true and fire
+        // both, corrupting the index — dependent on trigger-creation order.
+        private func rebuildTriggerDefinitions(core: isolated Blackbird.Database.Core) throws -> [String: String] {
+            let insertTriggerName = Self.insertTriggerName(contentTableName)
+            let updateTriggerName = Self.updateTriggerName(contentTableName)
+            let deleteTriggerName = Self.deleteTriggerName(contentTableName)
+            let ftsTableName = Self.ftsTableName(contentTableName)
+            let pendingTableName = Self.rebuildPendingTableName(contentTableName)
+            let f = try triggerFieldLists(core: core)
+
+            return [
+                insertTriggerName:
+                    """
+                    CREATE TRIGGER `\(insertTriggerName)` AFTER INSERT ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(rowid,\(f.fieldNames)) VALUES (NEW.rowid,\(f.newFieldNames));
+                        DELETE FROM `\(pendingTableName)` WHERE rowid = NEW.rowid;
+                    END
+                    """,
+                updateTriggerName:
+                    """
+                    CREATE TRIGGER `\(updateTriggerName)` AFTER UPDATE OF \(f.updateOfFieldNames) ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(f.fieldNames)) SELECT 'delete',OLD.rowid,\(f.oldFieldNames) WHERE NOT EXISTS (SELECT 1 FROM `\(pendingTableName)` WHERE rowid = OLD.rowid);
+                        INSERT INTO `\(ftsTableName)`(rowid,\(f.fieldNames)) VALUES (NEW.rowid,\(f.newFieldNames));
+                        DELETE FROM `\(pendingTableName)` WHERE rowid = OLD.rowid;
+                    END
+                    """,
+                deleteTriggerName:
+                    """
+                    CREATE TRIGGER `\(deleteTriggerName)` AFTER DELETE ON `\(contentTableName)` BEGIN
+                        INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`,rowid,\(f.fieldNames)) SELECT 'delete',OLD.rowid,\(f.oldFieldNames) WHERE NOT EXISTS (SELECT 1 FROM `\(pendingTableName)` WHERE rowid = OLD.rowid);
+                        DELETE FROM `\(pendingTableName)` WHERE rowid = OLD.rowid;
+                    END
+                    """,
+            ]
+        }
+
+        internal func dropAllTriggers(core: isolated Blackbird.Database.Core) throws {
+            for triggerName in Self.allTriggerNames(contentTableName) {
+                try core.query("DROP TRIGGER IF EXISTS `\(triggerName)`")
+            }
+        }
+
         internal func recreateTriggers(core: isolated Blackbird.Database.Core) throws {
-            try core.query("DROP TRIGGER IF EXISTS `\(Self.insertTriggerName(contentTableName))`")
-            try core.query("DROP TRIGGER IF EXISTS `\(Self.updateTriggerName(contentTableName))`")
-            try core.query("DROP TRIGGER IF EXISTS `\(Self.deleteTriggerName(contentTableName))`")
+            try dropAllTriggers(core: core)
 
             for (_, triggerSQL) in try triggerDefinitions(core: core) {
                 try core.query(triggerSQL)
@@ -658,30 +812,117 @@ extension Blackbird.Table {
         internal func rebuild(core: isolated Blackbird.Database.Core) throws {
             let ftsTableName = Self.ftsTableName(contentTableName)
             try core.query("DROP TABLE IF EXISTS `\(ftsTableName)`")
+            try core.query("DROP TABLE IF EXISTS `\(Self.rebuildPendingTableName(contentTableName))`") // cancels any incremental rebuild in progress
             try core.query(ftsTableDefinition)
             try recreateTriggers(core: core)
             try core.query("INSERT INTO `\(ftsTableName)`(`\(ftsTableName)`) VALUES('rebuild')")
         }
-        
-        internal func needsRebuild(core: isolated Blackbird.Database.Core) throws -> Bool {
+
+        internal enum ResolutionState {
+            /// The FTS table and triggers match the current definitions.
+            case upToDate
+
+            /// The FTS table matches, but the triggers are outdated (or missing, or stale
+            /// rebuild-mode leftovers). They can be recreated in place: trigger definitions only
+            /// affect future index maintenance, so the indexed content remains valid and no
+            /// rebuild is needed.
+            case triggersOutdated
+
+            /// The FTS table itself is missing or its definition has changed: the index must be
+            /// rebuilt from scratch.
+            case rebuildRequired
+
+            /// An incremental rebuild started earlier is intact and still in progress.
+            case rebuildInProgress
+        }
+
+        internal func resolutionState(core: isolated Blackbird.Database.Core) throws -> ResolutionState {
             let ftsTableName = Self.ftsTableName(contentTableName)
             let createdWithSQL = try core.query("SELECT sql FROM sqlite_master WHERE name = '\(ftsTableName)'").first?["sql"]?.stringValue ?? ""
-            if createdWithSQL != ftsTableDefinition { return true }
+            if createdWithSQL != ftsTableDefinition { return .rebuildRequired }
 
             // Compared by SQL, not just name, so databases with outdated trigger
             // definitions (e.g. from before primary-key columns were added to the
-            // update trigger) get rebuilt on their next schema resolution.
+            // update trigger) get their triggers upgraded at the next schema resolution.
             var existingTriggerSQL: [String: String] = [:]
             for row in try core.query("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'") {
                 guard let name = row["name"]?.stringValue, let sql = row["sql"]?.stringValue else { continue }
                 existingTriggerSQL[name] = sql
             }
 
-            for (triggerName, expectedSQL) in try triggerDefinitions(core: core) {
-                if existingTriggerSQL[triggerName] != expectedSQL { return true }
+            if try incrementalRebuildInProgress(core: core) {
+                // Valid only if the entire rebuild-mode trigger set matches; anything else is a
+                // stale or unknown rebuild state, and the rebuild must restart.
+                for (triggerName, expectedSQL) in try rebuildTriggerDefinitions(core: core) {
+                    if existingTriggerSQL[triggerName] != expectedSQL { return .rebuildRequired }
+                }
+                return .rebuildInProgress
             }
 
-            return false
+            // Stale rebuild-mode triggers without their pending table would fail at runtime
+            if existingTriggerSQL[Self.updateTriggerPendingName(contentTableName)] != nil || existingTriggerSQL[Self.deleteTriggerPendingName(contentTableName)] != nil {
+                return .triggersOutdated
+            }
+
+            for (triggerName, expectedSQL) in try triggerDefinitions(core: core) {
+                if existingTriggerSQL[triggerName] != expectedSQL { return .triggersOutdated }
+            }
+
+            return .upToDate
+        }
+
+        // MARK: - Incremental rebuilds
+
+        internal func incrementalRebuildInProgress(core: isolated Blackbird.Database.Core) throws -> Bool {
+            return !(try core.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", arguments: [Self.rebuildPendingTableName(contentTableName)])).isEmpty
+        }
+
+        // Begins an incremental rebuild: the index is emptied, every existing rowid is queued in
+        // the pending table, and rebuild-mode triggers keep the index exact for rows that change
+        // before their backfill batch arrives. Searches during the rebuild return results only
+        // from rows indexed so far.
+        internal func startIncrementalRebuild(core: isolated Blackbird.Database.Core) throws {
+            let ftsTableName = Self.ftsTableName(contentTableName)
+            let pendingTableName = Self.rebuildPendingTableName(contentTableName)
+
+            try core.transaction { core in
+                try core.query("DROP TABLE IF EXISTS `\(ftsTableName)`")
+                try core.query("DROP TABLE IF EXISTS `\(pendingTableName)`")
+                try core.query(ftsTableDefinition)
+                try core.query("CREATE TABLE `\(pendingTableName)` (rowid INTEGER PRIMARY KEY)")
+                try core.query("INSERT INTO `\(pendingTableName)` SELECT _rowid_ FROM `\(contentTableName)`")
+                try dropAllTriggers(core: core)
+                for (_, triggerSQL) in try rebuildTriggerDefinitions(core: core) { try core.query(triggerSQL) }
+            }
+        }
+
+        // Indexes one batch of pending rows. Returns the number of pending entries processed and
+        // the number remaining; the caller finishes the rebuild when none remain.
+        internal func performIncrementalRebuildBatch(core: isolated Blackbird.Database.Core, batchSize: Int) throws -> (rowsIndexed: Int64, rowsRemaining: Int64) {
+            let ftsTableName = Self.ftsTableName(contentTableName)
+            let pendingTableName = Self.rebuildPendingTableName(contentTableName)
+            let fieldNames = sortedFieldNames.map { "`\($0)`" }.joined(separator: ",")
+
+            return try core.transaction { core in
+                let batchRowids = try core.query("SELECT rowid FROM `\(pendingTableName)` ORDER BY rowid LIMIT \(batchSize)").compactMap { $0["rowid"]?.int64Value }
+                if batchRowids.isEmpty { return (0, 0) }
+
+                // The same explicit rowid list for both statements: the indexed set and the
+                // dequeued set must be identical, or rows could be indexed twice or never.
+                let rowidList = batchRowids.map { String($0) }.joined(separator: ",")
+                try core.query("INSERT INTO `\(ftsTableName)`(rowid,\(fieldNames)) SELECT _rowid_,\(fieldNames) FROM `\(contentTableName)` WHERE _rowid_ IN (\(rowidList))")
+                try core.query("DELETE FROM `\(pendingTableName)` WHERE rowid IN (\(rowidList))")
+
+                let rowsRemaining = try core.query("SELECT COUNT(*) AS c FROM `\(pendingTableName)`").first?["c"]?.int64Value ?? 0
+                return (Int64(batchRowids.count), rowsRemaining)
+            }
+        }
+
+        internal func finishIncrementalRebuild(core: isolated Blackbird.Database.Core) throws {
+            try core.transaction { core in
+                try core.query("DROP TABLE IF EXISTS `\(Self.rebuildPendingTableName(contentTableName))`")
+                try recreateTriggers(core: core)
+            }
         }
         
         internal init(contentTableName: String, fields: [String: BlackbirdModelFullTextSearchableColumn], tokenizer: String? = nil) {
