@@ -42,6 +42,10 @@ public struct BlackbirdModelSchemaResolution: OptionSet, Sendable {
     public static let createdTable          = BlackbirdModelSchemaResolution(rawValue: 1 << 0)
     public static let migratedTable         = BlackbirdModelSchemaResolution(rawValue: 1 << 1)
     public static let migratedFullTextIndex = BlackbirdModelSchemaResolution(rawValue: 1 << 2)
+
+    /// The full-text index's maintenance triggers were outdated and recreated in place;
+    /// the indexed content itself was untouched and no rebuild was performed.
+    public static let updatedFullTextIndexTriggers = BlackbirdModelSchemaResolution(rawValue: 1 << 3)
 }
 
 extension Blackbird {
@@ -367,14 +371,19 @@ extension Blackbird {
             let targetIndexes = Set(indexes)
             
             let needsSchemaChanges = primaryKeysChanged || currentColumns != targetColumns || currentIndexes != targetIndexes
-            let needsFTSRebuild = try fullTextIndex?.needsRebuild(core: core) ?? false
+            let ftsState = try fullTextIndex?.resolutionState(core: core) ?? .upToDate
+
+            // An in-progress incremental rebuild is only left to continue when the model still
+            // opts into incremental rebuilds; otherwise it's finished synchronously here.
+            let needsFTSRebuild = (ftsState == .rebuildRequired) || (ftsState == .rebuildInProgress && !type.fullTextIndexRebuildsIncrementally)
+            let needsFTSTriggerRefresh = (ftsState == .triggersOutdated)
             let needsFTSDelete = try fullTextIndex == nil && FullTextIndexSchema.ftsTableExists(core: core, contentTableName: name)
 
             // Matches the full-rebuild condition below, evaluated against the post-drop column set:
             // rebuilding drops the FTS triggers with the table, so the FTS index must be rebuilt too.
             let willRebuildTable = primaryKeysChanged || !Set(schemaInDB.columns.filter { columnNames.contains($0.name) }).subtracting(columns).isEmpty
 
-            if needsSchemaChanges || needsFTSRebuild || needsFTSDelete {
+            if needsSchemaChanges || needsFTSRebuild || needsFTSTriggerRefresh || needsFTSDelete {
                 try core.transaction { core in
                     // drop indexes and columns
                     var schemaInDB = schemaInDB
@@ -420,19 +429,33 @@ extension Blackbird {
 
                     for indexToAdd in Set(indexes).subtracting(schemaInDB.indexes) { try core.execute(indexToAdd.definition(tableName: name)) }
 
-                    if needsFTSRebuild || willRebuildTable { try fullTextIndex?.rebuild(core: core) }
+                    if needsFTSRebuild || willRebuildTable {
+                        if let fullTextIndex {
+                            if type.fullTextIndexRebuildsIncrementally {
+                                try fullTextIndex.startIncrementalRebuild(core: core)
+                            } else {
+                                try fullTextIndex.rebuild(core: core)
+                            }
+                        }
+                    } else if needsFTSTriggerRefresh {
+                        // Only the triggers changed: recreate them in place. Trigger definitions
+                        // affect future index maintenance, not existing content, so no rebuild.
+                        try fullTextIndex?.recreateTriggers(core: core)
+                    }
 
                     if needsFTSDelete {
-                        try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.insertTriggerName(name))`")
-                        try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.updateTriggerName(name))`")
-                        try core.query("DROP TRIGGER IF EXISTS `\(FullTextIndexSchema.deleteTriggerName(name))`")
+                        for triggerName in FullTextIndexSchema.allTriggerNames(name) {
+                            try core.query("DROP TRIGGER IF EXISTS `\(triggerName)`")
+                        }
                         try core.query("DROP TABLE IF EXISTS `\(FullTextIndexSchema.ftsTableName(name))`")
+                        try core.query("DROP TABLE IF EXISTS `\(FullTextIndexSchema.rebuildPendingTableName(name))`")
                     }
                 }
-                
+
                 if needsSchemaChanges { resolution.insert(.migratedTable) }
 
                 if needsFTSRebuild || needsFTSDelete { resolution.insert(.migratedFullTextIndex) }
+                if needsFTSTriggerRefresh, !needsFTSRebuild, !willRebuildTable { resolution.insert(.updatedFullTextIndexTriggers) }
             }
 
             // allow calling model to verify before committing

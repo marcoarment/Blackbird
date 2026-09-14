@@ -658,8 +658,10 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
 
     // A database whose FTS triggers were created by an older version (before
     // primary-key columns were added to the update trigger) must detect the
-    // outdated trigger SQL and rebuild at schema resolution.
-    func testOutdatedTriggersForceRebuild() async throws {
+    // outdated trigger SQL and upgrade the triggers in place at schema resolution —
+    // without rebuilding the index, since trigger definitions only affect future
+    // index maintenance, and full rebuilds of large indexes are very slow.
+    func testOutdatedTriggersUpgradeInPlace() async throws {
         var db = try Blackbird.Database(path: sqliteFilename)
         try await RegressionFTSQuoteModel(id: 1, title: "golf hotel india").write(to: db)
 
@@ -678,7 +680,8 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
 
         db = try Blackbird.Database(path: sqliteFilename)
         let resolution = try await RegressionFTSQuoteModel.resolveSchema(in: db)
-        XCTAssert(resolution.contains(.migratedFullTextIndex), "outdated trigger SQL was not detected")
+        XCTAssert(resolution.contains(.updatedFullTextIndexTriggers), "outdated trigger SQL was not detected")
+        XCTAssert(!resolution.contains(.migratedFullTextIndex), "a trigger-only change must not rebuild the index")
 
         // The upgraded trigger must now handle primary-key (rowid) updates
         try await RegressionFTSQuoteModel.update(in: db, set: [ \.$id : 100 ], matching: \.$id == 1)
