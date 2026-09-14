@@ -89,7 +89,14 @@ internal struct SkybridgeMetadata: Codable, Sendable {
     /// The local-edit timestamp used for last-write-wins conflict resolution.
     var syncLastModifiedDate: Date? = nil
 
-    var isEmpty: Bool { ckRecordData == nil && syncLastModifiedDate == nil }
+    /// Asset columns whose server bytes couldn't be read when the record was
+    /// applied: the column is NULL locally while the server has an asset.
+    /// Distinguishes "not downloaded yet" from "deleted here" — without it, a
+    /// pending row would read as a local deletion and destroy the server's
+    /// asset on the next upload.
+    var pendingAssetColumns: [String]? = nil
+
+    var isEmpty: Bool { ckRecordData == nil && syncLastModifiedDate == nil && (pendingAssetColumns?.isEmpty ?? true) }
 
     static func decode(_ data: Data?) -> SkybridgeMetadata {
         guard let data else { return SkybridgeMetadata() }
@@ -266,6 +273,7 @@ public actor BlackbirdSkybridge {
         Self.logger.info("☁️ Skybridge started: \(self.models.keys.sorted().joined(separator: ", "), privacy: .public)")
 
         Task.detached(priority: .background) { Self.cleanUpStagedAssets() }
+        Task { [weak self] in await self?.refetchRecordsWithPendingAssets() }
 
         if stateSerialization == nil {
             // First run (or state was lost): create the zone and upload everything.
@@ -389,21 +397,27 @@ public actor BlackbirdSkybridge {
         var extractedValues: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnNames().map {
             ($0, Self.blackbirdValue(from: record.encryptedValues[$0]))
         }
+        // An asset the engine failed to materialize is applied as *pending*:
+        // the record's inline fields (e.g. an app-level has-asset flag) land
+        // immediately, the column goes NULL, and the pending bookkeeping keeps
+        // the row from reading as a local deletion — which would upload the
+        // NULL and destroy the server's asset. A refetch retries the download.
+        var pendingAssetColumns: [String] = []
         for name in T.skybridgeAssetColumnNames() {
             guard let asset = record[name] as? CKAsset else {
                 extractedValues.append((name, .null))
                 continue
             }
-            // An asset the engine failed to materialize must not be applied
-            // as emptiness — that would destroy the local copy (and, via the
-            // resulting re-upload, eventually the server's).
-            guard let fileURL = asset.fileURL, let data = try? Data(contentsOf: fileURL) else {
-                Self.logger.error("☁️🛑 Skybridge: cannot read fetched asset \(name, privacy: .public) of \(recordID.recordName, privacy: .public); skipping record")
-                return
+            if let fileURL = asset.fileURL, let data = try? Data(contentsOf: fileURL) {
+                extractedValues.append((name, .data(data)))
+            } else {
+                Self.logger.error("☁️⌛ Skybridge: cannot read fetched asset \(name, privacy: .public) of \(recordID.recordName, privacy: .public); applying as pending")
+                extractedValues.append((name, .null))
+                pendingAssetColumns.append(name)
             }
-            extractedValues.append((name, .data(data)))
         }
         let serverValues = extractedValues
+        let pending = pendingAssetColumns
 
         do {
             // One transaction, so a concurrent local writer can't be clobbered by a stale row.
@@ -425,15 +439,66 @@ public actor BlackbirdSkybridge {
                 var row: Blackbird.Row = existing.map { Self.rowRepresentation(of: $0) } ?? [:]
                 row[T.skybridgePrimaryKeyInfo().name] = primaryKey
                 for (name, value) in serverValues { row[name] = value }
-                row[skybridgeMetadataColumnName] = SkybridgeMetadata(ckRecordData: archive, syncLastModifiedDate: serverModified).encoded().map { .data($0) } ?? .null
+                row[skybridgeMetadataColumnName] = SkybridgeMetadata(
+                    ckRecordData: archive,
+                    syncLastModifiedDate: serverModified,
+                    pendingAssetColumns: pending.isEmpty ? nil : pending
+                ).encoded().map { .data($0) } ?? .null
 
                 let updated = try T.instance(from: row, in: database)
                 try updated.write(to: core)
                 return false
             }
-            if localWins { engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)]) }
+            if localWins {
+                engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+            } else if !pending.isEmpty {
+                scheduleAssetRefetch(recordID: recordID)
+            }
         } catch {
             Self.logger.error("☁️🛑 Skybridge: cannot apply server record \(recordID.recordName, privacy: .public): \(error, privacy: .public)")
+        }
+    }
+
+    // MARK: - Pending-asset refetch
+    //
+    // The sync engine delivers each server record once; if its asset couldn't
+    // be read then, nothing would ever retry. Pending assets are retried by
+    // fetching the record directly: once shortly after the failure, and again
+    // at every start for anything still pending.
+
+    /// Names already retried this launch, so a persistently failing asset
+    /// retries once per launch instead of looping.
+    private var refetchedRecordNames: Set<String> = []
+
+    private func scheduleAssetRefetch(recordID: CKRecord.ID, afterSeconds: Double = 30) {
+        guard !refetchedRecordNames.contains(recordID.recordName) else { return }
+        refetchedRecordNames.insert(recordID.recordName)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(afterSeconds * 1_000_000_000))
+            await self?.refetchRecord(recordID: recordID)
+        }
+    }
+
+    private func refetchRecord(recordID: CKRecord.ID) async {
+        guard let (model, primaryKey) = modelAndPrimaryKey(for: recordID),
+              let record = try? await CKContainer.default().privateCloudDatabase.record(for: recordID)
+        else { return }
+        await applyServerRecord(model, record: record, primaryKey: primaryKey)
+    }
+
+    private func refetchRecordsWithPendingAssets() async {
+        for model in models.values {
+            await refetchRecordsWithPendingAssets(model)
+        }
+    }
+
+    private func refetchRecordsWithPendingAssets<T: BlackbirdSkybridgeSyncable>(_ type: T.Type) async {
+        guard let database, !T.skybridgeAssetColumns.isEmpty else { return }
+        for instance in (try? await T.read(from: database, matching: .all)) ?? [] {
+            guard let pending = instance.skybridgeDecodedMetadata.pendingAssetColumns, !pending.isEmpty else { continue }
+            let primaryKey = Self.primaryKeyValue(of: instance)
+            guard let primaryKeyString = primaryKey.stringValue else { continue }
+            await refetchRecord(recordID: recordID(tableName: T.tableName, primaryKeyString: primaryKeyString))
         }
     }
 
@@ -452,6 +517,16 @@ public actor BlackbirdSkybridge {
             try await T.modify(in: database, primaryKey: primaryKey) { _, instance in
                 var metadata = instance.skybridgeDecodedMetadata
                 metadata.ckRecordData = archive
+                // Columns that now hold local bytes are no longer awaiting a
+                // download; NULL columns stay pending until a refetch succeeds.
+                if let pending = metadata.pendingAssetColumns, !pending.isEmpty {
+                    let row = Self.rowRepresentation(of: instance)
+                    let stillPending = pending.filter { name in
+                        if case .data = row[name] ?? .null { return false }
+                        return true
+                    }
+                    metadata.pendingAssetColumns = stillPending.isEmpty ? nil : stillPending
+                }
                 instance.setSkybridgeMetadata(metadata)
             }
             return true
@@ -585,12 +660,23 @@ public actor BlackbirdSkybridge {
         for name in T.skybridgeSyncedColumnNames() {
             setValue(row[name] ?? .null, on: record, forKey: name)
         }
+        let pendingColumns = Set(metadata.pendingAssetColumns ?? [])
         for name in T.skybridgeAssetColumnNames() {
-            // Always rewritten from the column, never reused from the archived
-            // record: an archived CKAsset's temporary file may no longer exist.
-            if case .data(let data) = row[name] ?? .null, let fileURL = assetFileURL(for: data) {
-                record[name] = CKAsset(fileURL: fileURL)
-                record.encryptedValues[Field.assetDigest(name)] = assetDigest(data)
+            if case .data(let data) = row[name] ?? .null {
+                // Rewritten from the column only when the bytes actually
+                // changed: setting the field marks it changed, and an
+                // unchanged multi-megabyte asset re-uploading on every save
+                // slows the whole sync down. (Never reused from the archived
+                // record's CKAsset — its temporary file may no longer exist.)
+                let digest = assetDigest(data)
+                if digest != record.encryptedValues[Field.assetDigest(name)] as? String, let fileURL = assetFileURL(for: data) {
+                    record[name] = CKAsset(fileURL: fileURL)
+                    record.encryptedValues[Field.assetDigest(name)] = digest
+                }
+            } else if pendingColumns.contains(name) {
+                // NULL because the server's asset hasn't been downloaded yet,
+                // not because it was deleted here: leave the field untouched
+                // (unchanged fields aren't sent), preserving the server's asset.
             } else {
                 record[name] = nil
                 record.encryptedValues[Field.assetDigest(name)] = nil
@@ -605,9 +691,12 @@ public actor BlackbirdSkybridge {
         for name in T.skybridgeSyncedColumnNames() {
             if !valuesEquivalent(row[name] ?? .null, blackbirdValue(from: record.encryptedValues[name])) { return false }
         }
+        let pendingColumns = Set(instance.skybridgeDecodedMetadata.pendingAssetColumns ?? [])
         for name in T.skybridgeAssetColumnNames() {
             var localDigest: String? = nil
             if case .data(let data) = row[name] ?? .null { localDigest = assetDigest(data) }
+            // A pending column's NULL is awaiting download, not a local edit.
+            if localDigest == nil, pendingColumns.contains(name) { continue }
             if localDigest != record.encryptedValues[Field.assetDigest(name)] as? String { return false }
         }
         // Falls back to modificationDate like applyServerRecord does, so a record from a
