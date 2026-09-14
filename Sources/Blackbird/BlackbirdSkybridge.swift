@@ -34,6 +34,7 @@
 
 import Foundation
 import CloudKit
+import CryptoKit
 @preconcurrency import Combine
 import os.log
 
@@ -62,10 +63,20 @@ public protocol BlackbirdSkybridgeSyncable: BlackbirdModel {
 
     /// Columns that should NOT be sent to CloudKit, e.g. `[ \.$localDraft ]`. Default: none.
     static var skybridgeExcludedColumns: [BlackbirdColumnKeyPath] { get }
+
+    /// `Data?` columns whose contents sync as `CKAsset`s on the record instead
+    /// of inline field values, e.g. `[ \.$image ]` — for blobs that could
+    /// exceed CloudKit's inline record size limits. Default: none.
+    ///
+    /// Asset contents still live in the local column: uploads write them out
+    /// to temporary files, and fetched assets are read back into the column,
+    /// so every synced asset is always fully present locally.
+    static var skybridgeAssetColumns: [BlackbirdColumnKeyPath] { get }
 }
 
 extension BlackbirdSkybridgeSyncable {
     public static var skybridgeExcludedColumns: [BlackbirdColumnKeyPath] { [] }
+    public static var skybridgeAssetColumns: [BlackbirdColumnKeyPath] { [] }
 }
 
 private let skybridgeMetadataColumnName = "skybridgeMetadata"
@@ -109,9 +120,14 @@ extension BlackbirdSkybridgeSyncable {
     internal static func skybridgeSyncedColumnNames() -> [String] {
         let excludedNames = Set(skybridgeExcludedColumns.map { columnInfoFromKeyPath($0).name })
         let primaryKeyNames = Set(primaryKey.map { columnInfoFromKeyPath($0).name })
+        let assetNames = Set(skybridgeAssetColumnNames())
         return table.columns.map(\.name).filter {
-            $0 != skybridgeMetadataColumnName && !excludedNames.contains($0) && !primaryKeyNames.contains($0)
+            $0 != skybridgeMetadataColumnName && !excludedNames.contains($0) && !primaryKeyNames.contains($0) && !assetNames.contains($0)
         }
+    }
+
+    internal static func skybridgeAssetColumnNames() -> [String] {
+        skybridgeAssetColumns.map { columnInfoFromKeyPath($0).name }
     }
 
     internal var skybridgeDecodedMetadata: SkybridgeMetadata { SkybridgeMetadata.decode(skybridgeMetadata) }
@@ -131,6 +147,13 @@ extension BlackbirdSkybridgeSyncable {
         }
         if !table.columnNames.contains(skybridgeMetadataColumnName) {
             fatalError("Skybridge: \(tableName) must declare `@BlackbirdColumn var skybridgeMetadata: Data?`")
+        }
+        for keyPath in skybridgeAssetColumns {
+            let info = columnInfoFromKeyPath(keyPath)
+            // Optional columns report their type as Optional<Data>.
+            if info.type != Data.self, info.type != Optional<Data>.self {
+                fatalError("Skybridge: \(tableName).\(info.name) is declared as an asset column but isn't a Data column")
+            }
         }
         _ = skybridgeSyncedColumnNames() // traps on excluded key-paths that aren't @BlackbirdColumn columns
     }
@@ -177,6 +200,12 @@ internal struct BlackbirdSkybridgeState: BlackbirdModel {
 public actor BlackbirdSkybridge {
     private enum Field {
         static let lastModified = "skybridge_lastModified"
+
+        // Asset-column contents can't be compared through the record like
+        // inline values (a last-synced archive's asset file may be gone), so
+        // each asset column carries a digest of its contents in this sibling
+        // encrypted field, compared instead.
+        static func assetDigest(_ columnName: String) -> String { columnName + "_skybridgeAssetDigest" }
     }
 
     private static let logger = Logger(subsystem: Blackbird.loggingSubsystem, category: "Skybridge")
@@ -235,6 +264,8 @@ public actor BlackbirdSkybridge {
         let engine = CKSyncEngine(configuration)
         self.engine = engine
         Self.logger.info("☁️ Skybridge started: \(self.models.keys.sorted().joined(separator: ", "), privacy: .public)")
+
+        Task.detached(priority: .background) { Self.cleanUpStagedAssets() }
 
         if stateSerialization == nil {
             // First run (or state was lost): create the zone and upload everything.
@@ -355,9 +386,24 @@ public actor BlackbirdSkybridge {
         let recordID = record.recordID
 
         // Extracted before the transaction: CKRecord isn't Sendable.
-        let serverValues: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnNames().map {
+        var extractedValues: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnNames().map {
             ($0, Self.blackbirdValue(from: record.encryptedValues[$0]))
         }
+        for name in T.skybridgeAssetColumnNames() {
+            guard let asset = record[name] as? CKAsset else {
+                extractedValues.append((name, .null))
+                continue
+            }
+            // An asset the engine failed to materialize must not be applied
+            // as emptiness — that would destroy the local copy (and, via the
+            // resulting re-upload, eventually the server's).
+            guard let fileURL = asset.fileURL, let data = try? Data(contentsOf: fileURL) else {
+                Self.logger.error("☁️🛑 Skybridge: cannot read fetched asset \(name, privacy: .public) of \(recordID.recordName, privacy: .public); skipping record")
+                return
+            }
+            extractedValues.append((name, .data(data)))
+        }
+        let serverValues = extractedValues
 
         do {
             // One transaction, so a concurrent local writer can't be clobbered by a stale row.
@@ -539,6 +585,17 @@ public actor BlackbirdSkybridge {
         for name in T.skybridgeSyncedColumnNames() {
             setValue(row[name] ?? .null, on: record, forKey: name)
         }
+        for name in T.skybridgeAssetColumnNames() {
+            // Always rewritten from the column, never reused from the archived
+            // record: an archived CKAsset's temporary file may no longer exist.
+            if case .data(let data) = row[name] ?? .null, let fileURL = assetFileURL(for: data) {
+                record[name] = CKAsset(fileURL: fileURL)
+                record.encryptedValues[Field.assetDigest(name)] = assetDigest(data)
+            } else {
+                record[name] = nil
+                record.encryptedValues[Field.assetDigest(name)] = nil
+            }
+        }
         record.encryptedValues[Field.lastModified] = metadata.syncLastModifiedDate ?? Date()
         return record
     }
@@ -547,6 +604,11 @@ public actor BlackbirdSkybridge {
         let row = rowRepresentation(of: instance)
         for name in T.skybridgeSyncedColumnNames() {
             if !valuesEquivalent(row[name] ?? .null, blackbirdValue(from: record.encryptedValues[name])) { return false }
+        }
+        for name in T.skybridgeAssetColumnNames() {
+            var localDigest: String? = nil
+            if case .data(let data) = row[name] ?? .null { localDigest = assetDigest(data) }
+            if localDigest != record.encryptedValues[Field.assetDigest(name)] as? String { return false }
         }
         // Falls back to modificationDate like applyServerRecord does, so a record from a
         // client that doesn't set the field can't re-upload once per receiving device.
@@ -612,6 +674,42 @@ public actor BlackbirdSkybridge {
             case (nil, nil): true
             case (let a?, let b?): abs(a.timeIntervalSince(b)) < 0.001
             default: false
+        }
+    }
+
+    // MARK: - Asset staging
+
+    private static func assetDigest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static var assetStagingDirectory: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("BlackbirdSkybridgeAssets", isDirectory: true)
+    }
+
+    /// Stages asset contents in a temporary file for CKAsset to upload from.
+    /// Content-addressed naming, so re-uploads of the same bytes reuse one
+    /// file and nothing is ever staged twice.
+    private static func assetFileURL(for data: Data) -> URL? {
+        let directory = assetStagingDirectory
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent(assetDigest(data))
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            do { try data.write(to: fileURL) } catch { return nil }
+        }
+        return fileURL
+    }
+
+    /// Staged files can't be deleted at any known-safe moment (the engine
+    /// uploads them at its own pace), so week-old leftovers are swept at startup.
+    private nonisolated static func cleanUpStagedAssets() {
+        let cutoff = Date(timeIntervalSinceNow: -7 * 86400)
+        guard let files = try? FileManager.default.contentsOfDirectory(at: assetStagingDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        for fileURL in files {
+            let modified = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if modified < cutoff {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
         }
     }
 
