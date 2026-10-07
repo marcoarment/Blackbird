@@ -20,7 +20,8 @@ let package = Package(
     targets: [
         .target(
             name: "Blackbird",
-            dependencies: []
+            dependencies: [],
+            linkerSettings: [.linkedLibrary("z")]
         ),
         .testTarget(
             name: "BlackbirdTests",

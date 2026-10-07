@@ -35,6 +35,7 @@
 import Foundation
 import CloudKit
 import CryptoKit
+import zlib
 @preconcurrency import Combine
 import os.log
 
@@ -82,9 +83,36 @@ extension BlackbirdSkybridgeSyncable {
 private let skybridgeMetadataColumnName = "skybridgeMetadata"
 
 /// The decoded contents of a row's `skybridgeMetadata` column.
+///
+/// Two formats exist. The original stored a full `CKRecord` archive of the record as last synced
+/// (`ckRecordData`), which duplicated every synced value in each row and had to be unarchived to
+/// compare against. The current format keeps only what's needed: the record's system fields (so
+/// uploads carry the right change tag), a fingerprint of the synced content as last confirmed
+/// with the server, and the digest of each asset column. Rows in the original format are
+/// upgraded in place the first time they're touched, and by a background pass at startup, so
+/// existing databases keep working unchanged.
 internal struct SkybridgeMetadata: Codable, Sendable {
-    /// An archive of the CKRecord as last synced with the server.
+    /// Original format: an archive of the whole CKRecord as last synced. Read only to upgrade.
     var ckRecordData: Data? = nil
+
+    /// Interim format: an uncompressed archive of the last-synced record's system fields. Read only.
+    var systemFields: Data? = nil
+
+    /// Current format: the system-fields archive compressed against a per-record-type template
+    /// (see ``SkybridgeArchiveCodec``), typically under 100 bytes instead of ~1.7 KB.
+    var packedSystemFields: Data? = nil
+
+    /// Current format: fingerprint (SHA-256, 32 bytes) of the synced columns, asset digests, and
+    /// last-write timestamp as last confirmed with the server. A row whose own fingerprint matches
+    /// has no local edits.
+    var syncedFingerprint: Data? = nil
+
+    /// Current format: digest of each asset column's bytes as last synced, keyed by column name.
+    var assetDigests: [String: String]? = nil
+
+    /// Current format: the last-write timestamp as last confirmed with the server. Decides whether
+    /// a local edit needs a fresh timestamp (the writer didn't bump it) before uploading.
+    var syncedLastModifiedDate: Date? = nil
 
     /// The local-edit timestamp used for last-write-wins conflict resolution.
     var syncLastModifiedDate: Date? = nil
@@ -96,7 +124,45 @@ internal struct SkybridgeMetadata: Codable, Sendable {
     /// asset on the next upload.
     var pendingAssetColumns: [String]? = nil
 
-    var isEmpty: Bool { ckRecordData == nil && syncLastModifiedDate == nil && (pendingAssetColumns?.isEmpty ?? true) }
+    init() { }
+
+    init(ckRecordData: Data? = nil, syncLastModifiedDate: Date? = nil) {
+        self.ckRecordData = ckRecordData
+        self.syncLastModifiedDate = syncLastModifiedDate
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ckRecordData, systemFields, packedSystemFields, syncedFingerprint, assetDigests, syncedLastModifiedDate, syncLastModifiedDate, pendingAssetColumns
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ckRecordData = try c.decodeIfPresent(Data.self, forKey: .ckRecordData)
+        systemFields = try c.decodeIfPresent(Data.self, forKey: .systemFields)
+        packedSystemFields = try c.decodeIfPresent(Data.self, forKey: .packedSystemFields)
+        // The fingerprint was briefly stored as a hex string; accept either form.
+        if let data = try? c.decodeIfPresent(Data.self, forKey: .syncedFingerprint) {
+            syncedFingerprint = data
+        } else if let hex = try? c.decodeIfPresent(String.self, forKey: .syncedFingerprint) {
+            syncedFingerprint = Data(hex: hex)
+        }
+        assetDigests = try c.decodeIfPresent([String: String].self, forKey: .assetDigests)
+        syncedLastModifiedDate = try c.decodeIfPresent(Date.self, forKey: .syncedLastModifiedDate)
+        syncLastModifiedDate = try c.decodeIfPresent(Date.self, forKey: .syncLastModifiedDate)
+        pendingAssetColumns = try c.decodeIfPresent([String].self, forKey: .pendingAssetColumns)
+    }
+
+    /// Whether the row has ever been confirmed with the server, in any format.
+    var hasServerBase: Bool { syncedFingerprint != nil || ckRecordData != nil }
+
+    /// Whether the metadata still uses an older format that should be rewritten.
+    var needsUpgrade: Bool { ckRecordData != nil || systemFields != nil }
+
+    var isEmpty: Bool {
+        ckRecordData == nil && systemFields == nil && packedSystemFields == nil && syncedFingerprint == nil
+            && (assetDigests?.isEmpty ?? true) && syncedLastModifiedDate == nil && syncLastModifiedDate == nil
+            && (pendingAssetColumns?.isEmpty ?? true)
+    }
 
     static func decode(_ data: Data?) -> SkybridgeMetadata {
         guard let data else { return SkybridgeMetadata() }
@@ -108,6 +174,119 @@ internal struct SkybridgeMetadata: Codable, Sendable {
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
         return try? encoder.encode(self)
+    }
+
+    /// The last-synced record's system-fields archive, whichever format holds it.
+    func systemFieldsArchive(recordType: String) -> Data? {
+        if let packedSystemFields { return SkybridgeArchiveCodec.unpack(packedSystemFields, recordType: recordType) }
+        return systemFields
+    }
+
+    /// Stores a system-fields archive in the current (compressed) format.
+    mutating func setSystemFieldsArchive(_ archive: Data?, recordType: String) {
+        systemFields = nil
+        packedSystemFields = archive.flatMap { SkybridgeArchiveCodec.pack($0, recordType: recordType) }
+        // If compression ever fails, keep the archive uncompressed rather than lose it.
+        if archive != nil, packedSystemFields == nil { systemFields = archive }
+    }
+
+    /// Forgets the server base so the row uploads fresh as a new record.
+    mutating func clearServerBase() {
+        ckRecordData = nil
+        systemFields = nil
+        packedSystemFields = nil
+        syncedFingerprint = nil
+        assetDigests = nil
+        syncedLastModifiedDate = nil
+    }
+}
+
+extension Data {
+    fileprivate init?(hex: String) {
+        guard hex.count % 2 == 0 else { return nil }
+        var data = Data(capacity: hex.count / 2)
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            data.append(byte)
+            index = next
+        }
+        self = data
+    }
+}
+
+/// Compresses system-fields archives against a template.
+///
+/// `NSKeyedArchiver` output for a record's system fields is almost entirely boilerplate that is
+/// identical for every record of a type in a zone. Raw deflate with that boilerplate as a preset
+/// dictionary (the archive of a placeholder record of the same type) shrinks a ~1.7 KB archive
+/// to under 100 bytes. The template is deterministic, so it is rebuilt on demand and never stored.
+internal enum SkybridgeArchiveCodec {
+    private static let templates = Blackbird.Locked<[String: Data]>([:])
+
+    static func template(recordType: String) -> Data {
+        if let cached = templates.withLock({ $0[recordType] }) { return cached }
+        let placeholder = CKRecord(recordType: recordType, recordID: CKRecord.ID(recordName: "template", zoneID: CKRecordZone.ID(zoneName: "Skybridge")))
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        placeholder.encodeSystemFields(with: archiver)
+        archiver.finishEncoding()
+        let data = archiver.encodedData
+        templates.withLock { $0[recordType] = data }
+        return data
+    }
+
+    static func pack(_ data: Data, recordType: String) -> Data? {
+        guard !data.isEmpty else { return nil }
+        let dictionary = template(recordType: recordType)
+        var stream = z_stream()
+        guard deflateInit2_(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, -15, 9, Z_DEFAULT_STRATEGY, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
+        defer { deflateEnd(&stream) }
+        let dictionarySet = dictionary.withUnsafeBytes { deflateSetDictionary(&stream, $0.baseAddress?.assumingMemoryBound(to: Bytef.self), uInt(dictionary.count)) }
+        guard dictionarySet == Z_OK else { return nil }
+        var output = Data(count: Int(deflateBound(&stream, uLong(data.count))) + 64)
+        let capacity = output.count
+        var status: Int32 = Z_OK
+        data.withUnsafeBytes { input in
+            output.withUnsafeMutableBytes { out in
+                stream.next_in = UnsafeMutablePointer(mutating: input.baseAddress!.assumingMemoryBound(to: Bytef.self))
+                stream.avail_in = uInt(data.count)
+                stream.next_out = out.baseAddress!.assumingMemoryBound(to: Bytef.self)
+                stream.avail_out = uInt(capacity)
+                status = deflate(&stream, Z_FINISH)
+            }
+        }
+        guard status == Z_STREAM_END else { return nil }
+        output.count = Int(stream.total_out)
+        return output
+    }
+
+    static func unpack(_ data: Data, recordType: String) -> Data? {
+        guard !data.isEmpty else { return nil }
+        let dictionary = template(recordType: recordType)
+        var stream = z_stream()
+        guard inflateInit2_(&stream, -15, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
+        defer { inflateEnd(&stream) }
+        let dictionarySet = dictionary.withUnsafeBytes { inflateSetDictionary(&stream, $0.baseAddress?.assumingMemoryBound(to: Bytef.self), uInt(dictionary.count)) }
+        guard dictionarySet == Z_OK else { return nil }
+        var output = Data()
+        var chunk = [UInt8](repeating: 0, count: 8192)
+        var status: Int32 = Z_OK
+        data.withUnsafeBytes { input in
+            stream.next_in = UnsafeMutablePointer(mutating: input.baseAddress!.assumingMemoryBound(to: Bytef.self))
+            stream.avail_in = uInt(data.count)
+            repeat {
+                chunk.withUnsafeMutableBufferPointer { buffer in
+                    stream.next_out = buffer.baseAddress
+                    stream.avail_out = uInt(buffer.count)
+                    status = inflate(&stream, Z_NO_FLUSH)
+                    let produced = buffer.count - Int(stream.avail_out)
+                    output.append(buffer.baseAddress!, count: produced)
+                }
+            } while status == Z_OK && output.count < 4 * 1024 * 1024
+        }
+        guard status == Z_STREAM_END else { return nil }
+        return output
     }
 }
 
@@ -191,15 +370,49 @@ internal struct BlackbirdSkybridgeState: BlackbirdModel {
     static let singletonID = 0
 }
 
+/// Housekeeping that survives launches: when the last full reconcile ran, and whether every
+/// row's metadata has been upgraded to the current format.
+internal struct BlackbirdSkybridgeInfo: BlackbirdModel {
+    @BlackbirdColumn var id: Int
+    @BlackbirdColumn var lastFullReconcile: Date?
+    @BlackbirdColumn var metadataUpgraded: Bool
+
+    static let singletonID = 0
+}
+
+/// Rows written locally that haven't been reconciled with the server yet. Startup reconciles
+/// only these instead of every row of every table.
+internal struct BlackbirdSkybridgeDirtyRow: BlackbirdModel {
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$recordName ]
+
+    @BlackbirdColumn var recordName: String
+    @BlackbirdColumn var tableName: String
+    @BlackbirdColumn var primaryKeyString: String
+
+    var id: String { recordName }
+}
+
+/// Record changes waiting to be handed to the sync engine. The engine's own pending list is
+/// persisted whole on every state update, so bulk operations (first upload, purges) park their
+/// changes here and feed the engine a slice at a time.
+internal struct BlackbirdSkybridgeQueuedChange: BlackbirdModel {
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$recordName ]
+
+    @BlackbirdColumn var recordName: String
+    @BlackbirdColumn var isDeletion: Bool
+
+    var id: String { recordName }
+}
+
 /// Syncs ``BlackbirdSkybridgeSyncable`` tables to CloudKit via CKSyncEngine.
 ///
 /// Sync is fully automatic and silent: conflicts resolve to the latest write,
 /// and errors are logged and retried without ever involving the user.
 ///
-/// Each row's `ckRecordData` holds an archive of the record as last synced with
-/// the server. Comparing a row against that archive distinguishes genuine local
-/// edits (which get uploaded) from echoes of sync-applied writes (ignored), so
-/// no in-memory bookkeeping is needed and devices can't ping-pong updates.
+/// Each row's metadata holds a fingerprint of its content as last confirmed with the server.
+/// Comparing a row's own fingerprint against it distinguishes genuine local edits (which get
+/// uploaded) from echoes of sync-applied writes (ignored), so no in-memory bookkeeping is
+/// needed and devices can't ping-pong updates.
 ///
 /// All rows sync as records in a single private "Skybridge" zone, with the record
 /// type set to the table name and the record name set to "tableName:primaryKey".
@@ -217,6 +430,13 @@ public actor BlackbirdSkybridge {
 
     private static let logger = Logger(subsystem: Blackbird.loggingSubsystem, category: "Skybridge")
 
+    /// How many changes the engine holds at once before the rest wait in the queue table.
+    private static let engineSliceLimit = 2000
+    /// Rows per transaction for bulk work.
+    private static let batchSize = 400
+    /// How often the paginated full reconcile runs.
+    private static let fullReconcileInterval: TimeInterval = 24 * 3600
+
     private let zoneID = CKRecordZone.ID(zoneName: "Skybridge")
     private let syncedTypes: [any BlackbirdSkybridgeSyncable.Type]
 
@@ -224,6 +444,7 @@ public actor BlackbirdSkybridge {
     private var database: Blackbird.Database?
     private var engine: CKSyncEngine?
     private var localChangeTasks: [Task<Void, Never>] = []
+    private var isToppingUp = false
 
     // Deletions this engine has just applied locally, keyed by record name. The local
     // deletion echoes back through the change stream as a missing row, which must not
@@ -251,6 +472,9 @@ public actor BlackbirdSkybridge {
         self.database = database
 
         try? await BlackbirdSkybridgeState.resolveSchema(in: database)
+        try? await BlackbirdSkybridgeInfo.resolveSchema(in: database)
+        try? await BlackbirdSkybridgeDirtyRow.resolveSchema(in: database)
+        try? await BlackbirdSkybridgeQueuedChange.resolveSchema(in: database)
 
         for type in syncedTypes {
             type.skybridgeValidate()
@@ -273,7 +497,6 @@ public actor BlackbirdSkybridge {
         Self.logger.info("☁️ Skybridge started: \(self.models.keys.sorted().joined(separator: ", "), privacy: .public)")
 
         Task.detached(priority: .background) { Self.cleanUpStagedAssets() }
-        Task { [weak self] in await self?.refetchRecordsWithPendingAssets() }
 
         if stateSerialization == nil {
             // First run (or state was lost): create the zone and upload everything.
@@ -290,11 +513,34 @@ public actor BlackbirdSkybridge {
         }
 
         if stateSerialization != nil {
-            // Catch local changes made before this subscription existed (e.g. rows
-            // written between database open and start, or by another process).
-            for type in syncedTypes {
-                await handleLocalChange(tableName: type.tableName, primaryKeys: nil)
-            }
+            // Rows written since their last reconcile (e.g. the app was killed mid-sync).
+            await reconcileDirtyRows()
+        }
+        await topUpPendingChanges()
+
+        Task(priority: .background) { [weak self] in
+            await self?.runHousekeeping()
+        }
+    }
+
+    /// Slow, resumable work that never blocks the app: upgrading metadata left in the original
+    /// format, retrying pending assets, and the periodic full reconcile.
+    private func runHousekeeping() async {
+        guard let database else { return }
+        let info = (try? await BlackbirdSkybridgeInfo.read(from: database, id: BlackbirdSkybridgeInfo.singletonID))
+            ?? BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: nil, metadataUpgraded: false)
+
+        if !info.metadataUpgraded {
+            for model in models.values { await upgradeMetadata(model) }
+            try? await BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: info.lastFullReconcile, metadataUpgraded: true).write(to: database)
+            Self.logger.info("☁️ Skybridge metadata upgraded to the current format")
+        }
+
+        await refetchRecordsWithPendingAssets()
+
+        if (info.lastFullReconcile ?? .distantPast) < Date(timeIntervalSinceNow: -Self.fullReconcileInterval) {
+            for model in models.values { await reconcileAllRows(model) }
+            try? await BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: Date(), metadataUpgraded: true).write(to: database)
         }
     }
 
@@ -304,14 +550,69 @@ public actor BlackbirdSkybridge {
         CKRecord.ID(recordName: "\(tableName):\(primaryKeyString)", zoneID: zoneID)
     }
 
+    private func recordName(tableName: String, primaryKeyString: String) -> String {
+        "\(tableName):\(primaryKeyString)"
+    }
+
     /// Resolves a record ID back to its model type and primary-key value. Record
     /// names are "tableName:primaryKey"; table names never contain a colon.
     private func modelAndPrimaryKey(for recordID: CKRecord.ID) -> (model: any BlackbirdSkybridgeSyncable.Type, primaryKey: Blackbird.Value)? {
-        let name = recordID.recordName
+        modelAndPrimaryKey(forRecordName: recordID.recordName)
+    }
+
+    private func modelAndPrimaryKey(forRecordName name: String) -> (model: any BlackbirdSkybridgeSyncable.Type, primaryKey: Blackbird.Value)? {
         guard let separator = name.firstIndex(of: ":"), let model = models[String(name[name.startIndex..<separator])] else { return nil }
         let primaryKeyString = String(name[name.index(after: separator)...])
         guard let primaryKey = model.skybridgePrimaryKeyValue(fromString: primaryKeyString) else { return nil }
         return (model, primaryKey)
+    }
+
+    // MARK: - Pending changes
+    //
+    // The engine's pending list is serialized whole on every state update, so it is kept to a
+    // bounded slice; everything beyond that waits in the queue table and is fed in as sends
+    // complete. Changes that fit go straight to the engine.
+
+    private func enqueue(_ changes: [CKSyncEngine.PendingRecordZoneChange]) async {
+        guard let engine, let database, !changes.isEmpty else { return }
+        let room = max(0, Self.engineSliceLimit - engine.state.pendingRecordZoneChanges.count)
+        let direct = Array(changes.prefix(room))
+        let queued = Array(changes.dropFirst(room))
+        if !direct.isEmpty { engine.state.add(pendingRecordZoneChanges: direct) }
+        if !queued.isEmpty {
+            let rows = queued.map { change -> BlackbirdSkybridgeQueuedChange in
+                switch change {
+                    case .saveRecord(let id): return BlackbirdSkybridgeQueuedChange(recordName: id.recordName, isDeletion: false)
+                    case .deleteRecord(let id): return BlackbirdSkybridgeQueuedChange(recordName: id.recordName, isDeletion: true)
+                    @unknown default: return BlackbirdSkybridgeQueuedChange(recordName: "", isDeletion: false)
+                }
+            }.filter { !$0.recordName.isEmpty }
+            for chunk in rows.chunked(into: Self.batchSize) {
+                try? await database.transaction { core in
+                    for row in chunk { try row.write(to: core) }
+                }
+            }
+        }
+    }
+
+    /// Moves queued changes into the engine while it has room.
+    private func topUpPendingChanges() async {
+        guard let engine, let database, !isToppingUp else { return }
+        isToppingUp = true
+        defer { isToppingUp = false }
+        while engine.state.pendingRecordZoneChanges.count < Self.engineSliceLimit {
+            let room = Self.engineSliceLimit - engine.state.pendingRecordZoneChanges.count
+            let limit = min(room, Self.batchSize)
+            guard let rows = try? await BlackbirdSkybridgeQueuedChange.read(from: database, sqlWhere: "1 ORDER BY rowid LIMIT \(limit)"), !rows.isEmpty else { return }
+            let changes: [CKSyncEngine.PendingRecordZoneChange] = rows.map {
+                let id = CKRecord.ID(recordName: $0.recordName, zoneID: zoneID)
+                return $0.isDeletion ? .deleteRecord(id) : .saveRecord(id)
+            }
+            engine.state.add(pendingRecordZoneChanges: changes)
+            try? await database.transaction { core in
+                for row in rows { try row.delete(from: core) }
+            }
+        }
     }
 
     // MARK: - Local changes
@@ -320,33 +621,169 @@ public actor BlackbirdSkybridge {
         guard let model = models[tableName] else { return }
 
         if let primaryKeys {
-            for key in primaryKeys {
-                guard let primaryKey = key.first else { continue }
-                await reconcileLocalRow(model, primaryKey: primaryKey)
-            }
+            let keys = primaryKeys.compactMap(\.first)
+            await markDirty(model, primaryKeys: keys)
+            await reconcileRows(model, primaryKeys: keys)
         } else {
             // Unknown scope of changes: re-check every row.
             await reconcileAllRows(model)
         }
     }
 
+    /// Records touched keys before reconciling them, so a crash mid-way leaves them for the
+    /// next launch instead of the next daily pass.
+    private func markDirty<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, primaryKeys: [Blackbird.Value]) async {
+        guard let database else { return }
+        let rows = primaryKeys.compactMap { key -> BlackbirdSkybridgeDirtyRow? in
+            guard let keyString = key.stringValue else { return nil }
+            return BlackbirdSkybridgeDirtyRow(recordName: recordName(tableName: T.tableName, primaryKeyString: keyString), tableName: T.tableName, primaryKeyString: keyString)
+        }
+        for chunk in rows.chunked(into: Self.batchSize) {
+            try? await database.transaction { core in
+                for row in chunk { try row.write(to: core) }
+            }
+        }
+    }
+
+    private func clearDirty(recordNames: [String]) async {
+        guard let database, !recordNames.isEmpty else { return }
+        for chunk in recordNames.chunked(into: Self.batchSize) {
+            try? await database.transaction { core in
+                for name in chunk {
+                    if let row = try BlackbirdSkybridgeDirtyRow.read(from: core, primaryKey: name) { try row.delete(from: core) }
+                }
+            }
+        }
+    }
+
+    private func reconcileDirtyRows() async {
+        guard let database else { return }
+        let dirty = (try? await BlackbirdSkybridgeDirtyRow.read(from: database, matching: .all)) ?? []
+        guard !dirty.isEmpty else { return }
+        Self.logger.info("☁️ Skybridge reconciling \(dirty.count) rows left dirty")
+        let byTable = Dictionary(grouping: dirty, by: \.tableName)
+        for (tableName, rows) in byTable {
+            guard let model = models[tableName] else {
+                await clearDirty(recordNames: rows.map(\.recordName))
+                continue
+            }
+            let keys = rows.compactMap { model.skybridgePrimaryKeyValue(fromString: $0.primaryKeyString) }
+            await reconcileRows(model, primaryKeys: keys)
+        }
+    }
+
+    /// Checks a set of rows cheaply (one bulk read, fingerprints in memory) and only takes a
+    /// transaction for rows that actually differ from their server base or are missing.
+    private func reconcileRows<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, primaryKeys: [Blackbird.Value]) async {
+        guard let database, !primaryKeys.isEmpty else { return }
+        var changed: [Blackbird.Value] = []
+        var cleanNames: [String] = []
+        for chunk in primaryKeys.chunked(into: Self.batchSize) {
+            let instances = (try? await T.read(from: database, primaryKeys: chunk)) ?? []
+            var found = Set<Blackbird.Value>()
+            for instance in instances {
+                let key = Self.primaryKeyValue(of: instance)
+                found.insert(key)
+                if Self.isClean(instance) {
+                    if let keyString = key.stringValue { cleanNames.append(recordName(tableName: T.tableName, primaryKeyString: keyString)) }
+                } else {
+                    changed.append(key)
+                }
+            }
+            changed += chunk.filter { !found.contains($0) } // missing rows: deleted locally
+        }
+        await clearDirty(recordNames: cleanNames)
+        for key in changed {
+            await reconcileLocalRow(type, primaryKey: key)
+        }
+    }
+
+    /// Whether a row matches its server base in the current metadata format, without a transaction.
+    private static func isClean<T: BlackbirdSkybridgeSyncable>(_ instance: T) -> Bool {
+        let metadata = instance.skybridgeDecodedMetadata
+        guard !metadata.needsUpgrade, let fingerprint = metadata.syncedFingerprint else { return false }
+        return localFingerprint(of: instance, metadata: metadata) == fingerprint
+    }
+
+    /// Walks a whole table in primary-key pages, comparing fingerprints in memory and sending only
+    /// the rows that differ through the transactional path. Yields between pages.
     private func reconcileAllRows<T: BlackbirdSkybridgeSyncable>(_ type: T.Type) async {
         guard let database else { return }
-        for instance in (try? await T.read(from: database, matching: .all)) ?? [] {
-            await reconcileLocalRow(type, primaryKey: Self.primaryKeyValue(of: instance))
+        var lastRowID: Int64 = 0
+        while true {
+            let rows = (try? await T.query(in: database, "SELECT rowid AS __rowid, * FROM `\(T.tableName)` WHERE rowid > ? ORDER BY rowid LIMIT \(Self.batchSize)", lastRowID)) ?? []
+            guard !rows.isEmpty else { return }
+            var changed: [Blackbird.Value] = []
+            for row in rows {
+                guard let rowID = row["__rowid"]?.int64Value else { continue }
+                lastRowID = max(lastRowID, rowID)
+                var plain = row.row
+                plain.removeValue(forKey: "__rowid")
+                guard let instance = try? T.instance(from: plain, in: database) else { continue }
+                if !Self.isClean(instance) { changed.append(Self.primaryKeyValue(of: instance)) }
+            }
+            for key in changed { await reconcileLocalRow(type, primaryKey: key) }
+            await Task.yield()
         }
+    }
+
+    /// Rewrites rows still carrying a full-record archive into the current format, in pages.
+    private func upgradeMetadata<T: BlackbirdSkybridgeSyncable>(_ type: T.Type) async {
+        guard let database else { return }
+        var lastRowID: Int64 = 0
+        while true {
+            let rows = (try? await T.query(in: database, "SELECT rowid AS __rowid, `\(Self.primaryKeyName(T.self))` AS __pk, `\(skybridgeMetadataColumnName)` AS __meta FROM `\(T.tableName)` WHERE rowid > ? ORDER BY rowid LIMIT \(Self.batchSize)", lastRowID)) ?? []
+            guard !rows.isEmpty else { return }
+            var keys: [Blackbird.Value] = []
+            for row in rows {
+                guard let rowID = row["__rowid"]?.int64Value else { continue }
+                lastRowID = max(lastRowID, rowID)
+                if case .data(let data) = row["__meta"] ?? .null, SkybridgeMetadata.decode(data).needsUpgrade, let key = row["__pk"] { keys.append(key) }
+            }
+            if !keys.isEmpty {
+                let batch = keys
+                try? await database.transaction { core in
+                    for key in batch {
+                        _ = try? T.modify(in: core, primaryKey: key) { _, instance in
+                            var metadata = instance.skybridgeDecodedMetadata
+                            if Self.upgrade(&metadata, for: T.self) { instance.setSkybridgeMetadata(metadata) }
+                        }
+                    }
+                }
+            }
+            await Task.yield()
+        }
+    }
+
+    /// Converts original-format metadata in place. Returns whether anything changed.
+    internal static func upgrade<T: BlackbirdSkybridgeSyncable>(_ metadata: inout SkybridgeMetadata, for type: T.Type) -> Bool {
+        guard metadata.needsUpgrade else { return false }
+        if let archive = metadata.ckRecordData {
+            if let record = decodeRecord(archive) {
+                metadata.setSystemFieldsArchive(encodeSystemFields(record), recordType: T.tableName)
+                metadata.syncedFingerprint = recordFingerprint(record, for: T.self)
+                metadata.assetDigests = assetDigests(from: record, for: T.self)
+                metadata.syncedLastModifiedDate = (record.encryptedValues[Field.lastModified] as? Date) ?? record.modificationDate
+            }
+            // An unreadable archive is dropped: the row re-uploads as new, which is the safe outcome.
+            metadata.ckRecordData = nil
+        } else if let raw = metadata.systemFields {
+            // Interim format: just compress the archive.
+            metadata.setSystemFieldsArchive(raw, recordType: T.tableName)
+        }
+        return true
     }
 
     private enum ReconcileAction: Sendable {
         case ignore, upload, deleteFromServer
     }
 
-    /// Compares a row against its last-synced record and schedules an upload
-    /// (or a deletion) if they differ. Rows that match their last-synced state
-    /// are echoes of changes this engine just applied, and are ignored.
+    /// Compares a row against its server base and schedules an upload (or a deletion) if they
+    /// differ. Rows that match are echoes of changes this engine just applied, and are ignored.
     private func reconcileLocalRow<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, primaryKey: Blackbird.Value) async {
-        guard let database, let engine, let primaryKeyString = primaryKey.stringValue else { return }
-        let recordID = recordID(tableName: T.tableName, primaryKeyString: primaryKeyString)
+        guard let database, let primaryKeyString = primaryKey.stringValue else { return }
+        let recordName = recordName(tableName: T.tableName, primaryKeyString: primaryKeyString)
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
 
         // The read, comparison, and timestamp bump happen in one transaction so a
         // concurrent writer can't be overwritten by a stale full-row rewrite.
@@ -354,15 +791,21 @@ public actor BlackbirdSkybridge {
             guard var instance = try T.read(from: core, primaryKey: primaryKey) else { return ReconcileAction.deleteFromServer }
 
             var metadata = instance.skybridgeDecodedMetadata
-            let lastSyncedRecord = metadata.ckRecordData.flatMap { Self.decodeRecord($0) }
-            if let lastSyncedRecord, Self.recordMatches(lastSyncedRecord, instance: instance) { return ReconcileAction.ignore }
+            var metadataChanged = Self.upgrade(&metadata, for: T.self)
+            if let fingerprint = metadata.syncedFingerprint, Self.localFingerprint(of: instance, metadata: metadata) == fingerprint {
+                if metadataChanged { instance.setSkybridgeMetadata(metadata); try instance.write(to: core) }
+                return ReconcileAction.ignore
+            }
 
             // A genuine local edit: bump the last-write-wins timestamp if the
             // writer didn't. (The rewrite re-enters here once, then no-ops.)
-            let lastSyncedModified = lastSyncedRecord?.encryptedValues[Field.lastModified] as? Date
+            let lastSyncedModified = metadata.syncedLastModifiedDate
             let localModified = metadata.syncLastModifiedDate
             if localModified == nil || (lastSyncedModified != nil && localModified! <= lastSyncedModified!) {
                 metadata.syncLastModifiedDate = Date()
+                metadataChanged = true
+            }
+            if metadataChanged {
                 instance.setSkybridgeMetadata(metadata)
                 try instance.write(to: core)
             }
@@ -371,30 +814,34 @@ public actor BlackbirdSkybridge {
 
         switch action {
             case .ignore:
-                break
+                await clearDirty(recordNames: [recordName])
             case .upload:
-                engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+                await enqueue([.saveRecord(recordID)])
+                await clearDirty(recordNames: [recordName])
             case .deleteFromServer:
-                if !consumeServerDeletion(recordName: recordID.recordName) {
-                    engine.state.add(pendingRecordZoneChanges: [.deleteRecord(recordID)])
+                if !consumeServerDeletion(recordName: recordName) {
+                    await enqueue([.deleteRecord(recordID)])
                 }
+                await clearDirty(recordNames: [recordName])
         }
     }
 
     // MARK: - Server changes
 
-    /// Applies a record fetched from (or rejected by) the server, keeping the
-    /// latest write: if the local row was modified more recently, its values
-    /// win and are re-uploaded on top of the server record; otherwise the
-    /// server values are applied locally.
-    private func applyServerRecord<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, record: CKRecord, primaryKey: Blackbird.Value) async {
-        guard let database, let engine else { return }
-        let serverModified = record.encryptedValues[Field.lastModified] as? Date ?? record.modificationDate ?? .distantPast
-        guard let archive = Self.encodeRecord(record) else { return }
-        let recordID = record.recordID
+    /// A fetched record reduced to Sendable parts, so it can be applied inside a transaction.
+    private struct ServerRecord: Sendable {
+        let recordName: String
+        let primaryKey: Blackbird.Value
+        let serverModified: Date
+        let systemFields: Data?
+        let fingerprint: Data
+        let assetDigests: [String: String]
+        let values: [(name: String, value: Blackbird.Value)]
+        let pendingAssetColumns: [String]
+    }
 
-        // Extracted before the transaction: CKRecord isn't Sendable.
-        var extractedValues: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnNames().map {
+    private func serverRecord<T: BlackbirdSkybridgeSyncable>(from record: CKRecord, for type: T.Type, primaryKey: Blackbird.Value) -> ServerRecord {
+        var values: [(name: String, value: Blackbird.Value)] = T.skybridgeSyncedColumnNames().map {
             ($0, Self.blackbirdValue(from: record.encryptedValues[$0]))
         }
         // An asset the engine failed to materialize is applied as *pending*:
@@ -402,60 +849,130 @@ public actor BlackbirdSkybridge {
         // immediately, the column goes NULL, and the pending bookkeeping keeps
         // the row from reading as a local deletion — which would upload the
         // NULL and destroy the server's asset. A refetch retries the download.
-        var pendingAssetColumns: [String] = []
+        var pending: [String] = []
         for name in T.skybridgeAssetColumnNames() {
             guard let asset = record[name] as? CKAsset else {
-                extractedValues.append((name, .null))
+                values.append((name, .null))
                 continue
             }
             if let fileURL = asset.fileURL, let data = try? Data(contentsOf: fileURL) {
-                extractedValues.append((name, .data(data)))
+                values.append((name, .data(data)))
             } else {
-                Self.logger.error("☁️⌛ Skybridge: cannot read fetched asset \(name, privacy: .public) of \(recordID.recordName, privacy: .public); applying as pending")
-                extractedValues.append((name, .null))
-                pendingAssetColumns.append(name)
+                Self.logger.error("☁️⌛ Skybridge: cannot read fetched asset \(name, privacy: .public) of \(record.recordID.recordName, privacy: .public); applying as pending")
+                values.append((name, .null))
+                pending.append(name)
             }
         }
-        let serverValues = extractedValues
-        let pending = pendingAssetColumns
+        return ServerRecord(
+            recordName: record.recordID.recordName,
+            primaryKey: primaryKey,
+            serverModified: record.encryptedValues[Field.lastModified] as? Date ?? record.modificationDate ?? .distantPast,
+            systemFields: Self.encodeSystemFields(record),
+            fingerprint: Self.recordFingerprint(record, for: T.self),
+            assetDigests: Self.assetDigests(from: record, for: T.self),
+            values: values,
+            pendingAssetColumns: pending
+        )
+    }
 
-        do {
-            // One transaction, so a concurrent local writer can't be clobbered by a stale row.
-            let localWins: Bool = try await database.transaction { core in
-                let existing = try T.read(from: core, primaryKey: primaryKey)
+    /// Applies fetched records in one transaction per batch, keeping the latest write of each:
+    /// if the local row was modified more recently, its values win and are re-uploaded on top
+    /// of the server record; otherwise the server values are applied locally.
+    private func applyServerRecords<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, records: [ServerRecord]) async {
+        guard let database, !records.isEmpty else { return }
+        for chunk in records.chunked(into: Self.batchSize) {
+            let outcome: (localWins: [String], pendingRefetch: [String]) = (try? await database.transaction { core in
+                var localWins: [String] = []
+                var pendingRefetch: [String] = []
+                for server in chunk {
+                    let existing = try T.read(from: core, primaryKey: server.primaryKey)
 
-                if var existing {
-                    var metadata = existing.skybridgeDecodedMetadata
-                    if let localModified = metadata.syncLastModifiedDate, localModified > serverModified {
-                        // Local wins: keep local values, adopt the server record as the new base, re-send.
-                        metadata.ckRecordData = archive
-                        existing.setSkybridgeMetadata(metadata)
-                        try existing.write(to: core)
-                        return true
+                    if var existing {
+                        var metadata = existing.skybridgeDecodedMetadata
+                        if let localModified = metadata.syncLastModifiedDate, localModified > server.serverModified {
+                            // Local wins: keep local values, adopt the server record as the new base, re-send.
+                            metadata.ckRecordData = nil
+                            metadata.setSystemFieldsArchive(server.systemFields, recordType: T.tableName)
+                            metadata.syncedFingerprint = server.fingerprint
+                            metadata.assetDigests = server.assetDigests.isEmpty ? nil : server.assetDigests
+                            metadata.syncedLastModifiedDate = server.serverModified
+                            existing.setSkybridgeMetadata(metadata)
+                            try existing.write(to: core)
+                            localWins.append(server.recordName)
+                            continue
+                        }
                     }
+
+                    // Server wins (or no local row): overlay the server values onto the row and write it back.
+                    var row: Blackbird.Row = existing.map { Self.rowRepresentation(of: $0) } ?? [:]
+                    row[Self.primaryKeyName(T.self)] = server.primaryKey
+                    for (name, value) in server.values { row[name] = value }
+                    var metadata = SkybridgeMetadata()
+                    metadata.setSystemFieldsArchive(server.systemFields, recordType: T.tableName)
+                    metadata.syncedFingerprint = server.fingerprint
+                    metadata.assetDigests = server.assetDigests.isEmpty ? nil : server.assetDigests
+                    metadata.syncLastModifiedDate = server.serverModified
+                    metadata.syncedLastModifiedDate = server.serverModified
+                    metadata.pendingAssetColumns = server.pendingAssetColumns.isEmpty ? nil : server.pendingAssetColumns
+                    row[skybridgeMetadataColumnName] = metadata.encoded().map { .data($0) } ?? .null
+
+                    let updated = try T.instance(from: row, in: database)
+                    try updated.write(to: core)
+                    if !server.pendingAssetColumns.isEmpty { pendingRefetch.append(server.recordName) }
                 }
+                return (localWins, pendingRefetch)
+            }) ?? ([], [])
 
-                // Server wins (or no local row): overlay the server values onto the row and write it back.
-                var row: Blackbird.Row = existing.map { Self.rowRepresentation(of: $0) } ?? [:]
-                row[T.skybridgePrimaryKeyInfo().name] = primaryKey
-                for (name, value) in serverValues { row[name] = value }
-                row[skybridgeMetadataColumnName] = SkybridgeMetadata(
-                    ckRecordData: archive,
-                    syncLastModifiedDate: serverModified,
-                    pendingAssetColumns: pending.isEmpty ? nil : pending
-                ).encoded().map { .data($0) } ?? .null
+            if !outcome.localWins.isEmpty {
+                await enqueue(outcome.localWins.map { .saveRecord(CKRecord.ID(recordName: $0, zoneID: zoneID)) })
+            }
+            for name in outcome.pendingRefetch { scheduleAssetRefetch(recordID: CKRecord.ID(recordName: name, zoneID: zoneID)) }
+        }
+    }
 
-                let updated = try T.instance(from: row, in: database)
-                try updated.write(to: core)
-                return false
+    private func applyServerRecord(_ record: CKRecord) async {
+        guard let (model, primaryKey) = modelAndPrimaryKey(for: record.recordID) else { return }
+        await applyFetchedRecords(model, records: [record], primaryKeys: [primaryKey])
+    }
+
+    private func applyFetchedRecords<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, records: [CKRecord], primaryKeys: [Blackbird.Value]) async {
+        let extracted = zip(records, primaryKeys).map { serverRecord(from: $0, for: T.self, primaryKey: $1) }
+        await applyServerRecords(T.self, records: extracted)
+    }
+
+    private func handleFetchedRecordZoneChanges(_ changes: CKSyncEngine.Event.FetchedRecordZoneChanges) async {
+        // Group by table so each batch goes through one generic, one transaction.
+        var byTable: [String: (records: [CKRecord], keys: [Blackbird.Value])] = [:]
+        for modification in changes.modifications {
+            guard let (model, primaryKey) = modelAndPrimaryKey(for: modification.record.recordID) else { continue }
+            byTable[model.tableName, default: ([], [])].records.append(modification.record)
+            byTable[model.tableName, default: ([], [])].keys.append(primaryKey)
+        }
+        for (tableName, group) in byTable {
+            guard let model = models[tableName] else { continue }
+            await applyFetchedRecords(model, records: group.records, primaryKeys: group.keys)
+        }
+
+        var deletionsByTable: [String: [(recordName: String, key: Blackbird.Value)]] = [:]
+        for deletion in changes.deletions {
+            guard let (model, primaryKey) = modelAndPrimaryKey(for: deletion.recordID) else { continue }
+            deletionsByTable[model.tableName, default: []].append((deletion.recordID.recordName, primaryKey))
+        }
+        for (tableName, deletions) in deletionsByTable {
+            guard let model = models[tableName] else { continue }
+            await applyServerDeletions(model, deletions: deletions)
+        }
+    }
+
+    private func applyServerDeletions<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, deletions: [(recordName: String, key: Blackbird.Value)]) async {
+        guard let database else { return }
+        for chunk in deletions.chunked(into: Self.batchSize) {
+            for deletion in chunk { noteServerDeletion(recordName: deletion.recordName) }
+            try? await database.transaction { core in
+                for deletion in chunk {
+                    if let instance = try T.read(from: core, primaryKey: deletion.key) { try instance.delete(from: core) }
+                }
             }
-            if localWins {
-                engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-            } else if !pending.isEmpty {
-                scheduleAssetRefetch(recordID: recordID)
-            }
-        } catch {
-            Self.logger.error("☁️🛑 Skybridge: cannot apply server record \(recordID.recordName, privacy: .public): \(error, privacy: .public)")
         }
     }
 
@@ -480,10 +997,8 @@ public actor BlackbirdSkybridge {
     }
 
     private func refetchRecord(recordID: CKRecord.ID) async {
-        guard let (model, primaryKey) = modelAndPrimaryKey(for: recordID),
-              let record = try? await CKContainer.default().privateCloudDatabase.record(for: recordID)
-        else { return }
-        await applyServerRecord(model, record: record, primaryKey: primaryKey)
+        guard let record = try? await CKContainer.default().privateCloudDatabase.record(for: recordID) else { return }
+        await applyServerRecord(record)
     }
 
     private func refetchRecordsWithPendingAssets() async {
@@ -494,29 +1009,39 @@ public actor BlackbirdSkybridge {
 
     private func refetchRecordsWithPendingAssets<T: BlackbirdSkybridgeSyncable>(_ type: T.Type) async {
         guard let database, !T.skybridgeAssetColumns.isEmpty else { return }
-        for instance in (try? await T.read(from: database, matching: .all)) ?? [] {
-            guard let pending = instance.skybridgeDecodedMetadata.pendingAssetColumns, !pending.isEmpty else { continue }
-            let primaryKey = Self.primaryKeyValue(of: instance)
-            guard let primaryKeyString = primaryKey.stringValue else { continue }
-            await refetchRecord(recordID: recordID(tableName: T.tableName, primaryKeyString: primaryKeyString))
+        var lastRowID: Int64 = 0
+        while true {
+            let rows = (try? await T.query(in: database, "SELECT rowid AS __rowid, `\(Self.primaryKeyName(T.self))` AS __pk, `\(skybridgeMetadataColumnName)` AS __meta FROM `\(T.tableName)` WHERE rowid > ? ORDER BY rowid LIMIT \(Self.batchSize)", lastRowID)) ?? []
+            guard !rows.isEmpty else { return }
+            for row in rows {
+                guard let rowID = row["__rowid"]?.int64Value else { continue }
+                lastRowID = max(lastRowID, rowID)
+                guard case .data(let data) = row["__meta"] ?? .null,
+                      let pending = SkybridgeMetadata.decode(data).pendingAssetColumns, !pending.isEmpty,
+                      let keyString = row["__pk"]?.stringValue else { continue }
+                await refetchRecord(recordID: recordID(tableName: T.tableName, primaryKeyString: keyString))
+            }
+            await Task.yield()
         }
     }
 
-    private func applyServerDeletion<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, recordID: CKRecord.ID, primaryKey: Blackbird.Value) async {
-        guard let database, let instance = try? await T.read(from: database, primaryKey: primaryKey) else { return }
-        noteServerDeletion(recordName: recordID.recordName)
-        try? await instance.delete(from: database)
-    }
-
-    /// Replaces a row's last-synced record archive, or discards it to force a fresh upload.
+    /// Records a successful save: the saved record becomes the row's server base.
     /// - Returns: Whether the row exists.
     @discardableResult
-    private func storeServerArchive<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, primaryKey: Blackbird.Value, archive: Data?) async -> Bool {
+    private func storeServerBase<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, primaryKey: Blackbird.Value, savedRecord: CKRecord?) async -> Bool {
         guard let database else { return false }
+        let systemFields = savedRecord.flatMap { Self.encodeSystemFields($0) }
+        let fingerprint = savedRecord.map { Self.recordFingerprint($0, for: T.self) }
+        let digests = savedRecord.map { Self.assetDigests(from: $0, for: T.self) } ?? [:]
+        let syncedModified = savedRecord.flatMap { ($0.encryptedValues[Field.lastModified] as? Date) ?? $0.modificationDate }
         do {
             try await T.modify(in: database, primaryKey: primaryKey) { _, instance in
                 var metadata = instance.skybridgeDecodedMetadata
-                metadata.ckRecordData = archive
+                metadata.ckRecordData = nil
+                metadata.setSystemFieldsArchive(systemFields, recordType: T.tableName)
+                metadata.syncedFingerprint = fingerprint
+                metadata.assetDigests = digests.isEmpty ? nil : digests
+                metadata.syncedLastModifiedDate = syncedModified
                 // Columns that now hold local bytes are no longer awaiting a
                 // download; NULL columns stay pending until a refetch succeeds.
                 if let pending = metadata.pendingAssetColumns, !pending.isEmpty {
@@ -540,15 +1065,15 @@ public actor BlackbirdSkybridge {
 
         for record in event.savedRecords {
             guard let (model, primaryKey) = modelAndPrimaryKey(for: record.recordID) else { continue }
-            await storeServerArchive(model, primaryKey: primaryKey, archive: Self.encodeRecord(record))
+            await storeServerBase(model, primaryKey: primaryKey, savedRecord: record)
         }
 
         for failedSave in event.failedRecordSaves {
             let recordID = failedSave.record.recordID
             switch failedSave.error.code {
                 case .serverRecordChanged:
-                    if let serverRecord = failedSave.error.serverRecord, let (model, primaryKey) = modelAndPrimaryKey(for: recordID) {
-                        await applyServerRecord(model, record: serverRecord, primaryKey: primaryKey)
+                    if let serverRecord = failedSave.error.serverRecord {
+                        await applyServerRecord(serverRecord)
                     }
                 case .zoneNotFound:
                     engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
@@ -569,13 +1094,14 @@ public actor BlackbirdSkybridge {
         }
 
         // Failed deletes (e.g. records already gone from the server) need no recovery.
+        await topUpPendingChanges()
     }
 
     /// Discards stale server metadata for a row and schedules a fresh upload.
     private func clearServerRecordAndResend(recordID: CKRecord.ID) async {
-        guard let engine, let (model, primaryKey) = modelAndPrimaryKey(for: recordID) else { return }
-        if await storeServerArchive(model, primaryKey: primaryKey, archive: nil) {
-            engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+        guard let (model, primaryKey) = modelAndPrimaryKey(for: recordID) else { return }
+        if await storeServerBase(model, primaryKey: primaryKey, savedRecord: nil) {
+            await enqueue([.saveRecord(recordID)])
         }
     }
 
@@ -608,21 +1134,39 @@ public actor BlackbirdSkybridge {
         for model in models.values {
             await scheduleFullUpload(model, clearingServerRecords: clearingServerRecords)
         }
+        await topUpPendingChanges()
     }
 
+    /// Queues every row of a table for upload, in pages, without loading the table into memory.
     private func scheduleFullUpload<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, clearingServerRecords: Bool) async {
-        guard let database, let engine else { return }
-        for instance in (try? await T.read(from: database, matching: .all)) ?? [] {
-            let primaryKey = Self.primaryKeyValue(of: instance)
-            guard let primaryKeyString = primaryKey.stringValue else { continue }
-            if clearingServerRecords, instance.skybridgeDecodedMetadata.ckRecordData != nil {
-                try? await T.modify(in: database, primaryKey: primaryKey) { _, instance in
-                    var metadata = instance.skybridgeDecodedMetadata
-                    metadata.ckRecordData = nil
-                    instance.setSkybridgeMetadata(metadata)
+        guard let database else { return }
+        var lastRowID: Int64 = 0
+        while true {
+            let rows = (try? await T.query(in: database, "SELECT rowid AS __rowid, `\(Self.primaryKeyName(T.self))` AS __pk FROM `\(T.tableName)` WHERE rowid > ? ORDER BY rowid LIMIT \(Self.batchSize)", lastRowID)) ?? []
+            guard !rows.isEmpty else { return }
+            var keys: [Blackbird.Value] = []
+            for row in rows {
+                guard let rowID = row["__rowid"]?.int64Value, let key = row["__pk"] else { continue }
+                lastRowID = max(lastRowID, rowID)
+                keys.append(key)
+            }
+            if clearingServerRecords {
+                let batch = keys
+                try? await database.transaction { core in
+                    for key in batch {
+                        _ = try? T.modify(in: core, primaryKey: key) { _, instance in
+                            var metadata = instance.skybridgeDecodedMetadata
+                            guard metadata.hasServerBase else { return }
+                            metadata.clearServerBase()
+                            instance.setSkybridgeMetadata(metadata)
+                        }
+                    }
                 }
             }
-            engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID(tableName: T.tableName, primaryKeyString: primaryKeyString))])
+            await enqueue(keys.compactMap { key in
+                key.stringValue.map { .saveRecord(recordID(tableName: T.tableName, primaryKeyString: $0)) }
+            })
+            await Task.yield()
         }
     }
 
@@ -641,12 +1185,15 @@ public actor BlackbirdSkybridge {
         // A missing last-write-wins timestamp (e.g. rows queued by a full upload) is
         // assigned and persisted here, before it's stamped into the uploaded record:
         // otherwise the post-save echo check would see a mismatch and re-upload every row.
+        // Original-format metadata is upgraded on the way.
         let instance: T? = try? await T.modify(in: database, primaryKey: primaryKey) { _, instance in
             var metadata = instance.skybridgeDecodedMetadata
+            var changed = Self.upgrade(&metadata, for: T.self)
             if metadata.syncLastModifiedDate == nil {
                 metadata.syncLastModifiedDate = Date()
-                instance.setSkybridgeMetadata(metadata)
+                changed = true
             }
+            if changed { instance.setSkybridgeMetadata(metadata) }
             return instance
         }
         guard let instance else { return nil }
@@ -655,7 +1202,7 @@ public actor BlackbirdSkybridge {
 
     private static func record<T: BlackbirdSkybridgeSyncable>(for instance: T, recordID: CKRecord.ID) -> CKRecord {
         let metadata = instance.skybridgeDecodedMetadata
-        let record = metadata.ckRecordData.flatMap { decodeRecord($0) } ?? CKRecord(recordType: T.tableName, recordID: recordID)
+        let record = metadata.systemFieldsArchive(recordType: T.tableName).flatMap { decodeSystemFields($0) } ?? CKRecord(recordType: T.tableName, recordID: recordID)
         let row = rowRepresentation(of: instance)
         for name in T.skybridgeSyncedColumnNames() {
             setValue(row[name] ?? .null, on: record, forKey: name)
@@ -666,10 +1213,9 @@ public actor BlackbirdSkybridge {
                 // Rewritten from the column only when the bytes actually
                 // changed: setting the field marks it changed, and an
                 // unchanged multi-megabyte asset re-uploading on every save
-                // slows the whole sync down. (Never reused from the archived
-                // record's CKAsset — its temporary file may no longer exist.)
+                // slows the whole sync down.
                 let digest = assetDigest(data)
-                if digest != record.encryptedValues[Field.assetDigest(name)] as? String, let fileURL = assetFileURL(for: data) {
+                if digest != metadata.assetDigests?[name], let fileURL = assetFileURL(for: data) {
                     record[name] = CKAsset(fileURL: fileURL)
                     record.encryptedValues[Field.assetDigest(name)] = digest
                 }
@@ -686,22 +1232,81 @@ public actor BlackbirdSkybridge {
         return record
     }
 
-    private static func recordMatches<T: BlackbirdSkybridgeSyncable>(_ record: CKRecord, instance: T) -> Bool {
+    // MARK: - Fingerprints
+    //
+    // A fingerprint is a digest over the synced columns, the asset digests, and the last-write
+    // timestamp. The row's own fingerprint equals the stored one exactly when the row has no
+    // local edits. Values are canonicalized so SQLite affinity (an integer stored as a double or
+    // vice versa) and sub-millisecond date noise can't produce false mismatches.
+
+    internal static func fingerprint(values: [(name: String, value: Blackbird.Value)], assetDigests: [(name: String, digest: String?)], lastModified: Date?) -> Data {
+        var hasher = SHA256()
+        func feed(_ string: String) {
+            let utf8 = Array(string.utf8)
+            withUnsafeBytes(of: UInt32(utf8.count).littleEndian) { hasher.update(bufferPointer: $0) }
+            hasher.update(data: utf8)
+        }
+        func feed(_ data: Data) {
+            withUnsafeBytes(of: UInt32(data.count).littleEndian) { hasher.update(bufferPointer: $0) }
+            hasher.update(data: data)
+        }
+        for (name, value) in values.sorted(by: { $0.name < $1.name }) {
+            feed(name)
+            switch canonical(value) {
+                case .null: feed("n")
+                case .integer(let i): feed("i\(i)")
+                case .double(let d): feed("d\(d.bitPattern)")
+                case .text(let s): feed("t"); feed(s)
+                case .data(let d): feed("b"); feed(d)
+            }
+        }
+        for (name, digest) in assetDigests.sorted(by: { $0.name < $1.name }) {
+            feed("a" + name)
+            feed(digest ?? "")
+        }
+        feed("m")
+        feed(lastModified.map { String(Int64(($0.timeIntervalSince1970 * 1000).rounded())) } ?? "")
+        return Data(hasher.finalize())
+    }
+
+    /// Doubles with integral values compare equal to the integers they came from.
+    private static func canonical(_ value: Blackbird.Value) -> Blackbird.Value {
+        if case .double(let d) = value, d.isFinite, d == d.rounded(), abs(d) < 9_007_199_254_740_992 { return .integer(Int64(d)) }
+        return value
+    }
+
+    /// The row's fingerprint, as the server would see it if uploaded now.
+    internal static func localFingerprint<T: BlackbirdSkybridgeSyncable>(of instance: T, metadata: SkybridgeMetadata) -> Data {
         let row = rowRepresentation(of: instance)
-        for name in T.skybridgeSyncedColumnNames() {
-            if !valuesEquivalent(row[name] ?? .null, blackbirdValue(from: record.encryptedValues[name])) { return false }
+        let values = T.skybridgeSyncedColumnNames().map { ($0, row[$0] ?? .null) }
+        let pending = Set(metadata.pendingAssetColumns ?? [])
+        let digests: [(String, String?)] = T.skybridgeAssetColumnNames().map { name in
+            if case .data(let data) = row[name] ?? .null { return (name, assetDigest(data)) }
+            // A pending column's NULL is awaiting download, not a local edit: it still matches the server's asset.
+            if pending.contains(name) { return (name, metadata.assetDigests?[name]) }
+            return (name, nil)
         }
-        let pendingColumns = Set(instance.skybridgeDecodedMetadata.pendingAssetColumns ?? [])
+        return fingerprint(values: values, assetDigests: digests, lastModified: metadata.syncLastModifiedDate)
+    }
+
+    /// A record's fingerprint. Falls back to modificationDate like applyServerRecords does, so a
+    /// record from a client that doesn't set the field can't re-upload once per receiving device.
+    internal static func recordFingerprint<T: BlackbirdSkybridgeSyncable>(_ record: CKRecord, for type: T.Type) -> Data {
+        let values = T.skybridgeSyncedColumnNames().map { ($0, blackbirdValue(from: record.encryptedValues[$0])) }
+        let digests: [(String, String?)] = T.skybridgeAssetColumnNames().map { ($0, record.encryptedValues[Field.assetDigest($0)] as? String) }
+        return fingerprint(values: values, assetDigests: digests, lastModified: (record.encryptedValues[Field.lastModified] as? Date) ?? record.modificationDate)
+    }
+
+    private static func assetDigests<T: BlackbirdSkybridgeSyncable>(from record: CKRecord, for type: T.Type) -> [String: String] {
+        var digests: [String: String] = [:]
         for name in T.skybridgeAssetColumnNames() {
-            var localDigest: String? = nil
-            if case .data(let data) = row[name] ?? .null { localDigest = assetDigest(data) }
-            // A pending column's NULL is awaiting download, not a local edit.
-            if localDigest == nil, pendingColumns.contains(name) { continue }
-            if localDigest != record.encryptedValues[Field.assetDigest(name)] as? String { return false }
+            if let digest = record.encryptedValues[Field.assetDigest(name)] as? String { digests[name] = digest }
         }
-        // Falls back to modificationDate like applyServerRecord does, so a record from a
-        // client that doesn't set the field can't re-upload once per receiving device.
-        return datesEquivalent(instance.skybridgeDecodedMetadata.syncLastModifiedDate, (record.encryptedValues[Field.lastModified] as? Date) ?? record.modificationDate)
+        return digests
+    }
+
+    private static func primaryKeyName<T: BlackbirdSkybridgeSyncable>(_ type: T.Type) -> String {
+        T.skybridgePrimaryKeyInfo().name
     }
 
     private static func columnValue<T: BlackbirdSkybridgeSyncable>(of instance: T, at keyPath: PartialKeyPath<T>) -> Blackbird.Value {
@@ -748,24 +1353,6 @@ public actor BlackbirdSkybridge {
         }
     }
 
-    /// Equality with cross-type numeric tolerance, since SQLite column affinity
-    /// may store an uploaded integer as a double or vice versa.
-    private static func valuesEquivalent(_ a: Blackbird.Value, _ b: Blackbird.Value) -> Bool {
-        if a == b { return true }
-        switch (a, b) {
-            case (.integer(let i), .double(let d)), (.double(let d), .integer(let i)): return Double(i) == d
-            default: return false
-        }
-    }
-
-    private static func datesEquivalent(_ a: Date?, _ b: Date?) -> Bool {
-        switch (a, b) {
-            case (nil, nil): true
-            case (let a?, let b?): abs(a.timeIntervalSince(b)) < 0.001
-            default: false
-        }
-    }
-
     // MARK: - Asset staging
 
     private static func assetDigest(_ data: Data) -> String {
@@ -802,12 +1389,27 @@ public actor BlackbirdSkybridge {
         }
     }
 
-    private static func encodeRecord(_ record: CKRecord) -> Data? {
-        try? NSKeyedArchiver.archivedData(withRootObject: record, requiringSecureCoding: true)
-    }
+    // MARK: - Record archives
 
+    /// Original-format archive of a whole record. Read only to upgrade old metadata.
     private static func decodeRecord(_ data: Data) -> CKRecord? {
         try? NSKeyedUnarchiver.unarchivedObject(ofClass: CKRecord.self, from: data)
+    }
+
+    /// Current-format archive: system fields only (record ID, change tag, dates), a few hundred bytes.
+    internal static func encodeSystemFields(_ record: CKRecord) -> Data {
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        record.encodeSystemFields(with: archiver)
+        archiver.finishEncoding()
+        return archiver.encodedData
+    }
+
+    internal static func decodeSystemFields(_ data: Data) -> CKRecord? {
+        guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return nil }
+        unarchiver.requiresSecureCoding = true
+        let record = CKRecord(coder: unarchiver)
+        unarchiver.finishDecoding()
+        return record
     }
 }
 
@@ -822,17 +1424,12 @@ extension BlackbirdSkybridge: CKSyncEngineDelegate {
             case .fetchedDatabaseChanges(let changes):
                 await handleFetchedDatabaseChanges(changes)
             case .fetchedRecordZoneChanges(let changes):
-                for modification in changes.modifications {
-                    guard let (model, primaryKey) = modelAndPrimaryKey(for: modification.record.recordID) else { continue }
-                    await applyServerRecord(model, record: modification.record, primaryKey: primaryKey)
-                }
-                for deletion in changes.deletions {
-                    guard let (model, primaryKey) = modelAndPrimaryKey(for: deletion.recordID) else { continue }
-                    await applyServerDeletion(model, recordID: deletion.recordID, primaryKey: primaryKey)
-                }
+                await handleFetchedRecordZoneChanges(changes)
             case .sentRecordZoneChanges(let sent):
                 await handleSentRecordZoneChanges(sent)
-            case .sentDatabaseChanges, .willFetchChanges, .willFetchRecordZoneChanges, .didFetchRecordZoneChanges, .didFetchChanges, .willSendChanges, .didSendChanges:
+            case .didSendChanges:
+                await topUpPendingChanges()
+            case .sentDatabaseChanges, .willFetchChanges, .willFetchRecordZoneChanges, .didFetchRecordZoneChanges, .didFetchChanges, .willSendChanges:
                 break
             @unknown default:
                 break
@@ -854,6 +1451,13 @@ extension BlackbirdSkybridge: CKSyncEngineDelegate {
             }
             return record
         }
+    }
+}
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        guard size > 0, !isEmpty else { return isEmpty ? [] : [self] }
+        return stride(from: 0, to: count, by: size).map { Array(self[$0 ..< Swift.min($0 + size, count)]) }
     }
 }
 

@@ -18,6 +18,9 @@
 //
 
 import XCTest
+#if canImport(CloudKit)
+import CloudKit
+#endif
 import Combine
 import SQLite3
 @testable import Blackbird
@@ -738,6 +741,67 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
         let garbage = SkybridgeMetadata.decode(Data([0x00, 0x01, 0x02]))
         XCTAssertNil(garbage.ckRecordData)
         XCTAssertNil(garbage.syncLastModifiedDate)
+    }
+
+    // Fingerprints must be insensitive to the representation differences that SQLite column
+    // affinity introduces, and sensitive to everything else.
+    @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
+    func testSkybridgeFingerprintCanonicalization() throws {
+        let date = Date(timeIntervalSince1970: 1_700_000_000.123)
+        let base = BlackbirdSkybridge.fingerprint(values: [("a", .integer(3)), ("b", .text("x"))], assetDigests: [("img", "abc")], lastModified: date)
+        // An integral double is the same value as its integer
+        XCTAssertEqual(base, BlackbirdSkybridge.fingerprint(values: [("b", .text("x")), ("a", .double(3.0))], assetDigests: [("img", "abc")], lastModified: date))
+        // Sub-millisecond timestamp noise doesn't matter
+        XCTAssertEqual(base, BlackbirdSkybridge.fingerprint(values: [("a", .integer(3)), ("b", .text("x"))], assetDigests: [("img", "abc")], lastModified: date.addingTimeInterval(0.0002)))
+        // Values, asset digests, and the timestamp all matter
+        XCTAssertNotEqual(base, BlackbirdSkybridge.fingerprint(values: [("a", .integer(4)), ("b", .text("x"))], assetDigests: [("img", "abc")], lastModified: date))
+        XCTAssertNotEqual(base, BlackbirdSkybridge.fingerprint(values: [("a", .integer(3)), ("b", .text("x"))], assetDigests: [("img", "abd")], lastModified: date))
+        XCTAssertNotEqual(base, BlackbirdSkybridge.fingerprint(values: [("a", .integer(3)), ("b", .text("x"))], assetDigests: [("img", "abc")], lastModified: date.addingTimeInterval(1)))
+        // A non-integral double is distinct from any integer
+        XCTAssertNotEqual(BlackbirdSkybridge.fingerprint(values: [("a", .double(3.5))], assetDigests: [], lastModified: nil), BlackbirdSkybridge.fingerprint(values: [("a", .integer(3))], assetDigests: [], lastModified: nil))
+    }
+
+    // Metadata written by the original Skybridge (a full CKRecord archive) upgrades to the
+    // current format, and a row matching that record reads as clean afterwards.
+    @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
+    func testSkybridgeMetadataUpgradeFromFullArchive() throws {
+        let lastModified = Date(timeIntervalSince1970: 1_700_000_000)
+        let dueDate = Date(timeIntervalSince1970: 1_600_000_000)
+        let record = CKRecord(recordType: "RegressionSkybridgeModel", recordID: CKRecord.ID(recordName: "RegressionSkybridgeModel:k", zoneID: CKRecordZone.ID(zoneName: "Skybridge")))
+        record.encryptedValues["title"] = "Hello"
+        record.encryptedValues["dueDate"] = NSNumber(value: dueDate.timeIntervalSince1970)
+        record.encryptedValues["skybridge_lastModified"] = lastModified
+        let fullArchive = try NSKeyedArchiver.archivedData(withRootObject: record, requiringSecureCoding: true)
+
+        var metadata = SkybridgeMetadata(ckRecordData: fullArchive, syncLastModifiedDate: lastModified)
+        XCTAssertTrue(metadata.needsUpgrade)
+        XCTAssertTrue(BlackbirdSkybridge.upgrade(&metadata, for: RegressionSkybridgeModel.self))
+        XCTAssertNil(metadata.ckRecordData)
+        XCTAssertFalse(metadata.needsUpgrade)
+        XCTAssertNotNil(metadata.packedSystemFields)
+        XCTAssertLessThan(metadata.packedSystemFields!.count, 300, "system fields should compress to well under the raw ~1.7 KB")
+        let restored = metadata.systemFieldsArchive(recordType: "RegressionSkybridgeModel")
+        XCTAssertNotNil(restored)
+        XCTAssertEqual(BlackbirdSkybridge.decodeSystemFields(restored!)?.recordID, record.recordID)
+        XCTAssertEqual(metadata.syncedFingerprint, BlackbirdSkybridge.recordFingerprint(record, for: RegressionSkybridgeModel.self))
+        XCTAssertEqual(metadata.syncedFingerprint?.count, 32)
+        // The compressed form survives a plist round trip
+        let reloaded = SkybridgeMetadata.decode(metadata.encoded())
+        XCTAssertEqual(reloaded.packedSystemFields, metadata.packedSystemFields)
+        XCTAssertEqual(reloaded.syncedFingerprint, metadata.syncedFingerprint)
+        XCTAssertEqual(metadata.syncedLastModifiedDate, lastModified)
+
+        // A row holding the same values is clean against the upgraded metadata...
+        var instance = RegressionSkybridgeModel(key: "k", title: "Hello", dueDate: dueDate, localOnly: "ignored", skybridgeMetadata: nil)
+        instance.setSkybridgeMetadata(metadata)
+        XCTAssertEqual(BlackbirdSkybridge.localFingerprint(of: instance, metadata: metadata), metadata.syncedFingerprint)
+
+        // ...and an edited row is not.
+        instance.title = "Changed"
+        XCTAssertNotEqual(BlackbirdSkybridge.localFingerprint(of: instance, metadata: metadata), metadata.syncedFingerprint)
+
+        // Upgrading twice is a no-op
+        XCTAssertFalse(BlackbirdSkybridge.upgrade(&metadata, for: RegressionSkybridgeModel.self))
     }
 #endif
 
