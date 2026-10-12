@@ -803,6 +803,49 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
         // Upgrading twice is a no-op
         XCTAssertFalse(BlackbirdSkybridge.upgrade(&metadata, for: RegressionSkybridgeModel.self))
     }
+
+    // Skybridge writes rows with raw SQL, bypassing the model's decoding, and must report those
+    // writes by primary key as a model write does: an unknown-keys change would send every
+    // subscriber back to reload the whole table.
+    @available(macOS 14, iOS 17, tvOS 17, watchOS 10, *)
+    func testSkybridgeRawWritesReportKeyedChanges() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename)
+        try await RegressionSkybridgeModel(key: "k", title: "model", dueDate: nil, localOnly: "mine", skybridgeMetadata: nil).write(to: db)
+
+        let received = Blackbird.Locked<[Blackbird.Change]>([])
+        let expectation = expectation(description: "two keyed changes")
+        expectation.expectedFulfillmentCount = 2
+        let subscription = db.changePublisher(for: RegressionSkybridgeModel.tableName).sink { change in
+            received.value.append(change)
+            expectation.fulfill()
+        }
+        defer { subscription.cancel() }
+
+        try await db.transaction { core in
+            try BlackbirdSkybridge.update(RegressionSkybridgeModel.self, primaryKey: .text("k"), columns: [(name: "title", value: .text("raw"))], in: core)
+        }
+        try await db.transaction { core in
+            try BlackbirdSkybridge.insert(RegressionSkybridgeModel.self, primaryKey: .text("k2"), columns: [(name: "title", value: .text("new"))], in: core)
+        }
+        await fulfillment(of: [expectation], timeout: 5)
+
+        let changes = received.value
+        XCTAssertEqual(changes.count, 2)
+        XCTAssert(changes[0].hasPrimaryKeyChanged("k"))
+        XCTAssertFalse(changes[0].hasPrimaryKeyChanged("k2"), "a raw update must not report a whole-table change")
+        XCTAssert(changes[0].hasColumnChanged("title"))
+        XCTAssertFalse(changes[0].hasColumnChanged("localOnly"))
+        XCTAssert(changes[1].hasPrimaryKeyChanged("k2"))
+        XCTAssertFalse(changes[1].hasPrimaryKeyChanged("k"), "a raw insert must not report a whole-table change")
+
+        let updated = try await RegressionSkybridgeModel.read(from: db, primaryKey: "k")
+        XCTAssertEqual(updated?.title, "raw")
+        XCTAssertEqual(updated?.localOnly, "mine", "columns not written are left alone")
+        let inserted = try await RegressionSkybridgeModel.read(from: db, primaryKey: "k2")
+        XCTAssertEqual(inserted?.title, "new")
+        XCTAssertNil(inserted?.localOnly, "columns not given take the table's defaults")
+        await db.close()
+    }
 #endif
 
     // MARK: Miscellaneous
