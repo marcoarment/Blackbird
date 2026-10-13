@@ -998,20 +998,64 @@ public actor BlackbirdSkybridge {
     /// The share of one of the user's own zones, made (and the zone with it, if it isn't on
     /// the server yet) when `creating` is set and it has none. Nil for a zone that isn't the
     /// user's own to share, or that has no share and isn't to get one.
-    public func share(forZoneKey key: String, creating: Bool) async throws -> CKShare? {
+    public func share(forZoneKey key: String, creating: Bool, details: ShareDetails? = nil) async throws -> CKShare? {
         guard let zone = zones[key], zone.removedDate == nil, zone.isOwn else { return nil }
-        if let data = zone.share, let existing = Self.decodeShare(data) { return existing }
+        if let data = zone.share, let existing = Self.decodeShare(data) {
+            // An existing share takes the details as they are now, if they've changed.
+            guard let details, details.apply(to: existing) else { return existing }
+            let saved = try await CKContainer.default().privateCloudDatabase.save(existing)
+            if let savedShare = saved as? CKShare {
+                await updateShare(savedShare, zoneID: zone.zoneID)
+                return savedShare
+            }
+            return existing
+        }
         guard creating else { return nil }
         let cloudDatabase = CKContainer.default().privateCloudDatabase
         _ = try await cloudDatabase.save(CKRecordZone(zoneID: zone.zoneID))
         let share = CKShare(recordZoneID: zone.zoneID)
         share.publicPermission = .none
+        _ = details?.apply(to: share)
         let saved = try await cloudDatabase.save(share)
         if let savedShare = saved as? CKShare {
             await updateShare(savedShare, zoneID: zone.zoneID)
             return savedShare
         }
         return share
+    }
+
+    /// What a share's link says it opens: kept on the share record itself, which is what the
+    /// system shows whoever opens the link. Without them, the system names the record type
+    /// ("cloudkit.zoneshare").
+    public struct ShareDetails: Sendable {
+        public var title: String
+        public var thumbnail: Data?
+        /// A uniform type identifier for what's shared.
+        public var type: String?
+
+        public init(title: String, thumbnail: Data? = nil, type: String? = nil) {
+            self.title = title
+            self.thumbnail = thumbnail
+            self.type = type
+        }
+
+        /// Sets the details on a share; returns whether anything changed.
+        func apply(to share: CKShare) -> Bool {
+            var changed = false
+            if share[CKShare.SystemFieldKey.title] as? String != title {
+                share[CKShare.SystemFieldKey.title] = title as CKRecordValue
+                changed = true
+            }
+            if let thumbnail, share[CKShare.SystemFieldKey.thumbnailImageData] as? Data != thumbnail {
+                share[CKShare.SystemFieldKey.thumbnailImageData] = thumbnail as CKRecordValue
+                changed = true
+            }
+            if let type, share[CKShare.SystemFieldKey.shareType] as? String != type {
+                share[CKShare.SystemFieldKey.shareType] = type as CKRecordValue
+                changed = true
+            }
+            return changed
+        }
     }
 
     /// Takes in a share saved by the sharing interface, so what's known here is current.
