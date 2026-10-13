@@ -93,6 +93,21 @@ struct RegressionSkybridgeModel: BlackbirdModel, BlackbirdSkybridgeSyncable {
     @BlackbirdColumn var localOnly: String?
     @BlackbirdColumn var skybridgeMetadata: Data?
 }
+
+/// Rows in zones named by `docID`, with 0 standing for the default zone.
+struct RegressionSkybridgeZonedModel: BlackbirdModel, BlackbirdSkybridgeSyncable {
+    static let primaryKey: [BlackbirdColumnKeyPath] = [ \.$id ]
+    static var skybridgeZoneColumn: BlackbirdColumnKeyPath? { \.$docID }
+    static func skybridgeZoneKey(for zoneColumnValue: Blackbird.Value) -> String? {
+        guard let id = zoneColumnValue.int64Value, id != 0 else { return nil }
+        return String(id)
+    }
+
+    @BlackbirdColumn var id: Int64
+    @BlackbirdColumn var docID: Int64
+    @BlackbirdColumn var title: String
+    @BlackbirdColumn var skybridgeMetadata: Data?
+}
 #endif
 
 // MARK: - Tests
@@ -844,6 +859,75 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
         let inserted = try await RegressionSkybridgeModel.read(from: db, primaryKey: "k2")
         XCTAssertEqual(inserted?.title, "new")
         XCTAssertNil(inserted?.localOnly, "columns not given take the table's defaults")
+        await db.close()
+    }
+
+    // Zone keys come from the zone column, with the type's say over which values mean the default
+    // zone, and round-trip through the text form triggers record.
+    func testSkybridgeZoneKeys() throws {
+        XCTAssertEqual(RegressionSkybridgeZonedModel.skybridgeZoneColumnName(), "docID")
+        XCTAssertNil(RegressionSkybridgeModel.skybridgeZoneColumnName())
+        XCTAssertEqual(RegressionSkybridgeZonedModel.skybridgeZoneKey(of: ["id": .integer(1), "docID": .integer(7)]), "7")
+        XCTAssertNil(RegressionSkybridgeZonedModel.skybridgeZoneKey(of: ["id": .integer(1), "docID": .integer(0)]))
+        XCTAssertNil(RegressionSkybridgeModel.skybridgeZoneKey(of: ["key": .text("k")]))
+        XCTAssertEqual(RegressionSkybridgeZonedModel.skybridgeZoneColumnValue(fromText: "7"), .integer(7))
+        XCTAssertEqual(RegressionSkybridgeZonedModel.skybridgeZoneKey(fromText: "7"), "7")
+        XCTAssertNil(RegressionSkybridgeZonedModel.skybridgeZoneKey(fromText: "0"))
+        XCTAssertNil(RegressionSkybridgeZonedModel.skybridgeZoneKey(fromText: nil))
+        XCTAssertNil(RegressionSkybridgeModel.skybridgeMerge(local: [:], server: [:], localIsNewer: true), "no merge by default")
+    }
+
+    // The triggers mark every local write and deletion in the same transaction, a deletion with
+    // the zone the row was in, and leave Skybridge's own writes unmarked.
+    func testSkybridgeTriggersMarkLocalChanges() async throws {
+        let db = try Blackbird.Database(path: sqliteFilename)
+        try await RegressionSkybridgeZonedModel.resolveSchema(in: db)
+        try await BlackbirdSkybridgeFlags.resolveSchema(in: db)
+        try await BlackbirdSkybridgeDirtyRow.resolveSchema(in: db)
+        try await db.transaction { core in
+            try core.query("INSERT OR IGNORE INTO `\(BlackbirdSkybridgeFlags.tableName)` (id, suppressTriggers) VALUES (0, 0)")
+            try BlackbirdSkybridge.installTriggers(RegressionSkybridgeZonedModel.self, in: core)
+        }
+        func markers() async throws -> [String: BlackbirdSkybridgeDirtyRow] {
+            Dictionary(uniqueKeysWithValues: try await BlackbirdSkybridgeDirtyRow.read(from: db, matching: .all).map { ($0.recordName, $0) })
+        }
+
+        try await RegressionSkybridgeZonedModel(id: 1, docID: 7, title: "a", skybridgeMetadata: nil).write(to: db)
+        try await RegressionSkybridgeZonedModel(id: 2, docID: 0, title: "b", skybridgeMetadata: nil).write(to: db)
+        var found = try await markers()
+        XCTAssertEqual(found.count, 2)
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.isDeletion, false)
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.zoneValue, "7")
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.primaryKeyString, "1")
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:2"]?.zoneValue, "0")
+
+        _ = try await db.query("DELETE FROM `\(BlackbirdSkybridgeDirtyRow.tableName)`")
+        try await RegressionSkybridgeZonedModel(id: 1, docID: 7, title: "a2", skybridgeMetadata: nil).write(to: db)
+        found = try await markers()
+        XCTAssertEqual(found.count, 1, "an update marks the row again")
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.isDeletion, false)
+
+        try await RegressionSkybridgeZonedModel(id: 1, docID: 7, title: "a2", skybridgeMetadata: nil).delete(from: db)
+        found = try await markers()
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.isDeletion, true, "a deletion replaces the edit's marker")
+        XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.zoneValue, "7", "a deletion's marker keeps the zone")
+
+        _ = try await db.query("DELETE FROM `\(BlackbirdSkybridgeDirtyRow.tableName)`")
+        try await db.transaction { core in
+            try BlackbirdSkybridge.suppressingTriggers(core) {
+                try BlackbirdSkybridge.insert(RegressionSkybridgeZonedModel.self, primaryKey: .integer(3), columns: [("docID", .integer(7)), ("title", .text("c"))], in: core)
+                try BlackbirdSkybridge.update(RegressionSkybridgeZonedModel.self, primaryKey: .integer(2), columns: [("title", .text("b2"))], in: core)
+                if let row = try RegressionSkybridgeZonedModel.read(from: core, primaryKey: 2) { try row.delete(from: core) }
+            }
+        }
+        found = try await markers()
+        XCTAssert(found.isEmpty, "Skybridge's own writes leave no markers, got \(found.keys)")
+        let flags = try await db.query("SELECT suppressTriggers FROM `\(BlackbirdSkybridgeFlags.tableName)` WHERE id = 0").first?["suppressTriggers"]?.int64Value
+        XCTAssertEqual(flags, 0, "the flag is reset afterwards")
+
+        try await RegressionSkybridgeZonedModel(id: 4, docID: 9, title: "d", skybridgeMetadata: nil).write(to: db)
+        found = try await markers()
+        XCTAssertEqual(found.count, 1, "and the triggers work again")
         await db.close()
     }
 #endif
