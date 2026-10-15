@@ -274,7 +274,7 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel>: @unc
             
             let primaryKeyValues = primaryKeyValues
             observer = T.changePublisher(in: currentDatabase, multicolumnPrimaryKey: primaryKeyValues)
-            .sink { _ in
+            .sink { [weak self] _ in
                 Task.detached { [weak self] in
                     await MainActor.run { [weak self] in self?.cachedInstance.value = nil }
                     await self?.update()
@@ -464,7 +464,7 @@ extension Blackbird {
                 state.primaryKeyValues = multicolumnPrimaryKey.map { try! Blackbird.Value.fromAny($0) }
                 if let database, let primaryKeyValues = state.primaryKeyValues {
                     state.changeObserver = T.changePublisher(in: database, multicolumnPrimaryKey: primaryKeyValues)
-                    .sink { _ in
+                    .sink { [weak self] _ in
                         Task.detached { [weak self] in
                             guard let self else { return }
                             let instance = try? await T.read(from: database, multicolumnPrimaryKey: primaryKeyValues)
