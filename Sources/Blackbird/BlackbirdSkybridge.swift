@@ -459,6 +459,9 @@ internal struct BlackbirdSkybridgeInfo: BlackbirdModel {
     @BlackbirdColumn var metadataUpgraded: Bool
     /// 0: every row in the default zone, as before zone columns existed. 1: rows in their zones.
     @BlackbirdColumn var zoneLayoutVersion: Int
+    /// The CloudKit environment the sync state belongs to, as the app names it; nil before
+    /// environments were tracked.
+    @BlackbirdColumn var environment: String?
 
     static let singletonID = 0
     static let currentZoneLayoutVersion = 1
@@ -631,9 +634,14 @@ public actor BlackbirdSkybridge {
         case accountChanged
         /// The user removed the zone (see ``removeZone(key:)``).
         case removed
+        /// The app now syncs with another CloudKit environment, where the zone isn't shared
+        /// with the user (see ``init(syncing:environment:unrecordedEnvironment:)``).
+        case environmentChanged
     }
 
     private let syncedTypes: [any BlackbirdSkybridgeSyncable.Type]
+    private let environment: String?
+    private let unrecordedEnvironment: String?
 
     private var models: [String: any BlackbirdSkybridgeSyncable.Type] = [:] // keyed by tableName == CKRecord type
     private var database: Blackbird.Database?
@@ -645,8 +653,23 @@ public actor BlackbirdSkybridge {
     private var localChangeTasks: [Task<Void, Never>] = []
     private var toppingUp: Set<Int> = []
 
-    public init(syncing syncedTypes: [any BlackbirdSkybridgeSyncable.Type]) {
+    /// Whether ``start(database:)`` found the local sync state belonging to another CloudKit
+    /// environment, and started over in this one: everything is uploaded again, and anything the
+    /// app keeps in CloudKit outside sync needs saving again too.
+    public private(set) var startedInNewEnvironment = false
+
+    /// - Parameters:
+    ///   - environment: The CloudKit environment the app syncs with, in any form the app likes
+    ///     (e.g. "Development" or "Production"). When it differs from the one the local state last
+    ///     synced with, sync starts over in it: every row of the user's own zones is uploaded
+    ///     afresh, and zones shared with the user in the other environment go. Nil not to track it.
+    ///   - unrecordedEnvironment: The environment to take the local state as belonging to when
+    ///     none is recorded, as by versions before environments were tracked; nil to take it as
+    ///     belonging to `environment`.
+    public init(syncing syncedTypes: [any BlackbirdSkybridgeSyncable.Type], environment: String? = nil, unrecordedEnvironment: String? = nil) {
         self.syncedTypes = syncedTypes
+        self.environment = environment
+        self.unrecordedEnvironment = unrecordedEnvironment
     }
 
     /// Receives zone events. Set before ``start(database:)`` to miss none.
@@ -680,6 +703,7 @@ public actor BlackbirdSkybridge {
 
         for zone in (try? await BlackbirdSkybridgeZone.read(from: database, matching: .all)) ?? [] { zones[zone.key] = zone }
         await forgetOldRemovedZones()
+        await startOverIfEnvironmentChanged()
 
         let privateState = await savedState(id: BlackbirdSkybridgeState.privateEngineID)
         let sharedState = await savedState(id: BlackbirdSkybridgeState.sharedEngineID)
@@ -691,12 +715,12 @@ public actor BlackbirdSkybridge {
         Task.detached(priority: .background) { Self.cleanUpStagedAssets() }
 
         if privateState == nil {
-            // First run (or state was lost): create the zones and upload everything, each row to
-            // its zone, so there's nothing to move into zones later.
+            // First run (or state was lost, or belonged to another environment): create the zones
+            // and upload everything, each row to its zone, so there's nothing to move into zones later.
             var info = await currentInfo()
             info.zoneLayoutVersion = BlackbirdSkybridgeInfo.currentZoneLayoutVersion
             try? await info.write(to: database)
-            await scheduleFullUpload(clearingServerRecords: false)
+            await scheduleFullUpload(clearingServerRecords: startedInNewEnvironment)
         } else {
             await migrateZoneLayoutIfNeeded()
         }
@@ -716,6 +740,41 @@ public actor BlackbirdSkybridge {
 
         Task(priority: .background) { [weak self] in
             await self?.runHousekeeping()
+        }
+    }
+
+    /// Forgets everything that belongs to the environment the local state last synced with, when
+    /// that isn't this one: the engines' state, so they fetch everything afresh; changes queued
+    /// for its records; zones shared with the user there, with their rows; and the shares of the
+    /// user's own zones. The rows of the user's own zones stay, to be uploaded afresh.
+    private func startOverIfEnvironmentChanged() async {
+        guard let database, let environment else { return }
+        var info = await currentInfo()
+        let previous = info.environment ?? unrecordedEnvironment
+        if info.environment != environment {
+            info.environment = environment
+            try? await info.write(to: database)
+        }
+        guard let previous, previous != environment, await savedState(id: BlackbirdSkybridgeState.privateEngineID) != nil else { return }
+
+        Self.logger.info("☁️ Skybridge: local state belongs to the \(previous, privacy: .public) environment; starting over in \(environment, privacy: .public)")
+        startedInNewEnvironment = true
+        _ = try? await database.query("DELETE FROM `\(BlackbirdSkybridgeState.tableName)`")
+        _ = try? await database.query("DELETE FROM `\(BlackbirdSkybridgeQueuedChange.tableName)`")
+        for zone in zones.values {
+            if zone.removedDate != nil {
+                zones.removeValue(forKey: zone.key)
+                try? await zone.delete(from: database)
+            } else if !zone.isOwn {
+                await removeLocalZone(key: zone.key, reason: .environmentChanged)
+                if let removed = zones.removeValue(forKey: zone.key) { try? await removed.delete(from: database) }
+            } else if zone.share != nil {
+                var unshared = zone
+                unshared.share = nil
+                unshared.permission = CKShare.ParticipantPermission.readWrite.rawValue
+                await write(zone: unshared)
+                await zoneEventHandler?(.shareChanged(publicZone(unshared)))
+            }
         }
     }
 
@@ -750,7 +809,7 @@ public actor BlackbirdSkybridge {
 
     private func currentInfo() async -> BlackbirdSkybridgeInfo {
         guard let database, let info = try? await BlackbirdSkybridgeInfo.read(from: database, id: BlackbirdSkybridgeInfo.singletonID) else {
-            return BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: nil, metadataUpgraded: false, zoneLayoutVersion: 0)
+            return BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: nil, metadataUpgraded: false, zoneLayoutVersion: 0, environment: nil)
         }
         return info
     }
