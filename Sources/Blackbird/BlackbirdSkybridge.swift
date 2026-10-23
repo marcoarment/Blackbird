@@ -197,7 +197,7 @@ internal struct SkybridgeMetadata: Codable, Sendable {
     }
 
     /// Whether the row has ever been confirmed with the server, in any format.
-    var hasServerBase: Bool { syncedFingerprint != nil || ckRecordData != nil }
+    var hasServerBase: Bool { syncedFingerprint != nil || ckRecordData != nil || systemFields != nil || packedSystemFields != nil }
 
     /// Whether the metadata still uses an older format that should be rewritten.
     var needsUpgrade: Bool { ckRecordData != nil || systemFields != nil }
@@ -652,6 +652,11 @@ public actor BlackbirdSkybridge {
     private var zoneEventHandler: (@Sendable (ZoneEvent) async -> Void)?
     private var localChangeTasks: [Task<Void, Never>] = []
     private var toppingUp: Set<Int> = []
+    /// When each engine last finished sending a batch, for the send watchdog.
+    private var lastSendProgress: [Int: Date] = [:]
+    private var sendWatchdog: Task<Void, Never>?
+    /// How long an engine may hold pending changes without sending before it's asked to send.
+    private static let sendStallInterval: TimeInterval = 60
 
     /// Whether ``start(database:)`` found the local sync state belonging to another CloudKit
     /// environment, and started over in this one: everything is uploaded again, and anything the
@@ -720,7 +725,7 @@ public actor BlackbirdSkybridge {
             var info = await currentInfo()
             info.zoneLayoutVersion = BlackbirdSkybridgeInfo.currentZoneLayoutVersion
             try? await info.write(to: database)
-            await scheduleFullUpload(clearingServerRecords: startedInNewEnvironment)
+            await scheduleFullUpload(clearingServerRecords: false)
         } else {
             await migrateZoneLayoutIfNeeded()
         }
@@ -741,12 +746,19 @@ public actor BlackbirdSkybridge {
         Task(priority: .background) { [weak self] in
             await self?.runHousekeeping()
         }
+        startSendWatchdog()
     }
 
     /// Forgets everything that belongs to the environment the local state last synced with, when
     /// that isn't this one: the engines' state, so they fetch everything afresh; changes queued
-    /// for its records; zones shared with the user there, with their rows; and the shares of the
-    /// user's own zones. The rows of the user's own zones stay, to be uploaded afresh.
+    /// for its records; zones shared with the user there, with their rows; the shares of the
+    /// user's own zones; and every row's server base. The rows of the user's own zones stay, to be
+    /// uploaded afresh.
+    ///
+    /// The server bases go here, before the engines exist, rather than as the full upload reaches
+    /// them: a new engine reports a sign-in, whose own full upload doesn't clear them, and a row
+    /// sent on a base from the other environment is a record this one doesn't have. Rows of types
+    /// whose server deletion wins would be deleted for it.
     private func startOverIfEnvironmentChanged() async {
         guard let database, let environment else { return }
         var info = await currentInfo()
@@ -776,6 +788,36 @@ public actor BlackbirdSkybridge {
                 await zoneEventHandler?(.shareChanged(publicZone(unshared)))
             }
         }
+        for model in models.values { await clearServerBases(model) }
+    }
+
+    /// Discards the server base of every row of a table, in batches.
+    private func clearServerBases<T: BlackbirdSkybridgeSyncable>(_ type: T.Type) async {
+        guard let database else { return }
+        var lastRowID: Int64 = 0
+        var clearedCount = 0
+        while true {
+            let rows = (try? await T.query(in: database, "SELECT rowid AS __rowid, `\(Self.primaryKeyName(T.self))` AS __pk, `\(skybridgeMetadataColumnName)` AS __meta FROM `\(T.tableName)` WHERE rowid > ? AND `\(skybridgeMetadataColumnName)` IS NOT NULL ORDER BY rowid LIMIT \(Self.batchSize)", lastRowID)) ?? []
+            guard !rows.isEmpty else { break }
+            var cleared: [(key: Blackbird.Value, metadata: SkybridgeMetadata)] = []
+            for row in rows {
+                guard let rowID = row["__rowid"]?.int64Value, let key = row["__pk"] else { continue }
+                lastRowID = max(lastRowID, rowID)
+                guard case .data(let data) = row["__meta"] ?? .null else { continue }
+                var metadata = SkybridgeMetadata.decode(data)
+                metadata.clearServerBase()
+                cleared.append((key, metadata))
+            }
+            let batch = cleared
+            try? await database.transaction { core in
+                try Self.suppressingTriggers(core) {
+                    for (key, metadata) in batch { try Self.writeMetadata(metadata, for: T.self, primaryKey: key, in: core) }
+                }
+            }
+            clearedCount += batch.count
+            await Task.yield()
+        }
+        Self.logger.info("☁️ Skybridge cleared the server bases of \(clearedCount) \(T.tableName, privacy: .public) rows")
     }
 
     private func savedState(id: Int) async -> CKSyncEngine.State.Serialization? {
@@ -1628,9 +1670,15 @@ public actor BlackbirdSkybridge {
                         if let existing {
                             guard T.skybridgeZoneKey(of: existing) == server.zoneKey else { continue }
                             var metadata = Self.metadata(of: existing)
-                            let localModified = metadata.syncLastModifiedDate
-                            let localIsNewer = !forceServer && localModified != nil && localModified! > server.serverModified
                             let hasLocalEdits = !forceServer && (metadata.syncedFingerprint == nil || Self.localFingerprint(of: existing, for: T.self, metadata: metadata) != metadata.syncedFingerprint!)
+                            var localModified = metadata.syncLastModifiedDate
+                            if hasLocalEdits, let synced = metadata.syncedLastModifiedDate, localModified == nil || localModified! <= synced {
+                                // Edited since its last sync, but not reconciled yet (the record
+                                // arrived between the write and its change report), so the edit
+                                // hasn't been stamped: it's as new as reconcile would stamp it.
+                                localModified = Date()
+                            }
+                            let localIsNewer = !forceServer && localModified != nil && localModified! > server.serverModified
                             if hasLocalEdits, !metadata.needsUpgrade {
                                 let names = T.skybridgeSyncedColumnNames()
                                 var localRow = Blackbird.Row()
@@ -1757,18 +1805,38 @@ public actor BlackbirdSkybridge {
 
     /// Deletes rows the server deleted: only rows of the record's own zone, so a record deleted
     /// from a zone a row no longer lives in doesn't take the row with it.
+    ///
+    /// A row never confirmed with this server (no server base) isn't the record that was deleted:
+    /// it was written here, or brought from another environment, and hasn't been uploaded yet. It
+    /// stays, and is sent, recreating the record.
     private func applyServerDeletions<T: BlackbirdSkybridgeSyncable>(_ type: T.Type, deletions: [ServerDeletion]) async {
         guard let database else { return }
+        var kept: [ServerDeletion] = []
         for chunk in deletions.chunked(into: Self.batchSize) {
-            try? await database.transaction { core in
+            let keptInChunk: [ServerDeletion] = (try? await database.transaction { core in
                 try Self.suppressingTriggers(core) {
+                    var keptInChunk: [ServerDeletion] = []
                     for deletion in chunk {
                         guard let row = try Self.rawRow(T.self, primaryKey: deletion.key, in: core), T.skybridgeZoneKey(of: row) == deletion.zoneKey else { continue }
+                        if !Self.metadata(of: row).hasServerBase {
+                            keptInChunk.append(deletion)
+                            continue
+                        }
                         if let instance = try T.read(from: core, primaryKey: deletion.key) { try instance.delete(from: core) }
                     }
+                    return keptInChunk
                 }
-            }
+            }) ?? []
+            kept += keptInChunk
         }
+        guard !kept.isEmpty else { return }
+        Self.logger.info("☁️ Skybridge kept \(kept.count) \(T.tableName, privacy: .public) rows the server deleted but this device never confirmed; resending")
+        var changes: [CKSyncEngine.PendingRecordZoneChange] = []
+        for deletion in kept {
+            guard let zoneID = await zoneIDForUpload(key: deletion.zoneKey) else { continue }
+            changes.append(.saveRecord(CKRecord.ID(recordName: deletion.recordName, zoneID: zoneID)))
+        }
+        await enqueue(changes)
     }
 
     // MARK: - Pending-asset refetch
@@ -1887,12 +1955,13 @@ public actor BlackbirdSkybridge {
                     // A read-only participant's edit: the server's version is put back.
                     Self.logger.error("☁️🚫 Skybridge: no permission to save \(recordID.recordName, privacy: .public); reverting")
                     await revertToServer(recordID)
-                case .batchRequestFailed, .quotaExceeded:
-                    // Not retried automatically, and failed saves are removed from the pending
-                    // queue. batchRequestFailed just means another record in the atomic batch
-                    // failed; quotaExceeded records send once the account has space again.
+                case .batchRequestFailed, .quotaExceeded, .requestRateLimited:
+                    // Put back, in case failed saves are removed from the pending queue (adding a
+                    // change that's still pending changes nothing). batchRequestFailed just means
+                    // another record in the atomic batch failed; quotaExceeded records send once
+                    // the account has space again; throttled ones once the throttle lifts.
                     engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-                case .networkFailure, .networkUnavailable, .zoneBusy, .serviceUnavailable, .notAuthenticated, .operationCancelled, .requestRateLimited:
+                case .networkFailure, .networkUnavailable, .zoneBusy, .serviceUnavailable, .notAuthenticated, .operationCancelled:
                     break // Transient; the sync engine retries automatically.
                 default:
                     Self.logger.error("☁️🛑 Skybridge: unhandled save failure for \(recordID.recordName, privacy: .public): \(failedSave.error, privacy: .public)")
@@ -1912,7 +1981,46 @@ public actor BlackbirdSkybridge {
             }
         }
 
-        await topUpPendingChanges(engineID: engine === privateEngine ? BlackbirdSkybridgeState.privateEngineID : BlackbirdSkybridgeState.sharedEngineID)
+        let engineID = engine === privateEngine ? BlackbirdSkybridgeState.privateEngineID : BlackbirdSkybridgeState.sharedEngineID
+        lastSendProgress[engineID] = Date()
+        await topUpPendingChanges(engineID: engineID)
+    }
+
+    /// An engine that's been throttled doesn't reliably send again once the throttle lifts: it can
+    /// sit on its pending changes until something unrelated, like the next launch, starts a send.
+    /// So every so often, an engine holding changes that hasn't sent any lately is asked to.
+    private func startSendWatchdog() {
+        guard sendWatchdog == nil else { return }
+        sendWatchdog = Task(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                var delay = Self.sendStallInterval
+                if let wait = await self?.sendIfStalled() { delay = max(delay, wait) }
+                try? await Task.sleep(for: .seconds(delay))
+            }
+        }
+    }
+
+    /// Asks any stalled engine to send. Returns how long a throttle asks to wait, if one did.
+    private func sendIfStalled() async -> TimeInterval? {
+        var wait: TimeInterval?
+        for (engineID, engine) in [(BlackbirdSkybridgeState.privateEngineID, privateEngine), (BlackbirdSkybridgeState.sharedEngineID, sharedEngine)] {
+            guard let engine else { continue }
+            await topUpPendingChanges(engineID: engineID)
+            let pending = engine.state.pendingRecordZoneChanges.count + engine.state.pendingDatabaseChanges.count
+            guard pending > 0 else { continue }
+            if let last = lastSendProgress[engineID], last > Date(timeIntervalSinceNow: -Self.sendStallInterval) { continue }
+            Self.logger.info("☁️ Skybridge: \(pending) changes waiting with no send lately; sending")
+            do {
+                try await engine.sendChanges()
+                lastSendProgress[engineID] = Date()
+            } catch let error as CKError {
+                Self.logger.error("☁️🛑 Skybridge: send failed: \(error, privacy: .public)")
+                if let retryAfter = error.retryAfterSeconds { wait = max(wait ?? 0, retryAfter) }
+            } catch {
+                Self.logger.error("☁️🛑 Skybridge: send failed: \(error, privacy: .public)")
+            }
+        }
+        return wait
     }
 
     /// A zone a change was sent to doesn't exist: one of the user's own that's yet to be created
@@ -2043,10 +2151,14 @@ public actor BlackbirdSkybridge {
         let zoneColumn = T.skybridgeZoneColumnName()
         if zoneColumn == nil, let zoneKeys, !zoneKeys.contains(nil) { return }
         var lastRowID: Int64 = 0
+        var queued = 0
         while true {
             let zoneSelect = zoneColumn.map { ", `\($0)` AS __zone" } ?? ""
             let rows = (try? await T.query(in: database, "SELECT rowid AS __rowid, `\(Self.primaryKeyName(T.self))` AS __pk, `\(skybridgeMetadataColumnName)` AS __meta\(zoneSelect) FROM `\(T.tableName)` WHERE rowid > ? ORDER BY rowid LIMIT \(Self.batchSize)", lastRowID)) ?? []
-            guard !rows.isEmpty else { return }
+            guard !rows.isEmpty else {
+                Self.logger.info("☁️ Skybridge full upload: \(queued) \(T.tableName, privacy: .public) rows queued")
+                return
+            }
             var keys: [(key: Blackbird.Value, zoneKey: String?)] = []
             var cleared: [(key: Blackbird.Value, metadata: SkybridgeMetadata)] = []
             for row in rows {
@@ -2076,6 +2188,7 @@ public actor BlackbirdSkybridge {
                 guard let keyString = key.stringValue, let zoneID = await zoneIDForUpload(key: zoneKey) else { continue }
                 changes.append(.saveRecord(CKRecord.ID(recordName: recordName(tableName: T.tableName, primaryKeyString: keyString), zoneID: zoneID)))
             }
+            queued += changes.count
             await enqueue(changes)
             await Task.yield()
         }
