@@ -650,7 +650,7 @@ public actor BlackbirdSkybridge {
     /// The zone registry, as in its table.
     private var zones: [String: BlackbirdSkybridgeZone] = [:]
     private var zoneEventHandler: (@Sendable (ZoneEvent) async -> Void)?
-    private var fetchActivityHandler: (@Sendable (Bool) async -> Void)?
+    private var fetchActivityHandler: (@Sendable (FetchActivity) async -> Void)?
     /// The engines mid-fetch, by ID, and the zones mid-fetch: the engine's own fetches report
     /// zone by zone, without the enclosing fetch events a requested fetch gets.
     private var fetchingEngines: Set<Int> = []
@@ -687,10 +687,20 @@ public actor BlackbirdSkybridge {
         zoneEventHandler = handler
     }
 
-    /// Receives whether anything is being fetched from the server, as that changes: true from
-    /// the start of a fetch until every record it brought has been applied here, so the app can
-    /// show that more is on its way. Set before ``start(database:)`` to miss none.
-    public func setFetchActivityHandler(_ handler: (@Sendable (Bool) async -> Void)?) {
+    /// What fetching from the server is up to, for the app to show that more is on its way.
+    public enum FetchActivity: Sendable {
+        /// A fetch began; nothing may arrive for a while (the server can hold a fetch back).
+        case started
+        /// A batch of records was fetched and applied here.
+        case applied(records: Int)
+        /// No fetch is in progress any more.
+        case finished
+    }
+
+    /// Receives what fetching is up to: `started` and `finished` as whether anything is being
+    /// fetched changes, and `applied` as each batch lands. Set before ``start(database:)`` to
+    /// miss none.
+    public func setFetchActivityHandler(_ handler: (@Sendable (FetchActivity) async -> Void)?) {
         fetchActivityHandler = handler
     }
 
@@ -706,7 +716,7 @@ public actor BlackbirdSkybridge {
             let id = engine === privateEngine ? BlackbirdSkybridgeState.privateEngineID : BlackbirdSkybridgeState.sharedEngineID
             if fetching { fetchingEngines.insert(id) } else { fetchingEngines.remove(id) }
         }
-        if isFetching != before { await fetchActivityHandler?(isFetching) }
+        if isFetching != before { await fetchActivityHandler?(isFetching ? .started : .finished) }
     }
 
     /// Begins syncing. The database must already have resolved the schemas of every synced type.
@@ -1822,6 +1832,9 @@ public actor BlackbirdSkybridge {
             guard let model = models[tableName] else { continue }
             await applyServerDeletions(model, deletions: deletions)
         }
+
+        let applied = changes.modifications.count + changes.deletions.count
+        if applied > 0 { await fetchActivityHandler?(.applied(records: applied)) }
     }
 
     private struct ServerDeletion: Sendable {
