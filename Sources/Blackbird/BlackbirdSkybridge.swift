@@ -650,6 +650,11 @@ public actor BlackbirdSkybridge {
     /// The zone registry, as in its table.
     private var zones: [String: BlackbirdSkybridgeZone] = [:]
     private var zoneEventHandler: (@Sendable (ZoneEvent) async -> Void)?
+    private var fetchActivityHandler: (@Sendable (Bool) async -> Void)?
+    /// The engines mid-fetch, by ID, and the zones mid-fetch: the engine's own fetches report
+    /// zone by zone, without the enclosing fetch events a requested fetch gets.
+    private var fetchingEngines: Set<Int> = []
+    private var fetchingZones: Set<String> = []
     private var localChangeTasks: [Task<Void, Never>] = []
     private var toppingUp: Set<Int> = []
     /// When each engine last finished sending a batch, for the send watchdog.
@@ -680,6 +685,28 @@ public actor BlackbirdSkybridge {
     /// Receives zone events. Set before ``start(database:)`` to miss none.
     public func setZoneEventHandler(_ handler: (@Sendable (ZoneEvent) async -> Void)?) {
         zoneEventHandler = handler
+    }
+
+    /// Receives whether anything is being fetched from the server, as that changes: true from
+    /// the start of a fetch until every record it brought has been applied here, so the app can
+    /// show that more is on its way. Set before ``start(database:)`` to miss none.
+    public func setFetchActivityHandler(_ handler: (@Sendable (Bool) async -> Void)?) {
+        fetchActivityHandler = handler
+    }
+
+    /// Whether anything is being fetched from the server right now.
+    public var isFetching: Bool { !fetchingEngines.isEmpty || !fetchingZones.isEmpty }
+
+    private func noteFetching(_ fetching: Bool, engine: CKSyncEngine, zoneID: CKRecordZone.ID? = nil) async {
+        let before = isFetching
+        if let zoneID {
+            let key = "\(zoneID.ownerName)/\(zoneID.zoneName)"
+            if fetching { fetchingZones.insert(key) } else { fetchingZones.remove(key) }
+        } else {
+            let id = engine === privateEngine ? BlackbirdSkybridgeState.privateEngineID : BlackbirdSkybridgeState.sharedEngineID
+            if fetching { fetchingEngines.insert(id) } else { fetchingEngines.remove(id) }
+        }
+        if isFetching != before { await fetchActivityHandler?(isFetching) }
     }
 
     /// Begins syncing. The database must already have resolved the schemas of every synced type.
@@ -2523,7 +2550,17 @@ extension BlackbirdSkybridge: CKSyncEngineDelegate {
                 }
             case .didSendChanges:
                 await topUpPendingChanges(engineID: syncEngine === privateEngine ? BlackbirdSkybridgeState.privateEngineID : BlackbirdSkybridgeState.sharedEngineID)
-            case .willFetchChanges, .willFetchRecordZoneChanges, .didFetchRecordZoneChanges, .didFetchChanges, .willSendChanges:
+            case .willFetchChanges:
+                await noteFetching(true, engine: syncEngine)
+            case .didFetchChanges:
+                // Whatever zones it had in progress are done with it.
+                fetchingZones.removeAll()
+                await noteFetching(false, engine: syncEngine)
+            case .willFetchRecordZoneChanges(let event):
+                await noteFetching(true, engine: syncEngine, zoneID: event.zoneID)
+            case .didFetchRecordZoneChanges(let event):
+                await noteFetching(false, engine: syncEngine, zoneID: event.zoneID)
+            case .willSendChanges:
                 break
             @unknown default:
                 break
