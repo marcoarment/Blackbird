@@ -824,10 +824,15 @@ public actor BlackbirdSkybridge {
         let pk = primaryKeyName(T.self)
         let zoneColumn = T.skybridgeZoneColumnName()
         let when = "WHEN (SELECT `suppressTriggers` FROM `\(BlackbirdSkybridgeFlags.tableName)` WHERE id = \(BlackbirdSkybridgeFlags.singletonID)) IS NOT 1"
+        // An upsert, not INSERT OR REPLACE: a trigger's OR REPLACE gives way to the conflict policy
+        // of the statement that fired it, and Blackbird's writes are upserts that abort on any other
+        // conflict, so a row written again before its marker was taken up would fail to write.
         func body(_ ref: String, isDeletion: Int) -> String {
             let zone = zoneColumn.map { "CAST(\(ref).`\($0)` AS TEXT)" } ?? "NULL"
-            return "INSERT OR REPLACE INTO `\(BlackbirdSkybridgeDirtyRow.tableName)` (`recordName`, `tableName`, `primaryKeyString`, `isDeletion`, `zoneValue`) " +
-                "VALUES ('\(table):' || CAST(\(ref).`\(pk)` AS TEXT), '\(table)', CAST(\(ref).`\(pk)` AS TEXT), \(isDeletion), \(zone));"
+            return "INSERT INTO `\(BlackbirdSkybridgeDirtyRow.tableName)` (`recordName`, `tableName`, `primaryKeyString`, `isDeletion`, `zoneValue`) " +
+                "VALUES ('\(table):' || CAST(\(ref).`\(pk)` AS TEXT), '\(table)', CAST(\(ref).`\(pk)` AS TEXT), \(isDeletion), \(zone)) " +
+                "ON CONFLICT (`recordName`) DO UPDATE SET `tableName` = excluded.`tableName`, `primaryKeyString` = excluded.`primaryKeyString`, " +
+                "`isDeletion` = excluded.`isDeletion`, `zoneValue` = excluded.`zoneValue`;"
         }
         let definitions: [(name: String, event: String, body: String)] = [
             (triggerNames(table)[0], "INSERT", body("NEW", isDeletion: 0)),

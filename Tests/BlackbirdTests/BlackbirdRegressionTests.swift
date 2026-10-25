@@ -901,6 +901,14 @@ final class BlackbirdRegressionTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(found["RegressionSkybridgeZonedModel:1"]?.primaryKeyString, "1")
         XCTAssertEqual(found["RegressionSkybridgeZonedModel:2"]?.zoneValue, "0")
 
+        // Written again before its marker is taken up: the write still happens (a trigger's own
+        // OR REPLACE would give way to the upsert's abort-on-conflict), and it's marked once.
+        try await RegressionSkybridgeZonedModel(id: 1, docID: 7, title: "a1", skybridgeMetadata: nil).write(to: db)
+        let rewritten = try await RegressionSkybridgeZonedModel.read(from: db, primaryKey: 1)
+        XCTAssertEqual(rewritten?.title, "a1")
+        found = try await markers()
+        XCTAssertEqual(found.count, 2, "a row written twice is marked once")
+
         _ = try await db.query("DELETE FROM `\(BlackbirdSkybridgeDirtyRow.tableName)`")
         try await RegressionSkybridgeZonedModel(id: 1, docID: 7, title: "a2", skybridgeMetadata: nil).write(to: db)
         found = try await markers()
