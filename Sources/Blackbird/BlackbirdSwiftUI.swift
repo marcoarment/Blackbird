@@ -132,6 +132,13 @@ extension Blackbird {
 /// * `posts.results` will be an array of Post models matching the query
 /// * `posts.didLoad` will be `false` during the initial load (useful for displaying a loading state in the UI)
 ///
+///
+/// The query is run when the view first appears and again whenever its table changes. It is **not**
+/// run again merely because the view's parent re-renders and re-creates the view: the subscription
+/// outlives the view struct, as `@State` does. A generator that changes for a view of the same
+/// identity therefore takes effect on the table's next change; a view whose query depends on a value
+/// should take a new identity when that value changes (`.id(value)`), as a view would for any
+/// `@State` that depends on it.
 @propertyWrapper public struct BlackbirdLiveModels<T: BlackbirdModel>: DynamicProperty {
     @State private var result = Blackbird.LiveResults<T>()
     @Environment(\.blackbirdDatabase) var environmentDatabase
@@ -143,7 +150,7 @@ extension Blackbird {
 
     public var projectedValue: Binding<Blackbird.LiveResults<T>> { $result }
 
-    private let queryUpdater = Blackbird.ModelArrayUpdater<T>()
+    @State private var queryUpdater = Blackbird.ModelArrayUpdater<T>()
     private let generator: Blackbird.CachedResultGenerator<[T]>
 
     public init(_ generator: @escaping Blackbird.CachedResultGenerator<[T]>) {
@@ -178,9 +185,15 @@ extension Blackbird {
 ///     // will be kept up-to-date
 /// }
 /// ```
+///
+/// As with ``BlackbirdLiveModels``, the instance is read when the view first appears and again when
+/// its row changes, not again whenever the view's parent re-renders: the observer outlives the view
+/// struct. Given a different primary key for a view of the same identity, it re-reads at once.
 @propertyWrapper public struct BlackbirdLiveModel<T: BlackbirdModel>: DynamicProperty {
     @State private var instance: T?
-    private var instanceObserver: BlackbirdModelInstanceChangeObserver<T>
+    @State private var instanceObserver: BlackbirdModelInstanceChangeObserver<T>
+    private let primaryKeyValues: [Blackbird.Value]
+    private let updatesEnabledInitially: Bool
     @Environment(\.blackbirdDatabase) var environmentDatabase
     
     public var changePublisher: AnyPublisher<T?, Never> { instanceObserver.changePublisher }
@@ -198,18 +211,28 @@ extension Blackbird {
     public var projectedValue: Binding<T?> { $instance }
 
     public init(_ instance: T, updatesEnabled: Bool = true) {
+        let keys = instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) }
         _instance = State(initialValue: instance)
-        instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: instance.primaryKeyValues().map { try! Blackbird.Value.fromAny($0) })
-        instanceObserver.updatesEnabled = updatesEnabled
+        primaryKeyValues = keys
+        updatesEnabledInitially = updatesEnabled
+        let observer = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: keys)
+        observer.updatesEnabled = updatesEnabled
+        _instanceObserver = State(initialValue: observer)
     }
 
     public init(type: T.Type, primaryKeyValues: [Any], updatesEnabled: Bool = true) {
+        let keys = primaryKeyValues.map { try! Blackbird.Value.fromAny($0) }
         _instance = State(initialValue: nil)
-        instanceObserver = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: primaryKeyValues.map { try! Blackbird.Value.fromAny($0) } )
-        instanceObserver.updatesEnabled = updatesEnabled
+        self.primaryKeyValues = keys
+        updatesEnabledInitially = updatesEnabled
+        let observer = BlackbirdModelInstanceChangeObserver<T>(primaryKeyValues: keys)
+        observer.updatesEnabled = updatesEnabled
+        _instanceObserver = State(initialValue: observer)
     }
 
     public mutating func update() {
+        // The observer kept from the first init may be watching another row than this init asks for.
+        instanceObserver.retarget(primaryKeyValues: primaryKeyValues)
         instanceObserver.observe(database: environmentDatabase, currentInstance: $instance)
     }
 }
@@ -229,7 +252,7 @@ extension View {
 
 
 public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel>: @unchecked Sendable { /* unchecked due to internal locking */
-    private let primaryKeyValues: [Blackbird.Value]
+    private var primaryKeyValues: [Blackbird.Value]
     private let changeObserver = Blackbird.Locked<AnyCancellable?>(nil)
     
     private let currentDatabase = Blackbird.Locked<Blackbird.Database?>(nil)
@@ -255,6 +278,22 @@ public final class BlackbirdModelInstanceChangeObserver<T: BlackbirdModel>: @unc
         _currentInstance = Binding<T?>(get: { nil }, set: { _ in })
     }
     
+    /// Watches another row instead, if it isn't this one already: the cached instance and the
+    /// subscription go, and the new row is read.
+    public func retarget(primaryKeyValues newKeys: [Blackbird.Value]) {
+        let changed = changeObserver.withLock { observer -> Bool in
+            guard newKeys != primaryKeyValues else { return false }
+            primaryKeyValues = newKeys
+            observer = nil
+            return true
+        }
+        guard changed else { return }
+        cachedInstance.value = nil
+        if updatesEnabled, currentDatabase.value != nil {
+            Task.detached { [weak self] in await self?.update() }
+        }
+    }
+
     public func observe(database: Blackbird.Database?, currentInstance: Binding<T?>) {
         _currentInstance = currentInstance
         guard let database, database != currentDatabase.value else { return }
@@ -377,13 +416,22 @@ extension Blackbird {
             resultPublisher = CachedResultPublisher<[T]>(initialValue: initialValue)
         }
         
+        /// The database last bound to; another binding to it only takes the new results binding and
+        /// generator, without running the query again (see ``BlackbirdLiveModels``).
+        private var boundDatabase: Blackbird.Database?
+
         public func bind(from database: Blackbird.Database?, to results: Binding<Blackbird.LiveResults<T>>, generator: CachedResultGenerator<[T]>?) {
             lock.lock()
             defer { lock.unlock() }
             
+            _results = results
+            if let database, database == boundDatabase {
+                resultPublisher.setGenerator(generator)
+                return
+            }
+            boundDatabase = database
             changePublishers.removeAll()
             resultPublisher.subscribe(to: T.table.name, in: database, generator: generator)
-            _results = results
             
             changePublishers.append(resultPublisher.valuePublisher.sink { [weak self] value in
                 guard let self else { return }

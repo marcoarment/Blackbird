@@ -360,6 +360,12 @@ extension Blackbird {
             valuePublisher = CurrentValueSubject<T?, Never>(initialValue)
         }
 
+        /// Takes a generator for the next run of the query, without running it now: the results in
+        /// hand stand until the table changes.
+        public func setGenerator(_ generator: CachedResultGenerator<T>?) {
+            config.withLock { $0.generator = generator }
+        }
+
         public func subscribe(to tableName: String, in database: Blackbird.Database?, generator: CachedResultGenerator<T>?) {
             config.withLock {
                 $0.tableName = tableName
