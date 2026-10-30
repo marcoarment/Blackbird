@@ -1593,9 +1593,11 @@ public actor BlackbirdSkybridge {
 
             // A genuine local edit: bump the last-write-wins timestamp if the
             // writer didn't. (The rewrite re-enters here once, then no-ops.)
+            // Compared as TimeIntervals: the iOS 27.2 SDK back-deploys Date.<= and >= to an OS
+            // symbol that iOS 27.2 betas lack, so calling them there jumps to null and crashes.
             let lastSyncedModified = metadata.syncedLastModifiedDate
             let localModified = metadata.syncLastModifiedDate
-            if localModified == nil || (lastSyncedModified != nil && localModified! <= lastSyncedModified!) {
+            if localModified == nil || (lastSyncedModified != nil && localModified!.timeIntervalSinceReferenceDate <= lastSyncedModified!.timeIntervalSinceReferenceDate) {
                 metadata.syncLastModifiedDate = Date()
                 metadataChanged = true
             }
@@ -1714,7 +1716,7 @@ public actor BlackbirdSkybridge {
                             var metadata = Self.metadata(of: existing)
                             let hasLocalEdits = !forceServer && (metadata.syncedFingerprint == nil || Self.localFingerprint(of: existing, for: T.self, metadata: metadata) != metadata.syncedFingerprint!)
                             var localModified = metadata.syncLastModifiedDate
-                            if hasLocalEdits, let synced = metadata.syncedLastModifiedDate, localModified == nil || localModified! <= synced {
+                            if hasLocalEdits, let synced = metadata.syncedLastModifiedDate, localModified == nil || localModified!.timeIntervalSinceReferenceDate <= synced.timeIntervalSinceReferenceDate {
                                 // Edited since its last sync, but not reconciled yet (the record
                                 // arrived between the write and its change report), so the edit
                                 // hasn't been stamped: it's as new as reconcile would stamp it.
