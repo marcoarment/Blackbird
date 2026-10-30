@@ -659,6 +659,15 @@ public actor BlackbirdSkybridge {
     private var toppingUp: Set<Int> = []
     /// When each engine last finished sending a batch, for the send watchdog.
     private var lastSendProgress: [Int: Date] = [:]
+    /// Records whose deletion has been handed to an engine to send and not yet answered, by
+    /// name. A fetched copy of such a record (the echo of its earlier save, say) must not put
+    /// the row back meanwhile.
+    private var inFlightDeletions: Set<String> = []
+    /// Records the server confirmed deleting from here lately, by name, with when: a copy of
+    /// one fetched after that, from before the deletion, is stale, unless the row was written
+    /// here again since.
+    private var recentDeletions: [String: Date] = [:]
+    private static let recentDeletionWindow: TimeInterval = 120
     private var sendWatchdog: Task<Void, Never>?
     /// How long an engine may hold pending changes without sending before it's asked to send.
     private static let sendStallInterval: TimeInterval = 60
@@ -1695,11 +1704,21 @@ public actor BlackbirdSkybridge {
         guard let database, !records.isEmpty else { return }
         let zoneColumn = T.skybridgeZoneColumnName()
         for chunk in records.chunked(into: Self.batchSize) {
+            // A record deleted here, whose deletion the server hasn't taken yet, is stale however
+            // it arrives: the echo of its save from before the deletion, usually. Put back, it
+            // would be deleted again once the deletion lands, and meanwhile it's ink the user
+            // undid. The same for one fetched from before a deletion the server just confirmed.
+            let deletedHere = forceServer ? [] : await deletionsPending(among: chunk.map(\.recordName))
+            let recentlyDeleted = forceServer ? [:] : recentDeletions
             let outcome: (localWins: [ServerRecord], pendingRefetch: [ServerRecord]) = (try? await database.transaction { core in
                 var localWins: [ServerRecord] = []
                 var pendingRefetch: [ServerRecord] = []
                 try Self.suppressingTriggers(core) {
                     for server in chunk {
+                        if deletedHere.contains(server.recordName) {
+                            Self.logger.info("☁️ Skybridge: \(server.recordName, privacy: .public) arrived while its deletion is on its way; ignored")
+                            continue
+                        }
                         if let zoneColumn {
                             // The zone column may be the primary key itself, which travels in the record name.
                             let zoneValue = zoneColumn == Self.primaryKeyName(T.self) ? server.primaryKey : server.values.first { $0.name == zoneColumn }?.value ?? .null
@@ -1711,9 +1730,31 @@ public actor BlackbirdSkybridge {
                         }
                         let existing = try Self.rawRow(T.self, primaryKey: server.primaryKey, in: core)
 
+                        if existing == nil, !forceServer {
+                            // Deleted here and not yet reconciled: the marker says so, and the
+                            // deletion goes to the server from there.
+                            if let marker = try BlackbirdSkybridgeDirtyRow.read(from: core, primaryKey: server.recordName), marker.isDeletion { continue }
+                            if let deleted = recentlyDeleted[server.recordName], server.serverModified.timeIntervalSinceReferenceDate < deleted.timeIntervalSinceReferenceDate {
+                                Self.logger.info("☁️ Skybridge: \(server.recordName, privacy: .public) arrived from before its deletion here; ignored")
+                                continue
+                            }
+                        }
+
                         if let existing {
                             guard T.skybridgeZoneKey(of: existing) == server.zoneKey else { continue }
                             var metadata = Self.metadata(of: existing)
+                            if !forceServer, let synced = metadata.syncedFingerprint, synced == server.fingerprint {
+                                // The record as this row last synced it: the echo of its own
+                                // upload, or a save elsewhere of the same values. Nothing in it is
+                                // newer than the row, so any edit made here since stands; only
+                                // the server's system fields are taken, so the next upload builds
+                                // on the record as it is now.
+                                metadata.ckRecordData = nil
+                                metadata.setSystemFieldsArchive(server.systemFields, recordType: T.tableName)
+                                metadata.syncedLastModifiedDate = server.serverModified
+                                try Self.writeMetadata(metadata, for: T.self, primaryKey: server.primaryKey, in: core)
+                                continue
+                            }
                             let hasLocalEdits = !forceServer && (metadata.syncedFingerprint == nil || Self.localFingerprint(of: existing, for: T.self, metadata: metadata) != metadata.syncedFingerprint!)
                             var localModified = metadata.syncLastModifiedDate
                             if hasLocalEdits, let synced = metadata.syncedLastModifiedDate, localModified == nil || localModified!.timeIntervalSinceReferenceDate <= synced.timeIntervalSinceReferenceDate {
@@ -1773,6 +1814,24 @@ public actor BlackbirdSkybridge {
             }
             for server in outcome.pendingRefetch { scheduleAssetRefetch(recordID: server.recordID) }
         }
+    }
+
+    /// The names, among some records', whose deletion from the server is on its way from here:
+    /// waiting in an engine or the queue table, or sent and not yet answered. (A deletion marked
+    /// but not yet reconciled is checked where the row is read, in the same transaction.)
+    private func deletionsPending(among names: [String]) async -> Set<String> {
+        guard let database, !names.isEmpty else { return [] }
+        let wanted = Set(names)
+        var pending = inFlightDeletions.intersection(wanted)
+        for engine in [privateEngine, sharedEngine].compactMap({ $0 }) {
+            for change in engine.state.pendingRecordZoneChanges {
+                if case .deleteRecord(let id) = change, wanted.contains(id.recordName) { pending.insert(id.recordName) }
+            }
+        }
+        let placeholders = names.map { _ in "?" }.joined(separator: ",")
+        let queued = (try? await BlackbirdSkybridgeQueuedChange.read(from: database, sqlWhere: "isDeletion = 1 AND recordName IN (\(placeholders))", arguments: names)) ?? []
+        pending.formUnion(queued.map(\.recordName))
+        return pending
     }
 
     /// Writes a merge's result over the server record as its base. Where the result differs
@@ -1977,6 +2036,18 @@ public actor BlackbirdSkybridge {
     }
 
     private func handleSentRecordZoneChanges(_ event: CKSyncEngine.Event.SentRecordZoneChanges, engine: CKSyncEngine) async {
+        let now = Date()
+        recentDeletions = recentDeletions.filter { now.timeIntervalSince($0.value) < Self.recentDeletionWindow }
+        for recordID in event.deletedRecordIDs {
+            inFlightDeletions.remove(recordID.recordName)
+            recentDeletions[recordID.recordName] = now
+        }
+        for (recordID, error) in event.failedRecordDeletes {
+            inFlightDeletions.remove(recordID.recordName)
+            // Already gone from the server: as good as deleted from here.
+            if error.code == .unknownItem { recentDeletions[recordID.recordName] = now }
+        }
+
         for record in event.savedRecords {
             guard let (model, primaryKey) = modelAndPrimaryKey(for: record.recordID) else { continue }
             await storeServerBase(model, primaryKey: primaryKey, savedRecord: record)
@@ -2591,6 +2662,9 @@ extension BlackbirdSkybridge: CKSyncEngineDelegate {
         let scope = context.options.scope
         let pendingChanges = syncEngine.state.pendingRecordZoneChanges.filter { scope.contains($0) }
         guard !pendingChanges.isEmpty else { return nil }
+        for change in pendingChanges {
+            if case .deleteRecord(let id) = change { inFlightDeletions.insert(id.recordName) }
+        }
 
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pendingChanges) { recordID in
             guard let (model, primaryKey) = await self.modelAndPrimaryKey(for: recordID),
