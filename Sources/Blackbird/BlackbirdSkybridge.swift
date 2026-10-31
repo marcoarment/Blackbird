@@ -651,6 +651,7 @@ public actor BlackbirdSkybridge {
     private var zones: [String: BlackbirdSkybridgeZone] = [:]
     private var zoneEventHandler: (@Sendable (ZoneEvent) async -> Void)?
     private var fetchActivityHandler: (@Sendable (FetchActivity) async -> Void)?
+    private var othersChangesHandler: (@Sendable ([OthersChange]) async -> Void)?
     /// The engines mid-fetch, by ID, and the zones mid-fetch: the engine's own fetches report
     /// zone by zone, without the enclosing fetch events a requested fetch gets.
     private var fetchingEngines: Set<Int> = []
@@ -711,6 +712,24 @@ public actor BlackbirdSkybridge {
     /// miss none.
     public func setFetchActivityHandler(_ handler: (@Sendable (FetchActivity) async -> Void)?) {
         fetchActivityHandler = handler
+    }
+
+    /// Records someone other than the user changed, as fetched: in one zone, of one type, by
+    /// one person, the latest of their changes by the server's clock. Deletions aren't
+    /// included, since the server doesn't say who made them.
+    public struct OthersChange: Sendable, Hashable {
+        public let zoneKey: String
+        public let tableName: String
+        /// The CloudKit user record name of whoever made the changes.
+        public let userRecordName: String
+        public let date: Date
+    }
+
+    /// Receives the changes others made, a batch of fetched records at a time. The user's own
+    /// changes in their own zones aren't reported; in zones shared with the user, the server
+    /// may name the user as they are to the zone's owner, which the app should leave out.
+    public func setOthersChangesHandler(_ handler: (@Sendable ([OthersChange]) async -> Void)?) {
+        othersChangesHandler = handler
     }
 
     /// Whether anything is being fetched from the server right now.
@@ -1867,6 +1886,7 @@ public actor BlackbirdSkybridge {
     private func handleFetchedRecordZoneChanges(_ changes: CKSyncEngine.Event.FetchedRecordZoneChanges) async {
         // Group by table so each batch goes through one generic, one transaction.
         var byTable: [String: (records: [CKRecord], keys: [Blackbird.Value])] = [:]
+        var othersChanges: [OthersChangeKey: Date] = [:]
         for modification in changes.modifications {
             let record = modification.record
             let zoneID = record.recordID.zoneID
@@ -1879,6 +1899,11 @@ public actor BlackbirdSkybridge {
             guard let (model, primaryKey) = modelAndPrimaryKey(for: record.recordID) else { continue }
             byTable[model.tableName, default: ([], [])].records.append(record)
             byTable[model.tableName, default: ([], [])].keys.append(primaryKey)
+            if let zoneKey = zoneKey(for: zoneID), let user = record.lastModifiedUserRecordID?.recordName, user != CKCurrentUserDefaultName,
+               let date = record.modificationDate {
+                let key = OthersChangeKey(zoneKey: zoneKey, tableName: model.tableName, userRecordName: user)
+                othersChanges[key] = max(othersChanges[key] ?? date, date)
+            }
         }
         for (tableName, group) in byTable {
             guard let model = models[tableName] else { continue }
@@ -1901,6 +1926,17 @@ public actor BlackbirdSkybridge {
 
         let applied = changes.modifications.count + changes.deletions.count
         if applied > 0 { await fetchActivityHandler?(.applied(records: applied)) }
+        if !othersChanges.isEmpty {
+            await othersChangesHandler?(othersChanges.map { key, date in
+                OthersChange(zoneKey: key.zoneKey, tableName: key.tableName, userRecordName: key.userRecordName, date: date)
+            })
+        }
+    }
+
+    private struct OthersChangeKey: Hashable {
+        let zoneKey: String
+        let tableName: String
+        let userRecordName: String
     }
 
     private struct ServerDeletion: Sendable {
