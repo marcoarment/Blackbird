@@ -462,6 +462,9 @@ internal struct BlackbirdSkybridgeInfo: BlackbirdModel {
     /// The CloudKit environment the sync state belongs to, as the app names it; nil before
     /// environments were tracked.
     @BlackbirdColumn var environment: String?
+    /// When everything was last fetched from the server by a requested fetch of both engines
+    /// that succeeded; nil until the local state has been brought fully up to date once.
+    @BlackbirdColumn var lastCompleteFetch: Date?
 
     static let singletonID = 0
     static let currentZoneLayoutVersion = 1
@@ -678,6 +681,13 @@ public actor BlackbirdSkybridge {
     /// app keeps in CloudKit outside sync needs saving again too.
     public private(set) var startedInNewEnvironment = false
 
+    /// Whether everything on the server has been fetched here at least once, by ``fetchChanges()``:
+    /// false on a clean install, or after the local state started over (another environment, or
+    /// another account), when the user's data may still be on its way and the local copy isn't
+    /// yet known to hold it. The engines' own scheduled fetches don't count, since they don't
+    /// report whether they succeeded.
+    public private(set) var hasFetchedEverything = false
+
     /// - Parameters:
     ///   - environment: The CloudKit environment the app syncs with, in any form the app likes
     ///     (e.g. "Development" or "Production"). When it differs from the one the local state last
@@ -774,6 +784,7 @@ public actor BlackbirdSkybridge {
         for zone in (try? await BlackbirdSkybridgeZone.read(from: database, matching: .all)) ?? [] { zones[zone.key] = zone }
         await forgetOldRemovedZones()
         await startOverIfEnvironmentChanged()
+        hasFetchedEverything = await currentInfo().lastCompleteFetch != nil
 
         let privateState = await savedState(id: BlackbirdSkybridgeState.privateEngineID)
         let sharedState = await savedState(id: BlackbirdSkybridgeState.sharedEngineID)
@@ -836,6 +847,8 @@ public actor BlackbirdSkybridge {
 
         Self.logger.info("☁️ Skybridge: local state belongs to the \(previous, privacy: .public) environment; starting over in \(environment, privacy: .public)")
         startedInNewEnvironment = true
+        info.lastCompleteFetch = nil
+        try? await info.write(to: database)
         _ = try? await database.query("DELETE FROM `\(BlackbirdSkybridgeState.tableName)`")
         _ = try? await database.query("DELETE FROM `\(BlackbirdSkybridgeQueuedChange.tableName)`")
         for zone in zones.values {
@@ -916,7 +929,7 @@ public actor BlackbirdSkybridge {
 
     private func currentInfo() async -> BlackbirdSkybridgeInfo {
         guard let database, let info = try? await BlackbirdSkybridgeInfo.read(from: database, id: BlackbirdSkybridgeInfo.singletonID) else {
-            return BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: nil, metadataUpgraded: false, zoneLayoutVersion: 0, environment: nil)
+            return BlackbirdSkybridgeInfo(id: BlackbirdSkybridgeInfo.singletonID, lastFullReconcile: nil, metadataUpgraded: false, zoneLayoutVersion: 0, environment: nil, lastCompleteFetch: nil)
         }
         return info
     }
@@ -1310,10 +1323,36 @@ public actor BlackbirdSkybridge {
         try? await engine(for: zoneID)?.fetchChanges(CKSyncEngine.FetchChangesOptions(scope: .zoneIDs([zoneID])))
     }
 
-    /// Fetches what's new everywhere now.
-    public func fetchChanges() async {
-        try? await privateEngine?.fetchChanges()
-        try? await sharedEngine?.fetchChanges()
+    /// Fetches what's new everywhere now. Returns whether both engines' fetches succeeded; the
+    /// first that does marks everything as fetched (``hasFetchedEverything``).
+    @discardableResult
+    public func fetchChanges() async -> Bool {
+        guard let privateEngine, let sharedEngine else { return false }
+        do {
+            try await privateEngine.fetchChanges()
+            try await sharedEngine.fetchChanges()
+        } catch {
+            Self.logger.error("☁️⚠️ Skybridge: couldn't fetch everything: \(error, privacy: .public)")
+            return false
+        }
+        if !hasFetchedEverything, let database {
+            hasFetchedEverything = true
+            var info = await currentInfo()
+            info.lastCompleteFetch = Date()
+            try? await info.write(to: database)
+        }
+        return true
+    }
+
+    /// Forgets that everything was fetched: the local state is about to be filled from another
+    /// account's records.
+    private func forgetFetchedEverything() async {
+        guard let database else { return }
+        hasFetchedEverything = false
+        var info = await currentInfo()
+        guard info.lastCompleteFetch != nil else { return }
+        info.lastCompleteFetch = nil
+        try? await info.write(to: database)
     }
 
     /// Drops a zone from here: its rows, its queued changes, and its registration (kept as a
@@ -2240,6 +2279,7 @@ public actor BlackbirdSkybridge {
             }
             return
         }
+        await forgetFetchedEverything()
         switch event.changeType {
             case .signIn:
                 await scheduleFullUpload(clearingServerRecords: false)
