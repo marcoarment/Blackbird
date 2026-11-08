@@ -526,6 +526,11 @@ internal struct BlackbirdSkybridgeZone: BlackbirdModel {
     @BlackbirdColumn var permission: Int
     @BlackbirdColumn var added: Date
     @BlackbirdColumn var removedDate: Date?
+    /// Whether the zone came from the server and hasn't yet been fetched through to the end: its
+    /// rows here may be only some of what it holds. True from when a fetch (or an accepted share)
+    /// first brings it here until a fetch of it succeeds; nil for a zone made here, and for zones
+    /// known before this was tracked, which had been fetched.
+    @BlackbirdColumn var awaitingFirstFetch: Bool?
 
     var id: String { key }
     var isOwn: Bool { ownerName == nil }
@@ -655,6 +660,7 @@ public actor BlackbirdSkybridge {
     private var zoneEventHandler: (@Sendable (ZoneEvent) async -> Void)?
     private var fetchActivityHandler: (@Sendable (FetchActivity) async -> Void)?
     private var othersChangesHandler: (@Sendable ([OthersChange]) async -> Void)?
+    private var incompleteZonesHandler: (@Sendable (Set<String>) async -> Void)?
     /// The engines mid-fetch, by ID, and the zones mid-fetch: the engine's own fetches report
     /// zone by zone, without the enclosing fetch events a requested fetch gets.
     private var fetchingEngines: Set<Int> = []
@@ -745,6 +751,18 @@ public actor BlackbirdSkybridge {
     /// Whether anything is being fetched from the server right now.
     public var isFetching: Bool { !fetchingEngines.isEmpty || !fetchingZones.isEmpty }
 
+    /// The keys of the zones brought here from the server whose records haven't all arrived yet:
+    /// they've never been fetched through to the end. Their rows here may be only part of what
+    /// they hold, so the app shouldn't present them as whole.
+    public var incompleteZoneKeys: Set<String> {
+        Set(zones.values.filter { $0.awaitingFirstFetch == true && $0.removedDate == nil }.map(\.key))
+    }
+
+    /// Receives ``incompleteZoneKeys`` whenever it changes.
+    public func setIncompleteZonesHandler(_ handler: (@Sendable (Set<String>) async -> Void)?) {
+        incompleteZonesHandler = handler
+    }
+
     private func noteFetching(_ fetching: Bool, engine: CKSyncEngine, zoneID: CKRecordZone.ID? = nil) async {
         let before = isFetching
         if let zoneID {
@@ -821,6 +839,9 @@ public actor BlackbirdSkybridge {
 
         Task(priority: .background) { [weak self] in
             await self?.runHousekeeping()
+        }
+        Task { [weak self] in
+            await self?.fetchIncompleteZones()
         }
         startSendWatchdog()
     }
@@ -1095,27 +1116,57 @@ public actor BlackbirdSkybridge {
                 revived.removedDate = nil
                 revived.ownerName = Self.isOwn(zoneID) ? nil : zoneID.ownerName
                 revived.added = Date()
+                revived.awaitingFirstFetch = true
                 await write(zone: revived)
                 await zoneEventHandler?(.added(publicZone(revived)))
                 return revived
             }
             return zone
         }
-        let zone = await register(key: key, ownerName: Self.isOwn(zoneID) ? nil : zoneID.ownerName)
+        let zone = await register(key: key, ownerName: Self.isOwn(zoneID) ? nil : zoneID.ownerName, fromServer: true)
         await zoneEventHandler?(.added(publicZone(zone)))
         return zone
     }
 
+    /// Registers a zone: one made here, or, `fromServer`, one whose records are on their way.
     @discardableResult
-    private func register(key: String, ownerName: String?) async -> BlackbirdSkybridgeZone {
-        let zone = BlackbirdSkybridgeZone(key: key, ownerName: ownerName, share: nil, permission: CKShare.ParticipantPermission.readWrite.rawValue, added: Date(), removedDate: nil)
+    private func register(key: String, ownerName: String?, fromServer: Bool = false) async -> BlackbirdSkybridgeZone {
+        let zone = BlackbirdSkybridgeZone(key: key, ownerName: ownerName, share: nil, permission: CKShare.ParticipantPermission.readWrite.rawValue, added: Date(), removedDate: nil,
+                                          awaitingFirstFetch: fromServer ? true : nil)
         await write(zone: zone)
         return zone
     }
 
     private func write(zone: BlackbirdSkybridgeZone) async {
+        let incompleteBefore = incompleteZoneKeys
         zones[zone.key] = zone
         if let database { try? await zone.write(to: database) }
+        let incomplete = incompleteZoneKeys
+        if incomplete != incompleteBefore { await incompleteZonesHandler?(incomplete) }
+    }
+
+    /// A fetch of a zone ended: one that succeeded has brought everything in it here.
+    private func noteZoneFetched(_ zoneID: CKRecordZone.ID, error: CKError?) async {
+        guard let key = zoneKey(for: zoneID), var zone = zones[key], zone.awaitingFirstFetch == true else { return }
+        if let error {
+            Self.logger.error("☁️⚠️ Skybridge: zone \(key, privacy: .public) didn't finish its first fetch: \(error, privacy: .public)")
+            return
+        }
+        zone.awaitingFirstFetch = nil
+        await write(zone: zone)
+    }
+
+    /// Fetches the zones whose records haven't all arrived: the app was quit, or the fetch
+    /// failed, partway through. The engines' own fetches may not get back to them otherwise,
+    /// with nothing newer on the server to send them there.
+    private func fetchIncompleteZones() async {
+        let incomplete = zones.values.filter { $0.awaitingFirstFetch == true && $0.removedDate == nil }
+        guard !incomplete.isEmpty else { return }
+        Self.logger.info("☁️ Skybridge: fetching \(incomplete.count) zones that haven't finished arriving")
+        let own = incomplete.filter(\.isOwn).map(\.zoneID)
+        let shared = incomplete.filter { !$0.isOwn }.map(\.zoneID)
+        if !own.isEmpty { try? await privateEngine?.fetchChanges(CKSyncEngine.FetchChangesOptions(scope: .zoneIDs(own))) }
+        if !shared.isEmpty { try? await sharedEngine?.fetchChanges(CKSyncEngine.FetchChangesOptions(scope: .zoneIDs(shared))) }
     }
 
     private func forgetOldRemovedZones() async {
@@ -1278,9 +1329,10 @@ public actor BlackbirdSkybridge {
             // Accepted again after leaving, or already known: back as a live zone.
             zone.removedDate = nil
             zone.ownerName = zoneID.ownerName
+            zone.awaitingFirstFetch = true
             await write(zone: zone)
         } else {
-            await register(key: key, ownerName: zoneID.ownerName)
+            await register(key: key, ownerName: zoneID.ownerName, fromServer: true)
         }
         await updateShare(share, zoneID: zoneID)
         if let zone = zones[key] { await zoneEventHandler?(.added(publicZone(zone))) }
@@ -2726,6 +2778,7 @@ extension BlackbirdSkybridge: CKSyncEngineDelegate {
             case .willFetchRecordZoneChanges(let event):
                 await noteFetching(true, engine: syncEngine, zoneID: event.zoneID)
             case .didFetchRecordZoneChanges(let event):
+                await noteZoneFetched(event.zoneID, error: event.error)
                 await noteFetching(false, engine: syncEngine, zoneID: event.zoneID)
             case .willSendChanges:
                 break
