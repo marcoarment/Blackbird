@@ -667,6 +667,9 @@ public actor BlackbirdSkybridge {
     private var fetchingZones: Set<String> = []
     private var localChangeTasks: [Task<Void, Never>] = []
     private var toppingUp: Set<Int> = []
+    /// The signed-in user's record name, once fetched. Zone IDs that come with shares name their
+    /// owner by it, where the user's own zones use `CKCurrentUserDefaultName`.
+    private var currentUserRecordName: String?
     /// When each engine last finished sending a batch, for the send watchdog.
     private var lastSendProgress: [Int: Date] = [:]
     /// Records whose deletion has been handed to an engine to send and not yet answered, by
@@ -842,6 +845,9 @@ public actor BlackbirdSkybridge {
         }
         Task { [weak self] in
             await self?.fetchIncompleteZones()
+        }
+        Task { [weak self] in
+            await self?.repairOwnZonesTakenAsShared()
         }
         startSendWatchdog()
     }
@@ -1145,6 +1151,60 @@ public actor BlackbirdSkybridge {
         if incomplete != incompleteBefore { await incompleteZonesHandler?(incomplete) }
     }
 
+    /// Gives back their own zones that an earlier ``acceptShare(_:)`` took in as shared with the
+    /// user, when they opened their own share's link: such a zone names the user, by record name,
+    /// as its owner, so it was synced through the shared database, where it doesn't exist. Its
+    /// changes move to the private engine, and its share is fetched afresh from the private
+    /// database, since the one stored came from the acceptance and carries the wrong zone ID.
+    private func repairOwnZonesTakenAsShared() async {
+        guard let database else { return }
+        let recordName: String
+        do {
+            recordName = try await CKContainer.default().userRecordID().recordName
+        } catch {
+            return // No account, or offline: tried again at the next start.
+        }
+        currentUserRecordName = recordName
+
+        for var zone in zones.values where zone.ownerName == recordName {
+            let mistakenID = zone.zoneID
+            zone.ownerName = nil
+            let ownID = zone.zoneID
+            Self.logger.info("☁️ Skybridge: zone \(zone.key, privacy: .public) is the user's own, not shared with them; repairing")
+
+            var share: CKShare?
+            if zone.removedDate == nil {
+                do {
+                    let shareID = CKRecord.ID(recordName: CKRecordNameZoneWideShare, zoneID: ownID)
+                    share = try await CKContainer.default().privateCloudDatabase.record(for: shareID) as? CKShare
+                } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+                    share = nil
+                } catch {
+                    Self.logger.error("☁️⚠️ Skybridge: couldn't fetch the share of \(zone.key, privacy: .public) to repair it: \(error, privacy: .public)")
+                    return // Tried again at the next start, before the zone is changed.
+                }
+            }
+            zone.share = share.flatMap { Self.encodeShare($0) }
+            zone.permission = CKShare.ParticipantPermission.readWrite.rawValue
+            await write(zone: zone)
+
+            _ = try? await database.query("UPDATE `\(BlackbirdSkybridgeQueuedChange.tableName)` SET ownerName = ? WHERE zoneName = ? AND ownerName = ?", CKCurrentUserDefaultName, mistakenID.zoneName, mistakenID.ownerName)
+            if let sharedEngine {
+                let pending = sharedEngine.state.pendingRecordZoneChanges.filter { Self.recordID(of: $0)?.zoneID == mistakenID }
+                sharedEngine.state.remove(pendingRecordZoneChanges: pending)
+                let moved: [CKSyncEngine.PendingRecordZoneChange] = pending.compactMap { change in
+                    guard let id = Self.recordID(of: change) else { return nil }
+                    let movedID = CKRecord.ID(recordName: id.recordName, zoneID: ownID)
+                    if case .deleteRecord = change { return .deleteRecord(movedID) }
+                    return .saveRecord(movedID)
+                }
+                await enqueue(moved)
+            }
+            if zone.removedDate == nil { await zoneEventHandler?(.shareChanged(publicZone(zone))) }
+        }
+        await topUpPendingChanges()
+    }
+
     /// A fetch of a zone ended: one that succeeded has brought everything in it here.
     private func noteZoneFetched(_ zoneID: CKRecordZone.ID, error: CKError?) async {
         guard let key = zoneKey(for: zoneID), var zone = zones[key], zone.awaitingFirstFetch == true else { return }
@@ -1321,10 +1381,16 @@ public actor BlackbirdSkybridge {
 
     /// Accepts a share the user was handed (a link they opened), and brings its zone in: the zone
     /// is known here at once, so the app can show it, and its records are fetched.
+    ///
+    /// A share of the user's own (its owner opening its link) is left alone: the zone is here
+    /// already. Its zone ID names the owner by record name, not `CKCurrentUserDefaultName`, so
+    /// taking it in would turn the user's own zone into one shared with them.
     public func acceptShare(_ metadata: CKShare.Metadata) async throws {
+        guard metadata.participantRole != .owner else { return }
         let share = try await CKContainer.default().accept(metadata)
         let zoneID = share.recordID.zoneID
         guard let key = zoneKey(for: zoneID), !Self.isOwn(zoneID) else { return }
+        if share.currentUserParticipant?.role == .owner || (currentUserRecordName != nil && zoneID.ownerName == currentUserRecordName) { return }
         if var zone = zones[key] {
             // Accepted again after leaving, or already known: back as a live zone.
             zone.removedDate = nil
@@ -2332,6 +2398,8 @@ public actor BlackbirdSkybridge {
             return
         }
         await forgetFetchedEverything()
+        currentUserRecordName = nil
+        Task { [weak self] in await self?.repairOwnZonesTakenAsShared() }
         switch event.changeType {
             case .signIn:
                 await scheduleFullUpload(clearingServerRecords: false)
